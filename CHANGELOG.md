@@ -7,6 +7,33 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [2.8.0] — 2026-10-02
+
+### What's new
+
+- **Bluetooth panel.** Selecting the Bluetooth pill now opens a menu right
+  under it instead of jumping to system settings. It lists your paired
+  devices, with the connected ones first, and updates live as they connect
+  and disconnect. **Pair new device** searches for nearby devices in the same
+  menu; pick one to pair, and the TV shows its usual PIN or confirmation
+  prompt. On Android 11 and older, Pair new device opens the TV's pairing
+  screen, since searching from an app there needs location access.
+- **Device view.** Select any paired device in the panel to open its own
+  view. Headphones, speakers and soundbars get **Connect** or **Disconnect**.
+  On Android TV, **Rename or unpair** opens the TV's own settings page for that
+  device. Remotes, keyboards, mice and controllers reconnect on their own when
+  you press a button, and the view says so.
+- The bottom of the panel always has a way into system settings. Devices with
+  their own Bluetooth settings screen get **Bluetooth settings**. Android TV
+  doesn't have one, so on TVs it reads **Open Settings** and opens the Settings
+  home page, where Remotes & accessories lives.
+
+### Fixed
+
+- **Bluetooth settings opened the main Settings page on Android TV.** Android
+  TV's Settings app has no standard Bluetooth screen, so the shortcut fell back
+  to the Settings home page. It now opens the TV's Bluetooth pairing screen.
+
 ## [2.7.0] — 2026-10-01
 
 ### What's new

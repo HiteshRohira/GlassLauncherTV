@@ -318,6 +318,7 @@ public class LauncherActivity extends Activity {
     private boolean            btOn        = false;
     private boolean            btConnected = false;
     private android.bluetooth.BluetoothAdapter btAdapter = null;
+    private BluetoothPanel btPanel = null;
     /** True once {@link PackageManager#FEATURE_BLUETOOTH} is confirmed; cached
      *  so the per-resume state refresh and the layout gate agree. */
     private boolean            hasBluetooth = false;
@@ -2361,6 +2362,8 @@ public class LauncherActivity extends Activity {
         wallpaperFront = null; wallpaperBack = null; clockView = null; shelf = null;
         drawer = null;
         netBtn = null; favoritesBlurLayer = null; ringView = null; root = null;
+        if (btPanel != null) btPanel.destroy();
+        btPanel = null;
         btBtn = null; btAdapter = null;
         mapperBtnView = null;
         settingsOverlay = null; settingsCard = null; settingsTitleView = null;
@@ -3652,23 +3655,96 @@ public class LauncherActivity extends Activity {
         showToast(getString(R.string.toast_no_network_settings));
     }
 
-    /** Open the device's Bluetooth settings via a fallback chain, newest/most-
-     *  specific action first. The accessory-pairing / BT settings activity
-     *  varies across TV ROMs — the single-action version of this shortcut was
-     *  retired for exactly that reason — so we try, in order: the dedicated
-     *  Bluetooth settings screen, the Android TV "connected devices" category,
-     *  the generic wireless screen, then plain Settings, and only toast if the
-     *  device resolves none of them. This is the same defensive pattern as
-     *  {@link #openNetSettings}, which is why the shortcut is reliable now. */
+    /** Android TV's Settings app (AOSP TvSettings, Android 14 included) has no
+     *  handler for {@link Settings#ACTION_BLUETOOTH_SETTINGS}; its Bluetooth
+     *  pairing screen is reached via CONNECT_INPUT instead. Some ROMs alias the
+     *  Bluetooth action onto the main Settings activity, so it only counts when
+     *  it resolves somewhere other than plain Settings. */
+    private static final String ACTION_TV_CONNECT_INPUT =
+            "com.google.android.intent.action.CONNECT_INPUT";
+
     private void openBtSettings() {
-        String[] actions = {
-            Settings.ACTION_BLUETOOTH_SETTINGS,
-            "android.settings.BLUETOOTH_SETTINGS",
-            Settings.ACTION_WIRELESS_SETTINGS,
-            Settings.ACTION_SETTINGS
-        };
-        for (String a : actions) {
-            try { startActivity(new Intent(a).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return; }
+        java.util.List<Intent> chain = new java.util.ArrayList<>();
+        if (hasBtSettingsScreen()) chain.add(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
+        chain.add(new Intent(ACTION_TV_CONNECT_INPUT));
+        chain.add(new Intent(Settings.ACTION_SETTINGS));
+        launchFirst(chain);
+    }
+
+    /** True when the Bluetooth settings action leads to its own screen, not
+     *  the Settings home page or the TV pairing screen the panel already
+     *  offers through Pair new device. */
+    private boolean hasBtSettingsScreen() {
+        PackageManager pm = getPackageManager();
+        ComponentName bt = new Intent(Settings.ACTION_BLUETOOTH_SETTINGS).resolveActivity(pm);
+        if (bt == null) return false;
+        return !bt.equals(new Intent(Settings.ACTION_SETTINGS).resolveActivity(pm))
+                && !bt.equals(new Intent(ACTION_TV_CONNECT_INPUT).resolveActivity(pm));
+    }
+
+    private static final String TV_SETTINGS_PKG = "com.android.tv.settings";
+    private static final ComponentName TV_ACCESSORY_PAGE = new ComponentName(TV_SETTINGS_PKG,
+            TV_SETTINGS_PKG + ".accessories.BluetoothAccessoryActivity");
+
+    /** Android TV Settings' own page for one paired device (rename, unpair,
+     *  battery). Its sub-screens load the icon id we pass from Settings' own
+     *  resources and crash on 0, so the page only counts when that id
+     *  resolves. */
+    private boolean hasDeviceSettingsScreen() {
+        ActivityInfo ai;
+        try {
+            ai = getPackageManager().getActivityInfo(TV_ACCESSORY_PAGE, 0);
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+        if (!ai.exported || !ai.enabled) return false;
+        if (ai.permission != null
+                && checkSelfPermission(ai.permission) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        return tvSettingsDeviceIcon() != 0;
+    }
+
+    @android.annotation.SuppressLint("DiscouragedApi")
+    private int tvSettingsDeviceIcon() {
+        try {
+            Resources r = getPackageManager().getResourcesForApplication(TV_SETTINGS_PKG);
+            for (String n : new String[] { "ic_bluetooth", "ic_qs_bluetooth_not_connected" }) {
+                int id = r.getIdentifier(n, "drawable", TV_SETTINGS_PKG);
+                if (id != 0) return id;
+            }
+        } catch (Exception ignored) {
+        }
+        return 0;
+    }
+
+    private void openDeviceSettings(android.bluetooth.BluetoothDevice device, String name) {
+        Intent i = new Intent()
+                .setComponent(TV_ACCESSORY_PAGE)
+                .putExtra("accessory_address", device.getAddress())
+                .putExtra("accessory_name", name)
+                .putExtra("accessory_icon_res", tvSettingsDeviceIcon())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(i);
+        } catch (Exception e) {
+            openSystemSettings();
+        }
+    }
+
+    /** System pairing screen, used where the panel can't scan itself
+     *  (Android 11 and older, or Nearby devices denied). */
+    private void openBtPairing() {
+        java.util.List<Intent> chain = new java.util.ArrayList<>();
+        chain.add(new Intent(ACTION_TV_CONNECT_INPUT));
+        chain.add(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
+        chain.add(new Intent(Settings.ACTION_SETTINGS));
+        launchFirst(chain);
+    }
+
+    private void launchFirst(java.util.List<Intent> chain) {
+        for (Intent i : chain) {
+            try { startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return; }
             catch (Exception ignored) {}
         }
         showToast(getString(R.string.toast_no_bluetooth_settings));
@@ -3851,24 +3927,63 @@ public class LauncherActivity extends Activity {
         return false;
     }
 
-    /** BT pill press. On Android 12+ the connected-device state needs the
-     *  Nearby devices permission, so the first press asks for it and opens
-     *  Bluetooth settings once the user answers (see onRequestPermissionsResult).
-     *  After a grant, or once Android stops showing the prompt, a press goes
-     *  straight to settings. */
+    /** BT pill press opens the Bluetooth panel. On Android 12+ the panel needs
+     *  the Nearby devices permission (connect + scan, one prompt), so a press
+     *  without it asks first and opens the panel once the user answers. */
     private void onBtPillPressed() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
-                        != PackageManager.PERMISSION_GRANTED) {
+                && (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                        != PackageManager.PERMISSION_GRANTED
+                    || checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN)
+                        != PackageManager.PERMISSION_GRANTED)) {
             try {
-                requestPermissions(
-                        new String[] { android.Manifest.permission.BLUETOOTH_CONNECT },
-                        REQ_PERM_BT);
+                requestPermissions(new String[] {
+                        android.Manifest.permission.BLUETOOTH_CONNECT,
+                        android.Manifest.permission.BLUETOOTH_SCAN }, REQ_PERM_BT);
                 return;
             } catch (RuntimeException ignored) {
             }
         }
-        openBtSettings();
+        showBtPanel();
+    }
+
+    private void showBtPanel() {
+        if (destroyed || root == null) return;
+        if (btPanel == null) {
+            btPanel = new BluetoothPanel(this, new BluetoothPanel.Host() {
+                @Override public FrameLayout root() { return root; }
+                @Override public View anchor() { return btBtn; }
+                @Override public Interpolator menuIn() { return MENU_IN; }
+                @Override public Interpolator menuOut() { return MENU_OUT; }
+                @Override public boolean isLetThroughKey(int kc) {
+                    return LauncherActivity.isLetThroughKey(kc);
+                }
+                @Override public void onPanelShown() {
+                    RingView rv = ringView;
+                    if (rv != null) rv.setVisibility(View.INVISIBLE);
+                    ensureOverlayBackdropVisible();
+                }
+                @Override public void onPanelHidden() { dismissOverlayBackdropIfIdle(); }
+                @Override public void openBtSettings() { LauncherActivity.this.openBtSettings(); }
+                @Override public void openBtPairing() { LauncherActivity.this.openBtPairing(); }
+                @Override public boolean hasBtSettingsScreen() {
+                    return LauncherActivity.this.hasBtSettingsScreen();
+                }
+                @Override public boolean hasDeviceSettingsScreen() {
+                    return LauncherActivity.this.hasDeviceSettingsScreen();
+                }
+                @Override public void openDeviceSettings(
+                        android.bluetooth.BluetoothDevice device, String name) {
+                    LauncherActivity.this.openDeviceSettings(device, name);
+                }
+                @Override public void openSystemSettings() {
+                    LauncherActivity.this.openSystemSettings();
+                }
+                @Override public void refreshPill() { refreshBtState(); }
+                @Override public void toast(String text) { showToast(text); }
+            }, density);
+        }
+        btPanel.show();
     }
 
     /** Draws only the wallpaper pixels behind the favorites plate. Android
@@ -7461,6 +7576,15 @@ public class LauncherActivity extends Activity {
             if (isLetThroughKey(event.getKeyCode())) return super.dispatchKeyEvent(event);
             return true;
         }
+        BluetoothPanel bp = btPanel;
+        if (bp != null && bp.isVisible()) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (bp.handleKeyDown(event.getKeyCode())) return true;
+                return super.dispatchKeyEvent(event);
+            }
+            if (isLetThroughKey(event.getKeyCode())) return super.dispatchKeyEvent(event);
+            return true;
+        }
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && event.getRepeatCount() == 0
                 && keyMap.size() > 0
@@ -7544,6 +7668,8 @@ public class LauncherActivity extends Activity {
         if (sp != null && sp.getVisibility() == View.VISIBLE) return true;
         FrameLayout ko = keymapOverlay;
         if (ko != null && ko.getVisibility() == View.VISIBLE) return true;
+        BluetoothPanel bp = btPanel;
+        if (bp != null && bp.isVisible()) return true;
         return false;
     }
 
@@ -10811,7 +10937,7 @@ public class LauncherActivity extends Activity {
             }
         } else if (req == REQ_PERM_BT) {
             refreshBtState();
-            openBtSettings();
+            showBtPanel();
         }
     }
 

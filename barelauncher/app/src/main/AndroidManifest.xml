@@ -44,21 +44,26 @@
          install-time permission — no runtime prompt. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Read Bluetooth connection state so the BT pill can show a filled
-         (a device is connected) vs outline (BT on, nothing connected) glyph,
-         and label the short-press that opens system Bluetooth settings.
-         Runtime-granted on Android 12+ (API 31); on older ROMs the install-
-         time BLUETOOTH permission below covers the same reads. We never scan
-         or initiate pairing in-app — the state read is the only use, and a
-         denial just leaves the glyph in its last state (handled gracefully).
-         minSdkVersion="31": the permission does not exist before API 31. -->
+    <!-- Bluetooth panel (toolbar BT pill). BLUETOOTH_CONNECT reads paired
+         devices and their connection state and starts pairing; BLUETOOTH_SCAN
+         finds new devices to pair. Both are runtime-granted on Android 12+
+         (API 31) through one "Nearby devices" prompt; scanning is never used
+         to derive location. On older ROMs the install-time BLUETOOTH
+         permission below covers the reads, and pairing is handed to the
+         system screen. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
         android:minSdkVersion="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:minSdkVersion="31"
+        android:usesPermissionFlags="neverForLocation" />
 
-    <!-- Legacy (API 30 and below) Bluetooth read permission. Install-time,
-         no runtime prompt. maxSdkVersion="30": superseded by BLUETOOTH_CONNECT
-         on API 31+. -->
+    <!-- Legacy (API 30 and below) Bluetooth permissions. Install-time, no
+         runtime prompt. BLUETOOTH covers the reads; BLUETOOTH_ADMIN lets the
+         panel connect and disconnect audio devices. maxSdkVersion="30":
+         superseded by BLUETOOTH_CONNECT on API 31+. -->
     <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
 
     <!-- Allows launching the system uninstall dialog reliably on Android 14+
