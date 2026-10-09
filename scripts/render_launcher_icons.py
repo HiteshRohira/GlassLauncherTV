@@ -6,7 +6,8 @@
 # This script draws the same composition with numpy for the legacy
 # square PNGs (res/mipmap-*/ic_launcher.png, 48-192 px), and writes the
 # Android TV banner (res/drawable/banner.xml) as a vector that reuses the
-# foreground artwork plus the "Glass" wordmark as glyph outlines.
+# foreground artwork plus the two-line "Glass Launcher" wordmark as glyph
+# outlines.
 #
 # Geometry is in the 108-unit adaptive-icon canvas. A frosted 5:3 glass
 # card sits over a sea-glass orb; the part of the orb behind the card is
@@ -163,10 +164,12 @@ ANDROID = "http://schemas.android.com/apk/res/android"
 AAPT = "http://schemas.android.com/aapt"
 BANNER_W, BANNER_H = 320.0, 180.0
 GLYPH_BOX = (23.0, 28.0, 81.0, 80.0)
-WORD = "Glass"
-WORD_SIZE = 54.0
+WORD_LINES = ("Glass", "Launcher")
+WORD_SIZE = 40.0
+WORD_LEADING = 1.08
 WORD_WEIGHT = 300
-WORD_GAP = 11.0
+WORD_GAP = 12.0
+GLYPH_SHARE = 0.46
 
 
 def wordmark_path(font_path):
@@ -182,12 +185,13 @@ def wordmark_path(font_path):
     k = WORD_SIZE / font["head"].unitsPerEm
     pen = SVGPathPen(glyphs, ntos=lambda v: f"{v:.2f}".rstrip("0").rstrip("."))
     bounds = BoundsPen(glyphs)
-    x = 0.0
-    for ch in WORD:
-        name = cmap[ord(ch)]
-        glyphs[name].draw(TransformPen(pen, (k, 0, 0, -k, x, 0)))
-        glyphs[name].draw(TransformPen(bounds, (k, 0, 0, -k, x, 0)))
-        x += glyphs[name].width * k
+    for row, line in enumerate(WORD_LINES):
+        x, y = 0.0, row * WORD_SIZE * WORD_LEADING
+        for ch in line:
+            name = cmap[ord(ch)]
+            glyphs[name].draw(TransformPen(pen, (k, 0, 0, -k, x, y)))
+            glyphs[name].draw(TransformPen(bounds, (k, 0, 0, -k, x, y)))
+            x += glyphs[name].width * k
     return pen.getCommands(), bounds.bounds
 
 
@@ -200,7 +204,7 @@ def write_banner(font_path):
 
     word, (wx0, wy0, wx1, wy1) = wordmark_path(font_path)
     gx0, gy0, gx1, gy1 = GLYPH_BOX
-    glyph_h = BANNER_H * 0.5
+    glyph_h = BANNER_H * GLYPH_SHARE
     scale = glyph_h / (gy1 - gy0)
     glyph_w = (gx1 - gx0) * scale
     total = glyph_w + WORD_GAP + (wx1 - wx0)

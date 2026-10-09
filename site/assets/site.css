@@ -51,7 +51,7 @@ img { max-width: 100%; }
 
 .nav { position: sticky; top: 16px; z-index: 10; margin-top: 16px; }
 .nav .bar { display: flex; align-items: center; gap: 28px; padding: 10px 10px 10px 18px; border-radius: 999px; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.01em; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; }
 .brand img { width: 28px; height: 28px; border-radius: 8px; }
 .nav .links { display: flex; gap: 22px; margin-left: auto; font-size: 14px; color: var(--dim); list-style: none; padding: 0; }
 .nav .links a:hover { color: var(--fg); }

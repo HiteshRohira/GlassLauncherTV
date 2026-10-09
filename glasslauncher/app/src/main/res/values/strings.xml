@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Glass</string>
+    <string name="app_name">Glass Launcher</string>
 
     <!-- Accessibility / TalkBack content descriptions for non-text UI -->
     <string name="cd_app_shelf">App shelf</string>
