@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Glass</string>
+
+    <!-- Accessibility / TalkBack content descriptions for non-text UI -->
+    <string name="cd_app_shelf">App shelf</string>
+    <string name="cd_app_drawer">App drawer</string>
+    <string name="cd_clock">Current time</string>
+    <string name="cd_network_settings">Network settings</string>
+    <string name="cd_bluetooth_settings">Bluetooth settings</string>
+    <!-- Gear toolbar pill (v1.3.0). Short-press opens the unified
+         settings panel; long-press opens system Settings directly.
+         Replaced the v1.2.x wallpaper pill and standalone remap-remote
+         pill — the wallpaper / remap-remote actions now live as rows
+         inside the panel and TalkBack reads each row's visible label
+         directly (no separate contentDescription needed). -->
+    <string name="cd_settings">Settings</string>
+    <string name="cd_uninstall_app">Uninstall app</string>
+    <string name="cd_open_app_info">Open app info in system settings</string>
+    <string name="cd_move_app_position">Move app position</string>
+    <string name="cd_hide_app">Hide app from shelf</string>
+    <string name="cd_change_app_icon">Choose a custom icon</string>
+    <string name="cd_reset_app_icon">Restore the original icon</string>
+    <string name="cd_rename_app">Rename app or input</string>
+
+    <!-- Context menu items shown over a focused shelf icon. The leading
+         glyph is a Unicode symbol drawn inline with the visible label. -->
+    <string name="menu_uninstall">\u2715  Uninstall</string>
+    <string name="menu_app_info">\u24D8  App Info</string>
+    <string name="menu_move">\u21D4  Move</string>
+    <string name="menu_hide">\u2298  Hide</string>
+    <string name="menu_change_icon">\u25A3  Change icon</string>
+    <string name="menu_reset_icon">\u21B6  Reset icon</string>
+    <string name="menu_rename">\u270E  Rename</string>
+    <string name="rename_title">Rename %1$s</string>
+    <string name="rename_hint">New name</string>
+    <string name="rename_save">Save</string>
+    <string name="rename_reset">Reset name</string>
+
+    <!-- Keymap overlay -->
+    <string name="keymap_not_assigned">Not assigned</string>
+    <!-- Picker title; %1$s is the human-readable label of the remote key
+         being bound (Red, Green, Menu, etc.) -->
+    <string name="keymap_pick_app_for">Pick app for %1$s</string>
+    <!-- Hidden-apps manager title. The manager now lists ONLY hidden apps;
+         pressing OK on a row unhides it. Hiding is done from the long-press
+         context menu's "Hide" row. Kept short so the card hugs its content
+         (no dead space) and matches the button-shortcuts list width. -->
+    <string name="keymap_hide_title">OK to unhide</string>
+    <!-- Shown in the hidden-apps manager when nothing is hidden. -->
+    <string name="keymap_hide_empty">No hidden apps</string>
+
+    <!-- Settings panel rows (v1.3.0). The panel opens as a dropdown
+         under the gear toolbar pill and replaces both the wallpaper pill
+         and the standalone "Manage hidden apps" entry that used to sit
+         at the bottom of the keymap card. -->
+    <string name="settings_row_manage_hidden">Manage hidden apps</string>
+    <string name="settings_row_button_shortcuts">Button shortcuts</string>
+    <string name="settings_row_appearance_menu">Appearance</string>
+    <string name="settings_row_apps_menu">Apps &amp; shortcuts</string>
+    <string name="settings_row_device_menu">Default home &amp; backup</string>
+    <string name="settings_title_main">Settings</string>
+    <string name="settings_title_appearance">Appearance</string>
+    <string name="settings_title_wallpaper">Wallpaper &amp; idle</string>
+    <string name="settings_title_apps">Apps &amp; shortcuts</string>
+    <string name="settings_title_device">Default home &amp; backup</string>
+    <string name="settings_title_backup">Backup &amp; restore</string>
+    <string name="settings_title_launcher_setup">Default home</string>
+    <plurals name="settings_summary_appearance">
+        <item quantity="one">%1$d column · %2$s</item>
+        <item quantity="other">%1$d columns · %2$s</item>
+    </plurals>
+    <string name="settings_summary_no_folder">No slideshow folder</string>
+    <string name="settings_summary_slideshow">Slideshow %1$s</string>
+    <string name="settings_summary_wallpaper">%1$s · idle %2$s</string>
+    <string name="settings_summary_apps">Hidden apps and remote buttons</string>
+    <string name="settings_summary_device">Default home %1$s · backup and restore</string>
+    <string name="settings_clock_full">Full clock</string>
+    <string name="settings_clock_time">Time only</string>
+    <string name="settings_clock_off">Clock off</string>
+    <string name="settings_row_layout_columns">Icons per row</string>
+    <string name="settings_row_card_corner">Icon roundness</string>
+    <string name="settings_row_focus_border">Focus border</string>
+    <string name="settings_row_focus_color">Focus color</string>
+    <string name="settings_value_columns">&lt; %1$d &gt;</string>
+    <string name="settings_value_percent">&lt; %1$d%% &gt;</string>
+    <string name="settings_value_focus_color">&lt; %1$s &gt;</string>
+    <string name="settings_value_open">%1$s  ›</string>
+    <string name="settings_hint_open">↑↓ Move  ·  OK Open  ·  Back</string>
+    <string name="settings_hint_adjust">↑↓ Move  ·  ←→ Change  ·  OK Select  ·  Back</string>
+    <string name="settings_row_set_wallpaper">Set wallpaper</string>
+    <string name="settings_row_wallpaper_menu">Wallpaper &amp; idle</string>
+    <string name="settings_row_backup_menu">Backup &amp; restore</string>
+    <string name="settings_row_slideshow_folder">Slideshow folder</string>
+    <string name="settings_row_slideshow_duration">Slideshow duration</string>
+    <string name="settings_row_slideshow_restart">Change each restart</string>
+    <string name="settings_row_idle_hide">Hide UI when idle</string>
+    <string name="settings_row_show_clock">Show clock</string>
+    <string name="settings_row_backup">Back up settings</string>
+    <string name="settings_row_restore">Restore settings</string>
+    <string name="settings_row_launcher_setup_menu">Default home</string>
+    <string name="settings_row_launcher_activate">Use Glass Launcher as Home</string>
+    <string name="settings_row_launcher_restore">Restore Google TV Home</string>
+    <string name="google_tv_status_active">Active</string>
+    <string name="google_tv_status_partial">Repair</string>
+    <string name="google_tv_status_not_set">Not set</string>
+    <string name="google_tv_status_working">Working</string>
+    <string name="settings_row_system_settings">System Settings</string>
+
+    <!-- Sideload-only Google TV setup. Commands run over the TV's own local
+         ADB daemon after the user accepts Android's authorization dialog. -->
+    <string name="google_tv_setup_title">Set up Glass Launcher as Home</string>
+    <string name="google_tv_setup_message">First enable Network debugging in Developer options. Then continue and accept the one-time debugging authorization prompt.\n\nGlass Launcher will become the system Home app and disable Google TV Home. This also removes the Google TV quick-settings sidebar. The change survives normal restarts.</string>
+    <string name="google_tv_setup_confirm">Set up</string>
+    <string name="google_tv_restore_title">Restore Google TV Home</string>
+    <string name="google_tv_restore_message">This re-enables the Google TV launcher and setup packages. You may be asked which Home app to use the next time you press Home.</string>
+    <string name="google_tv_restore_confirm">Restore</string>
+    <string name="google_tv_setup_connecting">Connecting to local ADB… Accept the debugging prompt if it appears.</string>
+    <string name="google_tv_setup_success_title">Launcher setup complete</string>
+    <string name="google_tv_restore_success_title">Google TV Home restored</string>
+    <string name="google_tv_setup_failed_title">Launcher setup incomplete</string>
+
+    <!-- Remote key shortcut labels. Order must match SHORTCUT_KEYCODES. -->
+    <string name="key_red">Red</string>
+    <string name="key_green">Green</string>
+    <string name="key_yellow">Yellow</string>
+    <string name="key_blue">Blue</string>
+    <string name="key_menu">Menu</string>
+    <string name="key_subtitle">Subtitle</string>
+
+    <!-- Toasts -->
+    <string name="toast_no_network_settings">Cannot open network settings</string>
+    <string name="toast_no_bluetooth_settings">Cannot open Bluetooth settings</string>
+    <string name="bt_panel_connected">Connected</string>
+    <string name="bt_panel_paired">Paired</string>
+    <string name="bt_status_connected">Connected</string>
+    <string name="bt_status_not_connected">Not connected</string>
+    <string name="bt_panel_pair_new">Pair new device</string>
+    <string name="bt_panel_settings">Bluetooth settings</string>
+    <string name="bt_panel_off">Bluetooth is off. Turn it on in Settings.</string>
+    <string name="bt_panel_need_permission">Allow Nearby devices to see your Bluetooth devices here.</string>
+    <string name="bt_panel_no_devices">No paired devices yet.</string>
+    <string name="bt_panel_more">%d more in system Settings</string>
+    <string name="bt_panel_available">Available to pair</string>
+    <string name="bt_panel_searching">Searching… put your device in pairing mode.</string>
+    <string name="bt_panel_none_found">No devices found. Make sure yours is in pairing mode.</string>
+    <string name="bt_panel_search_again">Search again</string>
+    <string name="bt_status_pair">Pair</string>
+    <string name="bt_status_pairing">Pairing…</string>
+    <string name="bt_status_pair_failed">Couldn\'t pair</string>
+    <string name="bt_unknown_device">Unknown device</string>
+    <string name="toast_bt_paired">Paired with %s</string>
+    <string name="bt_status_connecting">Connecting…</string>
+    <string name="bt_status_disconnecting">Disconnecting…</string>
+    <string name="bt_action_connect">Connect</string>
+    <string name="bt_action_disconnect">Disconnect</string>
+    <string name="bt_panel_open_settings">Open Settings</string>
+    <string name="bt_detail_rename_unpair">Rename or unpair</string>
+    <string name="toast_bt_connect_failed">Couldn\'t connect to %s. Try again from system Settings.</string>
+    <string name="toast_bt_disconnect_failed">Couldn\'t disconnect %s. Try again from system Settings.</string>
+    <string name="bt_detail_press_button">Press a button on %s to reconnect it.</string>
+    <string name="toast_no_settings">Cannot open settings</string>
+    <string name="toast_no_app_info">Cannot open app info</string>
+    <string name="toast_app_unavailable">App not available</string>
+    <string name="toast_input_unavailable">Can\'t switch to this input</string>
+    <string name="toast_no_file_picker">No file picker available</string>
+    <string name="toast_wallpaper_load_failed">Could not load wallpaper</string>
+    <string name="toast_wallpaper_no_permission">Could not get permission for this image</string>
+    <!-- %1$s is the user-visible label of the customized app. -->
+    <string name="toast_custom_icon_set">Custom icon set for %1$s. Long-press to reset.</string>
+    <string name="toast_custom_icon_failed">Could not use that image</string>
+    <string name="toast_custom_icon_reset">Original icon restored</string>
+    <string name="toast_name_set">Renamed to %1$s</string>
+    <string name="toast_name_reset">Name reset to %1$s</string>
+    <!-- %1$s is the user-visible label of the app being uninstalled. -->
+    <string name="toast_cannot_uninstall">Cannot uninstall %1$s</string>
+
+    <!-- Backup / restore (settings panel). -->
+    <string name="toast_backup_saved">Settings backed up</string>
+    <string name="toast_backup_failed">Couldn\'t save the backup</string>
+    <string name="toast_restore_done">Settings restored</string>
+    <string name="toast_restore_failed">Couldn\'t read the backup file</string>
+    <string name="toast_restore_invalid">Not a valid Glass Launcher backup</string>
+
+    <!-- Wallpaper slideshow. -->
+    <string name="toast_slideshow_folder_set">Slideshow folder set</string>
+    <string name="toast_slideshow_pick_folder">Pick a slideshow folder first</string>
+    <string name="toast_slideshow_need_permission">Photo access is needed to choose a folder</string>
+    <string name="toast_slideshow_no_folders">No image folders found</string>
+    <string name="folder_picker_title">Choose a slideshow folder</string>
+</resources>

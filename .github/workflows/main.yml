@@ -1,4 +1,4 @@
-name: Build BareLauncher
+name: Build Glass Launcher
 
 on:
   # Triggers tuned for low CI runtime. We only run the workflow when
@@ -48,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-            VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' barelauncher/app/build.gradle.kts)
+            VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' glasslauncher/app/build.gradle.kts)
             TAG="v${VER}"
             if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null; then
               echo "${TAG} already exists; no release."
@@ -100,17 +100,17 @@ jobs:
           echo "$HOME/gradle/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Generate Gradle wrapper
-        working-directory: barelauncher
+        working-directory: glasslauncher
         run: |
           gradle wrapper --gradle-version "$GRADLE_VERSION"
           chmod +x gradlew
 
       - name: JVM unit tests
-        working-directory: barelauncher
+        working-directory: glasslauncher
         run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Android lint (debug)
-        working-directory: barelauncher
+        working-directory: glasslauncher
         run: ./gradlew :app:lintDebug --no-daemon --stacktrace
 
       - name: Print lint report on failure
@@ -118,7 +118,7 @@ jobs:
         # is debuggable from the GH Actions log without downloading artifacts.
         # The HTML/XML reports are still uploaded as artifacts below.
         if: failure()
-        working-directory: barelauncher
+        working-directory: glasslauncher
         run: |
           if [ -f app/build/reports/lint-results-debug.txt ]; then
             echo "── lint-results-debug.txt ──────────────────────────────"
@@ -137,8 +137,8 @@ jobs:
         with:
           name: lint-report
           path: |
-            barelauncher/app/build/reports/lint-results-debug.html
-            barelauncher/app/build/reports/lint-results-debug.xml
+            glasslauncher/app/build/reports/lint-results-debug.html
+            glasslauncher/app/build/reports/lint-results-debug.xml
           retention-days: 14
 
       - name: Upload unit test report
@@ -146,7 +146,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-report
-          path: barelauncher/app/build/reports/tests/testDebugUnitTest
+          path: glasslauncher/app/build/reports/tests/testDebugUnitTest
           retention-days: 14
 
   # ──────────────────────────────────────────────────────────────────
@@ -228,7 +228,7 @@ jobs:
           echo "$HOME/gradle/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Generate Gradle wrapper
-        working-directory: barelauncher
+        working-directory: glasslauncher
         run: |
           gradle wrapper --gradle-version "$GRADLE_VERSION"
           chmod +x gradlew
@@ -310,7 +310,7 @@ jobs:
           # every CI run a clean cold boot of a freshly-created AVD.
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          working-directory: barelauncher
+          working-directory: glasslauncher
           script: ./gradlew :app:connectedDebugAndroidTest --no-daemon --stacktrace
 
       - name: Upload instrumentation test report
@@ -319,8 +319,8 @@ jobs:
         with:
           name: instrumentation-report-api${{ matrix.api-level }}
           path: |
-            barelauncher/app/build/reports/androidTests/connected
-            barelauncher/app/build/outputs/androidTest-results
+            glasslauncher/app/build/reports/androidTests/connected
+            glasslauncher/app/build/outputs/androidTest-results
           retention-days: 14
 
   # ──────────────────────────────────────────────────────────────────
@@ -358,13 +358,13 @@ jobs:
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > /tmp/release.jks
 
       - name: Generate Gradle wrapper
-        working-directory: barelauncher
+        working-directory: glasslauncher
         run: |
           gradle wrapper --gradle-version "$GRADLE_VERSION"
           chmod +x gradlew
 
       - name: Build and sign release APK
-        working-directory: barelauncher
+        working-directory: glasslauncher
         run: |
           ./gradlew :app:assembleRelease \
             -Pandroid.injected.signing.store.file=/tmp/release.jks \
@@ -375,18 +375,18 @@ jobs:
             --no-daemon --stacktrace
 
       # Rename the gradle-default `app-release.apk` to a single fixed
-      # filename, `BareLauncher.apk` — no version number in the name.
+      # filename, `GlassLauncher.apk` — no version number in the name.
       # This is deliberate: it's the one and only asset attached to each
       # release, so there's never a choice of "which file do I download"
       # on the Releases page, and it lets the website use GitHub's
       # permanent redirect URL which always serves whatever release is
       # currently marked "Latest":
-      #   https://github.com/<owner>/<repo>/releases/latest/download/BareLauncher.apk
+      #   https://github.com/<owner>/<repo>/releases/latest/download/GlassLauncher.apk
       # The actual version is still recorded in the release title/tag
       # and CHANGELOG.md — just not in the filename.
       - name: Rename APK
         id: apk
-        working-directory: barelauncher
+        working-directory: glasslauncher
         run: |
           set -euo pipefail
           VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
@@ -395,17 +395,17 @@ jobs:
             exit 1
           fi
           SRC="app/build/outputs/apk/release/app-release.apk"
-          DST="app/build/outputs/apk/release/BareLauncher.apk"
+          DST="app/build/outputs/apk/release/GlassLauncher.apk"
           mv "$SRC" "$DST"
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
-          echo "apk_path=barelauncher/${DST}" >> "$GITHUB_OUTPUT"
+          echo "apk_path=glasslauncher/${DST}" >> "$GITHUB_OUTPUT"
           ls -lh "$DST"
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: BareLauncher-release-${{ github.run_number }}
-          path: barelauncher/app/build/outputs/apk/release/BareLauncher.apk
+          name: GlassLauncher-release-${{ github.run_number }}
+          path: glasslauncher/app/build/outputs/apk/release/GlassLauncher.apk
           retention-days: 90
 
   # ──────────────────────────────────────────────────────────────────
@@ -433,7 +433,7 @@ jobs:
       - name: Download signed APK
         uses: actions/download-artifact@v4
         with:
-          name: BareLauncher-release-${{ github.run_number }}
+          name: GlassLauncher-release-${{ github.run_number }}
           path: dist
 
       - name: Extract changelog section for this tag
@@ -473,11 +473,11 @@ jobs:
             echo "::notice::No '## [${VER}]' section in CHANGELOG.md — using fallback release notes."
             {
               if [ "$PRERELEASE" = "true" ]; then
-                echo "Pre-release of BareLauncher ${VER}."
+                echo "Pre-release of Glass Launcher ${VER}."
                 echo
                 echo "Early build for testing. Install instructions are in the [README](../../#install)."
               else
-                echo "Release of BareLauncher ${VER}."
+                echo "Release of Glass Launcher ${VER}."
                 echo
                 echo "Install instructions are in the [README](../../#install)."
               fi
@@ -494,11 +494,11 @@ jobs:
       - name: Verify APK is present
         run: |
           set -euo pipefail
-          if [ ! -f dist/BareLauncher.apk ]; then
-            echo "::error::dist/BareLauncher.apk not found in artifact download."
+          if [ ! -f dist/GlassLauncher.apk ]; then
+            echo "::error::dist/GlassLauncher.apk not found in artifact download."
             exit 1
           fi
-          ls -lh dist/BareLauncher.apk
+          ls -lh dist/GlassLauncher.apk
 
       - name: Create GitHub Release
         env:
@@ -513,7 +513,7 @@ jobs:
           # of failing. `gh release create` would otherwise error out.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists — uploading assets with --clobber."
-            gh release upload "$TAG" dist/BareLauncher.apk --clobber
+            gh release upload "$TAG" dist/GlassLauncher.apk --clobber
           else
             PRE_FLAG=()
             if [ "$PRERELEASE" = "true" ]; then
@@ -521,8 +521,8 @@ jobs:
             fi
             gh release create "$TAG" \
               --target "$GITHUB_SHA" \
-              --title "BareLauncher $VER" \
+              --title "Glass Launcher $VER" \
               --notes-file release-notes.md \
               "${PRE_FLAG[@]}" \
-              dist/BareLauncher.apk
+              dist/GlassLauncher.apk
           fi

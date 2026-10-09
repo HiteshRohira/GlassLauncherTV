@@ -1,7 +1,8 @@
-# BareLauncher — Licensing Notice
+# Glass Launcher — Licensing Notice
 
-BareLauncher is distributed under the **PolyForm Noncommercial License
-1.0.0** (see [LICENSE](./LICENSE)).
+Glass Launcher is distributed under the **PolyForm Noncommercial License
+1.0.0** (see [LICENSE](./LICENSE)). It is based on original code by
+mithun.ys / pixel, whose copyright notice is kept in LICENSE.
 
 ## What this means in practice
 
@@ -10,7 +11,7 @@ BareLauncher is distributed under the **PolyForm Noncommercial License
   other non-commercial purpose.
 - You **may** sideload your own build onto your own devices, share
   modifications with friends, and contribute fixes upstream.
-- You **may not** use BareLauncher (or substantial parts of it) for any
+- You **may not** use Glass Launcher (or substantial parts of it) for any
   commercial purpose without a separate written license from the copyright
   holder. This includes — but is not limited to — selling builds,
   bundling it with a paid product, shipping it pre-installed on devices
@@ -18,9 +19,9 @@ BareLauncher is distributed under the **PolyForm Noncommercial License
 
 ## Why this license
 
-BareLauncher is intentionally distributed under a *source-available,
+Glass Launcher is intentionally distributed under a *source-available,
 non-commercial* license rather than a permissive one (MIT / Apache /
-BSD). The author may release a commercial / paid edition of BareLauncher
+BSD). The author may release a commercial / paid edition of Glass Launcher
 in the future. The non-commercial license:
 
 1. Preserves the author's right to monetise the work later, and
@@ -51,7 +52,7 @@ maintainer directly through the repository's contact channels.
 
 ## Trademarks
 
-"BareLauncher" and any associated logos / icons / banners are not
+"Glass Launcher" and any associated logos / icons / banners are not
 covered by the PolyForm Noncommercial license. Forks must use a
 distinct name and icon. This protects users from confusing third-party
 forks with the original.

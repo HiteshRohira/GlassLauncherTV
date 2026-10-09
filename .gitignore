@@ -15,9 +15,9 @@ local.properties
 gradlew
 gradlew.bat
 gradle/wrapper/gradle-wrapper.jar
-barelauncher/gradlew
-barelauncher/gradlew.bat
-barelauncher/gradle/wrapper/gradle-wrapper.jar
+glasslauncher/gradlew
+glasslauncher/gradlew.bat
+glasslauncher/gradle/wrapper/gradle-wrapper.jar
 
 # IDE noise ──────────────────────────────────────────────────────────────
 .idea/
