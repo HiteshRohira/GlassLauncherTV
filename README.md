@@ -8,7 +8,7 @@
 
 [![Latest release](https://img.shields.io/gitea/v/release/namillis/GlassLauncherTV?gitea_url=https%3A%2F%2Fgit.namillis.me&style=for-the-badge&color=22c55e&label=latest)](https://git.namillis.me/namillis/GlassLauncherTV/releases/latest)
 [![Download APK](https://img.shields.io/badge/Download-APK-09090b?style=for-the-badge&logo=android&logoColor=22c55e)](https://git.namillis.me/namillis/GlassLauncherTV/releases/download/latest/GlassLauncher.apk)
-[![Downloader code 2592344](https://img.shields.io/badge/Downloader-2592344-FF6B2C?style=for-the-badge&logo=amazonfiretv&logoColor=white)](http://aftv.news/2592344)
+[![Downloader code 5226436](https://img.shields.io/badge/Downloader-5226436-FF6B2C?style=for-the-badge&logo=amazonfiretv&logoColor=white)](http://aftv.news/5226436)
 [![License](https://img.shields.io/badge/License-PolyForm%20NC%201.0-8b5cf6?style=for-the-badge)](./LICENSE)
 
 </div>
@@ -86,7 +86,7 @@ Glass Launcher is sideload-only. It is not published on the Google Play Store or
 
 ### Downloader
 
-Install the **Downloader** app by AFTVnews and enter code **2592344**. The code points to the latest Glass Launcher release.
+Install the **Downloader** app by AFTVnews and enter code **5226436**. The code points to the latest Glass Launcher release.
 
 ### Direct APK
 
