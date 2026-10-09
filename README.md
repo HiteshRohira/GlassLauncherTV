@@ -9,6 +9,7 @@
 [![Latest release](https://img.shields.io/gitea/v/release/namillis/GlassLauncherTV?gitea_url=https%3A%2F%2Fgit.namillis.me&style=for-the-badge&color=22c55e&label=latest)](https://git.namillis.me/namillis/GlassLauncherTV/releases/latest)
 [![Download APK](https://img.shields.io/badge/Download-APK-09090b?style=for-the-badge&logo=android&logoColor=22c55e)](https://git.namillis.me/namillis/GlassLauncherTV/releases/download/latest/GlassLauncher.apk)
 [![Downloader code 5226436](https://img.shields.io/badge/Downloader-5226436-FF6B2C?style=for-the-badge&logo=amazonfiretv&logoColor=white)](http://aftv.news/5226436)
+[![Website](https://img.shields.io/badge/Website-glass.namillis.me-6ee7da?style=for-the-badge)](https://glass.namillis.me)
 [![License](https://img.shields.io/badge/License-PolyForm%20NC%201.0-8b5cf6?style=for-the-badge)](./LICENSE)
 
 </div>
