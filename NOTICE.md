@@ -46,7 +46,7 @@ If you do not agree to those terms, please do not submit contributions.
 
 For a commercial licence (bundling with a paid product, distributing
 pre-installed on hardware, including in a paid service), please open
-a GitHub issue titled **"Commercial licence enquiry"** or contact the
+an issue titled **"Commercial licence enquiry"** or contact the
 maintainer directly through the repository's contact channels.
 
 ## Trademarks
