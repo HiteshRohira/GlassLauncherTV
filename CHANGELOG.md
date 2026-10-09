@@ -7,13 +7,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-10-09
+
+### Changed
+
+- **The app shows its full name, Glass Launcher.** The label under the app
+  tile and the TV banner now say Glass Launcher instead of Glass.
+
 ## [1.0.0] — 2026-10-09
 
 ### Changed
 
 - **New name and app ID.** The launcher is now Glass Launcher, with the app ID
   `tv.glass.launcher`. It installs as a new app next to the old one. Set Glass
-  as the Home app, then uninstall the old launcher.
+  Launcher as the Home app, then uninstall the old launcher.
 - **New icon and TV banner.** A frosted-glass card over a sea-glass orb,
   matching the launcher's glass menus.
 - **Settings start fresh.** Backups made with the old app use a different
