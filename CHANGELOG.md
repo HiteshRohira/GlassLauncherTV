@@ -1,11 +1,26 @@
 # Changelog
 
-All notable changes to BareLauncher land here.
+All notable changes to Glass Launcher land here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [1.0.0] — 2026-10-09
+
+### Changed
+
+- **New name and app ID.** The launcher is now Glass Launcher, with the app ID
+  `tv.glass.launcher`. It installs as a new app next to the old one. Set Glass
+  as the Home app, then uninstall the old launcher.
+- **New icon and TV banner.** A frosted-glass card over a sea-glass orb,
+  matching the launcher's glass menus.
+- **Settings start fresh.** Backups made with the old app use a different
+  format and can't be restored. The Google TV Home setup asks for the one-time
+  debugging authorization again.
+
+Entries below are from before the rename.
 
 ## [2.8.0] — 2026-10-02
 
@@ -87,10 +102,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- **One-time Google TV Home setup.** From Settings, BareLauncher can connect
+- **One-time Google TV Home setup.** From Settings, Glass Launcher can connect
   to the TV's local ADB daemon, select itself as the system Home app, and
   disable both Google TV launcher packages so the remote Home button keeps
-  returning to BareLauncher after normal restarts. The same page includes a
+  returning to Glass Launcher after normal restarts. The same page includes a
   restore action that re-enables Google TV Home.
 
 ## [2.5.4] — 2026-09-22
@@ -196,7 +211,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- **D-pad Up reliably returns focus from the app grid to favorites.** BareLauncher
+- **D-pad Up reliably returns focus from the app grid to favorites.** Glass Launcher
   restores the matching favorite immediately and reasserts it after the drawer
   fade, preventing the still-visible drawer from reclaiming focus on slower TVs.
 - **Release device tests synchronize with real UI state.** Layout-settings checks
@@ -273,7 +288,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 ### Added
 
 - **Custom app icons.** Long-press any app to choose a local PNG, JPEG,
-  or WebP image. BareLauncher keeps a private optimized copy, applies it
+  or WebP image. Glass Launcher keeps a private optimized copy, applies it
   to both launcher tiles and shortcut chips, and provides a Reset icon
   action to restore the app-provided artwork.
 

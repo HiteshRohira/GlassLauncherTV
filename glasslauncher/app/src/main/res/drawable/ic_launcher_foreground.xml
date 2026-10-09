@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon foreground: a frosted 5:3 glass card over a sea-glass orb.
+  The orb behind the card is shown blurred by covering it with the
+  background gradient inside the card's clip, then drawing a soft radial
+  copy of the orb, the frost tint and a corner sheen on top.
+  scripts/render_launcher_icons.py draws the same geometry for the PNGs.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#4D000000"
+        android:pathData="M36,52 L67,52 A7,7 0 0 1 74,59 L74,72 A7,7 0 0 1 67,79 L36,79 A7,7 0 0 1 29,72 L29,59 A7,7 0 0 1 36,52 Z" />
+
+    <path android:pathData="M50,46.5 A15,15 0 1 1 80,46.5 A15,15 0 1 1 50,46.5 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="52" android:startY="33"
+                android:endX="78" android:endY="60"
+                android:startColor="#FF8AF5E4"
+                android:endColor="#FF1FB6C9" />
+        </aapt:attr>
+    </path>
+
+    <group>
+        <clip-path android:pathData="M35,49.5 L66,49.5 A7,7 0 0 1 73,56.5 L73,69.5 A7,7 0 0 1 66,76.5 L35,76.5 A7,7 0 0 1 28,69.5 L28,56.5 A7,7 0 0 1 35,49.5 Z" />
+
+        <path android:pathData="M0,0 L108,0 L108,108 L0,108 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="0"
+                    android:endX="108" android:endY="108"
+                    android:startColor="#FF123A4C"
+                    android:endColor="#FF07121C" />
+            </aapt:attr>
+        </path>
+
+        <path android:pathData="M40,46.5 A25,25 0 1 1 90,46.5 A25,25 0 1 1 40,46.5 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="radial"
+                    android:centerX="65" android:centerY="46.5"
+                    android:gradientRadius="25">
+                    <item android:offset="0" android:color="#F2D2FFF8" />
+                    <item android:offset="0.4" android:color="#9E7CEBDF" />
+                    <item android:offset="1" android:color="#002CC7C9" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <path android:pathData="M28,49.5 L73,49.5 L73,76.5 L28,76.5 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="49.5"
+                    android:endX="0" android:endY="76.5"
+                    android:startColor="#29E6FFFC"
+                    android:endColor="#0DE6FFFC" />
+            </aapt:attr>
+        </path>
+
+        <path android:pathData="M28,49.5 L73,49.5 L73,76.5 L28,76.5 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="28" android:startY="49.5"
+                    android:endX="44" android:endY="70"
+                    android:startColor="#33FFFFFF"
+                    android:endColor="#00FFFFFF" />
+            </aapt:attr>
+        </path>
+    </group>
+
+    <path
+        android:strokeWidth="0.9"
+        android:pathData="M35,49.5 L66,49.5 A7,7 0 0 1 73,56.5 L73,69.5 A7,7 0 0 1 66,76.5 L35,76.5 A7,7 0 0 1 28,69.5 L28,56.5 A7,7 0 0 1 35,49.5 Z">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="28" android:startY="49.5"
+                android:endX="73" android:endY="76.5"
+                android:startColor="#F2FFFFFF"
+                android:endColor="#1AFFFFFF" />
+        </aapt:attr>
+    </path>
+
+</vector>
