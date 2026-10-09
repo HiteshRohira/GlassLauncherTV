@@ -8,10 +8,9 @@ out/
 # the same across machines. Must never be committed.
 local.properties
 
-# Gradle wrapper jar/scripts — CI generates them on the fly via
-# `gradle wrapper --gradle-version "$GRADLE_VERSION"` (see
-# .github/workflows/main.yml). Only the wrapper *properties* file is
-# tracked. If you generate the wrapper locally, do not commit it.
+# Gradle wrapper jar/scripts. Only the wrapper *properties* file is
+# tracked; scripts/release.py runs a local Gradle install instead. If you
+# generate the wrapper locally, do not commit it.
 gradlew
 gradlew.bat
 gradle/wrapper/gradle-wrapper.jar
@@ -32,10 +31,15 @@ captures/
 .externalNativeBuild/
 .cxx/
 
-# Signing material — must NEVER be committed. The release pipeline
-# decodes the keystore from a base64 GitHub Actions secret instead.
+# Release builds from scripts/release.py.
+dist/
+
+# Signing material — must NEVER be committed. scripts/release.py reads
+# the keystore from a path outside the repo.
 *.jks
 *.keystore
+*.p12
+*.pfx
 keystore.properties
 release.properties
 
