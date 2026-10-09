@@ -6,8 +6,8 @@
 
 **A small, local-first home screen for Android TV, Google TV, and Fire TV.**
 
-[![Latest release](https://img.shields.io/github/v/release/namillis/barelauncher?style=for-the-badge&color=22c55e&label=latest)](https://github.com/namillis/barelauncher/releases/latest)
-[![Download APK](https://img.shields.io/badge/Download-APK-09090b?style=for-the-badge&logo=android&logoColor=22c55e)](https://github.com/namillis/barelauncher/releases/latest/download/BareLauncher.apk)
+[![Latest release](https://img.shields.io/gitea/v/release/namillis/barelauncher?gitea_url=https%3A%2F%2Fgit.namillis.me&style=for-the-badge&color=22c55e&label=latest)](https://git.namillis.me/namillis/barelauncher/releases/latest)
+[![Download APK](https://img.shields.io/badge/Download-APK-09090b?style=for-the-badge&logo=android&logoColor=22c55e)](https://git.namillis.me/namillis/barelauncher/releases/latest)
 [![Downloader code 9049616](https://img.shields.io/badge/Downloader-9049616-FF6B2C?style=for-the-badge&logo=amazonfiretv&logoColor=white)](http://aftv.news/9049616)
 [![License](https://img.shields.io/badge/License-PolyForm%20NC%201.0-8b5cf6?style=for-the-badge)](./LICENSE)
 
@@ -90,7 +90,7 @@ Install the **Downloader** app by AFTVnews and enter code **9049616**. The code 
 
 ### Direct APK
 
-1. Download [`BareLauncher.apk`](https://github.com/namillis/barelauncher/releases/latest/download/BareLauncher.apk) from the latest release.
+1. Download [`BareLauncher.apk`](https://git.namillis.me/namillis/barelauncher/releases/latest) from the latest release.
 2. Move it to the TV with a USB drive, network share, or file-transfer app.
 3. Allow installation from unknown sources when Android asks.
 4. Open the APK and install it.
