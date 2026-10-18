@@ -24,6 +24,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - **Favorites can move into the grid from the home screen.** While moving a
   favorite on the home screen, press DOWN to open the app drawer and keep
   moving it there.
+- **The app options menu wraps.** Pressing UP on the top option jumps to the
+  bottom one, and DOWN on the bottom option jumps to the top.
 
 ## [1.0.3] — 2026-10-18
 

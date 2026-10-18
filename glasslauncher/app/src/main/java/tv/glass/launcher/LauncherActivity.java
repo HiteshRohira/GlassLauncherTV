@@ -3293,7 +3293,8 @@ public class LauncherActivity extends Activity {
             RecyclingShelfView.MENU_RESET_ICON, RecyclingShelfView.MENU_RENAME,
             RecyclingShelfView.MENU_MOVE };
 
-    /** Next visible menu selection, clamped at the first and last row. */
+    /** Next visible menu selection, wrapping from the last row to the first
+     *  and back. */
     private int menuNavSel(int cur, int dir) {
         ReorderHost host = menuHost;
         boolean input = host != null && host.menuAppIsInput();
@@ -3302,7 +3303,7 @@ public class LauncherActivity extends Activity {
                 : (menuHasCustomIcon ? MENU_ROWS_WITH_RESET : MENU_ROWS_FULL);
         int idx = 0;
         for (int i = 0; i < order.length; i++) if (order[i] == cur) { idx = i; break; }
-        idx = Math.max(0, Math.min(order.length - 1, idx + dir));
+        idx = Math.floorMod(idx + dir, order.length);
         return order[idx];
     }
 
