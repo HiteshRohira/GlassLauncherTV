@@ -7,6 +7,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-10-18
+
+### Fixed
+
+- **The slideshow folder picker finds newly copied images.** Images copied to
+  the TV with `adb push` or a file manager used to stay hidden until the next
+  reboot, so the picker said "No image folders found". Opening the picker now
+  has Android index the TV's storage first.
+- **Photo access means full access.** On Android 14 and later, the launcher
+  no longer accepts "selected photos only" access, which left the folder list
+  empty. It asks for full photo access instead.
+
 ## [1.0.1] — 2026-10-09
 
 ### Changed

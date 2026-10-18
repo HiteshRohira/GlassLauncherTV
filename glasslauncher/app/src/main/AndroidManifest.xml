@@ -21,13 +21,6 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
         android:minSdkVersion="33" />
 
-    <!-- Android 14+: partial photo library access. The user can grant
-         access to only selected photos rather than the full library. We
-         request this alongside READ_MEDIA_IMAGES so the system shows the
-         "Select photos" option on the permission prompt. -->
-    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
-        android:minSdkVersion="34" />
-
     <!-- Set system wallpaper -->
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
 
