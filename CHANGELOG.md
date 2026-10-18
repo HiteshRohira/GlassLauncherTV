@@ -9,6 +9,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [1.0.2] — 2026-10-18
 
+### Changed
+
+- **The slideshow shuffles.** Images play in a random order instead of by
+  file name. Every image shows once before the order reshuffles, and a
+  restart carries on where the slideshow left off.
+
 ### Fixed
 
 - **The slideshow folder picker finds newly copied images.** Images copied to
