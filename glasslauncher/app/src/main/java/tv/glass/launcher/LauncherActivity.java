@@ -162,6 +162,7 @@ public class LauncherActivity extends Activity {
     private static final int    REQ_BACKUP_IMPORT = 44;
     private static final int    REQ_PICK_ICON  = 45;
     private static final int    REQ_PERM_MEDIA = 71;   // runtime media-read permission
+    private static final long   MEDIA_SCAN_TIMEOUT_SEC = 10;
     private static final int    REQ_PERM_BT    = 72;   // runtime Nearby devices permission
     private static final String BACKUP_FILENAME   = "glasslauncher-settings.txt";
     /** Slideshow duration steps (seconds):
@@ -10866,24 +10867,10 @@ public class LauncherActivity extends Activity {
     }
 
     /** Whether the media-read permission needed to browse image folders is
-     *  granted.
-     *  <ul>
-     *    <li>API 26–32: READ_EXTERNAL_STORAGE</li>
-     *    <li>API 33   : READ_MEDIA_IMAGES (full library)</li>
-     *    <li>API 34+  : READ_MEDIA_IMAGES (full) OR
-     *                   READ_MEDIA_VISUAL_USER_SELECTED (partial — user
-     *                   picked specific photos). Either grant is sufficient
-     *                   for our MediaStore bucket query; partial access may
-     *                   return a smaller folder list, but that is fine.</li>
-     *  </ul> */
+     *  granted: READ_EXTERNAL_STORAGE on API 26–32, READ_MEDIA_IMAGES on 33+.
+     *  A folder slideshow needs the whole library, so Android 14's partial
+     *  "selected photos" grant does not count. */
     private boolean hasMediaReadPermission() {
-        if (Build.VERSION.SDK_INT >= 34) {  // UPSIDE_DOWN_CAKE
-            // Android 14+: full OR partial grant is enough.
-            return checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES)
-                            == android.content.pm.PackageManager.PERMISSION_GRANTED
-                    || checkSelfPermission("android.permission.READ_MEDIA_VISUAL_USER_SELECTED")
-                            == android.content.pm.PackageManager.PERMISSION_GRANTED;
-        }
         String p = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                 ? android.Manifest.permission.READ_MEDIA_IMAGES
                 : android.Manifest.permission.READ_EXTERNAL_STORAGE;
@@ -10892,20 +10879,11 @@ public class LauncherActivity extends Activity {
 
     /** Open the slideshow folder picker: a custom, TV-native list of image
      *  folders from MediaStore (no SAF folder picker, which Google TV lacks).
-     *  Requests the media-read permission first if needed.
-     *  On API 34+ we request READ_MEDIA_IMAGES + READ_MEDIA_VISUAL_USER_SELECTED
-     *  together so the system shows the full chooser with the "Select photos"
-     *  partial-access option. */
+     *  Requests the media-read permission first if needed. */
     private void pickSlideshowFolder() {
         if (hasMediaReadPermission()) { scanAndShowFolderPicker(); return; }
         try {
-            if (Build.VERSION.SDK_INT >= 34) {  // UPSIDE_DOWN_CAKE
-                // Request both so the system dialog offers full AND partial access.
-                requestPermissions(new String[]{
-                        android.Manifest.permission.READ_MEDIA_IMAGES,
-                        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
-                }, REQ_PERM_MEDIA);
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 requestPermissions(new String[]{ android.Manifest.permission.READ_MEDIA_IMAGES },
                         REQ_PERM_MEDIA);
             } else {
@@ -10920,9 +10898,30 @@ public class LauncherActivity extends Activity {
      *  user-initiated action is never silently dropped. */
     private void scanAndShowFolderPicker() {
         new Thread(() -> {
+            indexSharedStorage();
             final java.util.List<String[]> folders = scanImageFolders();
             uiHandler.post(() -> { if (!destroyed) showFolderPicker(folders); });
         }, "wp-folder-scan").start();
+    }
+
+    /** Ask the media scanner to index shared storage and wait for it, capped
+     *  at {@link #MEDIA_SCAN_TIMEOUT_SEC}. Images copied with {@code adb push}
+     *  or a file manager are not in MediaStore until something scans them,
+     *  so without this the picker misses them until the next reboot.
+     *  Unchanged files are skipped by the scanner, so repeat scans are quick.
+     *  Background thread only. */
+    private void indexSharedStorage() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        try {
+            //noinspection deprecation -- the scanner needs a path, not a SAF Uri
+            String root = android.os.Environment.getExternalStorageDirectory().getPath();
+            android.media.MediaScannerConnection.scanFile(getApplicationContext(),
+                    new String[]{ root }, null, (path, uri) -> done.countDown());
+            done.await(MEDIA_SCAN_TIMEOUT_SEC, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception ignored) { /* scan unavailable: query what is indexed */ }
     }
 
     @Override

@@ -113,4 +113,9 @@
          reference; not worth the churn. -->
     <issue id="ObsoleteSdkInt" severity="ignore" />
 
+    <!-- The slideshow plays every image in a folder, so it needs full photo
+         access. Android 14's "selected photos" grant is deliberately not
+         requested: it would leave the folder list empty. -->
+    <issue id="SelectedPhotoAccess" severity="ignore" />
+
 </lint>
