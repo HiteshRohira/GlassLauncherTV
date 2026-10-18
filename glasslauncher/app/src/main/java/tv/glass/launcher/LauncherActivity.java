@@ -1487,6 +1487,26 @@ public class LauncherActivity extends Activity {
      *  boundary and landing focus on the same app the user was on in the home
      *  row. No-op if the drawer is already open or there are no apps. */
     private void openDrawer() {
+        openDrawer(-1, null);
+    }
+
+    /** Hand an in-progress home-row Move over to the drawer: commit the
+     *  shelf's order, open the drawer focused on the same app, and continue
+     *  the move there with one DOWN step, which drops it into the grid. */
+    private void continueMoveInDrawer() {
+        RecyclingShelfView s = shelf; AppDrawer d = drawer;
+        if (s == null || d == null || !s.reorderMode) return;
+        int idx = s.dragIndex;
+        final AppInfo app = (idx >= 0 && idx < s.displayed.size()) ? s.displayed.get(idx) : null;
+        s.exitReorderMode(true);
+        if (app == null) return;
+        openDrawer(idx, () -> d.startMove(app, KeyEvent.KEYCODE_DPAD_DOWN));
+    }
+
+    /** {@code focusIdx >= 0} focuses that drawer index instead of the cell
+     *  under the home favourite; {@code onOpened} runs once the drawer is
+     *  laid out and focused. */
+    private void openDrawer(int focusIdx, Runnable onOpened) {
         AppDrawer d = drawer; RecyclingShelfView s = shelf;
         if (d == null || s == null) return;
         if (d.getVisibility() == View.VISIBLE) return;
@@ -1503,7 +1523,9 @@ public class LauncherActivity extends Activity {
         // only row (few apps), navDown returns the same index so focus simply
         // stays on the favourite. Clamp the home index defensively.
         int homeIdx = Math.min(Math.max(0, s.focusedIndex), Math.max(0, hc - 1));
-        int focus = HomeDrawerModel.navDown(layoutColumns, homeIdx, visible.size(), hc);
+        int focus = focusIdx >= 0
+                ? Math.min(focusIdx, visible.size() - 1)
+                : HomeDrawerModel.navDown(layoutColumns, homeIdx, visible.size(), hc);
         final float homeRowCenterY = homeRowCenterYInRoot(s);
         // Hide the home shelf while the drawer covers the screen so we never
         // draw both grids at once (the drawer's row 0 already mirrors the home
@@ -1515,7 +1537,7 @@ public class LauncherActivity extends Activity {
         // the old dark-only fallback without ever blurring app cards.
         prepareLegacyDrawerBlur(() -> {
             if (!destroyed && d.getVisibility() != View.VISIBLE) {
-                d.open(focus, homeRowCenterY);
+                d.open(focus, homeRowCenterY, onOpened);
             }
         });
     }
@@ -5225,19 +5247,22 @@ public class LauncherActivity extends Activity {
 
                         if (moveActive) {
                             // Stage 2 — Move confirmed: LEFT/RIGHT reorder,
+                            // DOWN carries the app into the drawer grid,
                             // OK / BACK commit.
                             switch (kc) {
                                 case KeyEvent.KEYCODE_DPAD_LEFT:
                                     swapWithNeighbour(dragIndex - 1); return true;
                                 case KeyEvent.KEYCODE_DPAD_RIGHT:
                                     swapWithNeighbour(dragIndex + 1); return true;
+                                case KeyEvent.KEYCODE_DPAD_DOWN:
+                                    LauncherActivity.this.continueMoveInDrawer(); return true;
                                 case KeyEvent.KEYCODE_DPAD_CENTER:
                                 case KeyEvent.KEYCODE_ENTER:
                                 case KeyEvent.KEYCODE_BUTTON_A:
                                 case KeyEvent.KEYCODE_BACK:
                                     exitReorderMode(true); return true;   // commit
                                 default:
-                                    return true;   // swallow UP/DOWN — no vertical move on the shelf
+                                    return true;   // swallow UP — nothing above the shelf to move into
                             }
                         }
 
@@ -6072,6 +6097,10 @@ public class LauncherActivity extends Activity {
 
         // ── open / close ─────────────────────────────────────────────────
         void open(int focusIdx, float sourceCenterY) {
+            open(focusIdx, sourceCenterY, null);
+        }
+
+        void open(int focusIdx, float sourceCenterY, Runnable onOpened) {
             closing = false;
             // Defensive: interrupted withLayer() animations can leave a stale
             // hardware texture. Always start from a live, untransformed view.
@@ -6111,6 +6140,7 @@ public class LauncherActivity extends Activity {
                             }
                         })
                         .start();
+                if (onOpened != null) onOpened.run();
             });
         }
 
@@ -6199,6 +6229,23 @@ public class LauncherActivity extends Activity {
             hideContextMenu();
             DrawerCell cv = attached.get(dragIndex);
             if (cv != null) LauncherActivity.this.positionRing(cv);
+        }
+
+        /** Start an active Move on {@code app} with no context menu (the move
+         *  was already confirmed on the home row) and apply {@code firstKey}
+         *  as its first step. */
+        void startMove(AppInfo app, int firstKey) {
+            int idx = displayed.indexOf(app);
+            if (reorderMode || idx < 0) return;
+            reorderMode   = true;
+            moveActive    = true;
+            dragIndex     = idx;
+            focusedIndex  = idx;
+            menuSelection = RecyclingShelfView.MENU_MOVE;
+            LauncherActivity.this.menuHost = this;
+            LauncherActivity.this.ensureMenuOverlay();
+            syncReorderDimming();
+            moveDir(firstKey);
         }
 
         void exitReorderMode(boolean persist) {
