@@ -112,6 +112,7 @@ public class LauncherActivity extends Activity {
     private static final String KEY_SLIDESHOW_DURATION = "slideshow_duration_sec";
     private static final String KEY_SLIDESHOW_RESTART  = "slideshow_restart";
     private static final String KEY_SLIDESHOW_INDEX  = "slideshow_index";
+    private static final String KEY_SLIDESHOW_SEED   = "slideshow_seed";
     private static final String KEY_SCROLL_IDX = "scroll_idx";
     private static final String KEY_APP_ORDER  = "app_order";
     /** v1.5.0: number of leading apps (in the visible / non-hidden order)
@@ -385,8 +386,11 @@ public class LauncherActivity extends Activity {
     private int     slideshowDurationSec = 0;
     /** "Change wallpaper on each restart" toggle (independent of the timer). */
     private boolean slideshowRestart   = false;
-    /** Sequential position within {@link #slideshowImages}. */
+    /** Position within the shuffled {@link #slideshowImages}. */
     private int     slideshowIndex     = 0;
+    /** Seed for the current pass's shuffle order. Persisted so a restart
+     *  rebuilds the same order and carries on from {@link #slideshowIndex}. */
+    private long    slideshowSeed      = 0L;
     /** Cached child image document-URI strings for the folder; {@code null}
      *  until enumerated (off the UI thread). Volatile because it is written
      *  on the app executor and read on the UI thread. */
@@ -10830,6 +10834,12 @@ public class LauncherActivity extends Activity {
         slideshowDurationSec = prefs.getInt(KEY_SLIDESHOW_DURATION, 0);
         slideshowRestart     = prefs.getBoolean(KEY_SLIDESHOW_RESTART, false);
         slideshowIndex       = Math.max(0, prefs.getInt(KEY_SLIDESHOW_INDEX, 0));
+        if (prefs.contains(KEY_SLIDESHOW_SEED)) {
+            slideshowSeed = prefs.getLong(KEY_SLIDESHOW_SEED, 0L);
+        } else {
+            slideshowSeed = new java.util.Random().nextLong();
+            prefs.edit().putLong(KEY_SLIDESHOW_SEED, slideshowSeed).apply();
+        }
         // Sanitise an out-of-range stored duration to Off.
         boolean legal = false;
         for (int s : SLIDESHOW_STEPS_SEC) if (s == slideshowDurationSec) { legal = true; break; }
@@ -11004,10 +11014,12 @@ public class LauncherActivity extends Activity {
      *  once it exits, and never contends with the app scan. */
     private void enumerateSlideshowAsync(Runnable onReady) {
         final String folder = slideshowFolderUri;
+        final long seed = slideshowSeed;
         if (folder == null) return;
         try {
             new Thread(() -> {
                 final String[] imgs = listSlideshowImages(folder);
+                if (imgs != null) shuffleSlideshow(imgs, seed);
                 uiHandler.post(() -> {
                     if (destroyed) return;
                     // Treat a failed enumeration (null — revoked permission /
@@ -11136,9 +11148,37 @@ public class LauncherActivity extends Activity {
             slideshowImages = null;
             return;
         }
-        slideshowIndex = (slideshowIndex + 1) % imgs.length;
-        prefs.edit().putInt(KEY_SLIDESHOW_INDEX, slideshowIndex).apply();
+        stepSlideshowIndex(imgs);
         applyCurrentSlideshowImage();
+    }
+
+    /** Shuffle the name-sorted image list into this pass's order. The same
+     *  seed always gives the same order for the same folder contents. */
+    private static void shuffleSlideshow(String[] imgs, long seed) {
+        Collections.shuffle(java.util.Arrays.asList(imgs), new java.util.Random(seed));
+    }
+
+    /** Move to the next image in the shuffled order. At the end of a pass,
+     *  reshuffle with a new seed so every pass has a fresh order, and keep the
+     *  image just shown from opening the next pass. Persists index and seed. */
+    private void stepSlideshowIndex(String[] imgs) {
+        int cur = ((slideshowIndex % imgs.length) + imgs.length) % imgs.length;
+        int next = cur + 1;
+        if (next >= imgs.length) {
+            String last = imgs[cur];
+            slideshowSeed = new java.util.Random().nextLong();
+            shuffleSlideshow(imgs, slideshowSeed);
+            if (imgs.length > 1 && imgs[0].equals(last)) {
+                imgs[0] = imgs[1];
+                imgs[1] = last;
+            }
+            next = 0;
+        }
+        slideshowIndex = next;
+        prefs.edit()
+                .putInt(KEY_SLIDESHOW_INDEX, slideshowIndex)
+                .putLong(KEY_SLIDESHOW_SEED, slideshowSeed)
+                .apply();
     }
 
     /** (Re)arm the foreground interval timer for the current setting, or cancel
@@ -11194,8 +11234,7 @@ public class LauncherActivity extends Activity {
             return;
         }
         // Success - advance and apply
-        slideshowIndex = (slideshowIndex + 1) % imgs.length;
-        prefs.edit().putInt(KEY_SLIDESHOW_INDEX, slideshowIndex).apply();
+        stepSlideshowIndex(imgs);
         applyCurrentSlideshowImage();
     }
 
@@ -11567,10 +11606,12 @@ public class LauncherActivity extends Activity {
         String bucketId = folderPickerData.get(index)[0];
         slideshowFolderUri = bucketId;
         slideshowIndex     = 0;
+        slideshowSeed      = new java.util.Random().nextLong();
         slideshowImages    = null;
         android.content.SharedPreferences.Editor ed = prefs.edit()
                 .putString(KEY_SLIDESHOW_FOLDER, bucketId)
-                .putInt(KEY_SLIDESHOW_INDEX, 0);
+                .putInt(KEY_SLIDESHOW_INDEX, 0)
+                .putLong(KEY_SLIDESHOW_SEED, slideshowSeed);
         if (slideshowDurationSec == 0 && !slideshowRestart) {
             slideshowDurationSec = SLIDESHOW_DEFAULT_SEC;
             ed.putInt(KEY_SLIDESHOW_DURATION, slideshowDurationSec);
