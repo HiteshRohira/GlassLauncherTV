@@ -11,8 +11,8 @@ import org.junit.Test;
 /**
  * Unit tests for {@link HomeDrawerModel} (v1.5.0, COLS = 6). Runs on the JVM
  * (no Android emulator), exercising the "home favourites row + pull-down
- * drawer" geometry, focus navigation, and the Option-A promote / demote
- * Move-mode rules (including full-home-row displacement).
+ * drawer" geometry, focus navigation, and the insert-based Move rules
+ * (including promote / demote across the favourites row).
  */
 public class HomeDrawerModelTest {
 
@@ -164,121 +164,202 @@ public class HomeDrawerModelTest {
         assertEquals(9, HomeDrawerModel.navDown(7, 2, 20, 7));
     }
 
-    // ── Move mode: promote / demote ──────────────────────────────────────
+    // ── Move mode: insert, promote / demote ──────────────────────────────
 
-    @Test public void move_promote_appendsToHomeAndIncrements() {
-        List<String> order = list(20);          // p0..p19
-        int hc = 5;                              // not full → append-grow
-        // index 7 is row1 col2 (p7). UP → promote, appended at end of home (dest = 5).
-        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveUp(order, 7, hc);
-        assertEquals(6, r.homeCount);
-        assertEquals(5, r.index);
-        assertEquals("p7", order.get(5));
-        assertEquals("p5", order.get(6));        // p5, p6 shifted right by one
-        assertEquals("p6", order.get(7));
-    }
-
-    @Test public void move_promote_fullRow_swapsWithCellAbove() {
+    @Test public void move_up_promote_insertsAtColumnAndGrowsHome() {
         List<String> order = list(20);
-        int hc = 6;                              // home full
-        // index 8 = row1 col2. UP → straight vertical swap with the home cell
-        // directly above (index 2): the moved app takes the home slot, the
-        // replaced home app drops into the slot the moved app vacated.
-        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveUp(order, 8, hc);
-        assertEquals(6, r.homeCount);            // home stays full
-        assertEquals(2, r.index);                // moved app now at home col 2
-        assertEquals("p8", order.get(2));        // moved app in the home slot
-        assertEquals("p2", order.get(8));        // replaced home app → vacated slot
-        assertEquals(Arrays.asList("p0", "p1", "p8", "p3", "p4", "p5"), order.subList(0, 6));
+        // index 7 = row1 col2 (row1 starts at 5). Home not full → grows.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveUp(order, 7, 5);
+        assertEquals(6, r.homeCount);
+        assertEquals(2, r.index);
+        assertEquals(Arrays.asList("p0", "p1", "p7", "p2", "p3", "p4", "p5", "p6", "p8"),
+                order.subList(0, 9));
     }
 
-    @Test public void move_promote_fullRuntimeWidth_swapsWithCellAbove() {
+    @Test public void move_up_promote_pastShortHomeRow_appends() {
+        List<String> order = list(20);
+        // index 8 = row1 col5 (row1 starts at 3); home is only 3 wide.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveUp(order, 8, 3);
+        assertEquals(4, r.homeCount);
+        assertEquals(3, r.index);
+        assertEquals(Arrays.asList("p0", "p1", "p2", "p8", "p3", "p4"), order.subList(0, 6));
+    }
+
+    @Test public void move_up_fullHome_insertsAndPushesLastFavoriteDown() {
+        List<String> order = list(20);
+        // index 8 = row1 col2. Full home: inserted at col 2, p5 drops to the
+        // first grid slot, and the grid apps before index 8 shift one later.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveUp(order, 8, 6);
+        assertEquals(6, r.homeCount);
+        assertEquals(2, r.index);
+        assertEquals(Arrays.asList("p0", "p1", "p8", "p2", "p3", "p4"), order.subList(0, 6));
+        assertEquals(Arrays.asList("p5", "p6", "p7", "p9"), order.subList(6, 10));
+    }
+
+    @Test public void move_up_fullHome_runtimeWidths() {
         List<String> four = list(16);
-        HomeDrawerModel.MoveResult fourResult =
-                HomeDrawerModel.moveUp(4, four, 6, 4);
-        assertEquals(4, fourResult.homeCount);
-        assertEquals(2, fourResult.index);
-        assertEquals("p6", four.get(2));
-        assertEquals("p2", four.get(6));
+        HomeDrawerModel.MoveResult r4 = HomeDrawerModel.moveUp(4, four, 6, 4);
+        assertEquals(4, r4.homeCount);
+        assertEquals(2, r4.index);
+        assertEquals(Arrays.asList("p0", "p1", "p6", "p2", "p3", "p4", "p5", "p7"),
+                four.subList(0, 8));
 
         List<String> seven = list(21);
-        HomeDrawerModel.MoveResult sevenResult =
-                HomeDrawerModel.moveUp(7, seven, 9, 7);
-        assertEquals(7, sevenResult.homeCount);
-        assertEquals(2, sevenResult.index);
-        assertEquals("p9", seven.get(2));
-        assertEquals("p2", seven.get(9));
+        HomeDrawerModel.MoveResult r7 = HomeDrawerModel.moveUp(7, seven, 9, 7);
+        assertEquals(7, r7.homeCount);
+        assertEquals(2, r7.index);
+        assertEquals(Arrays.asList("p0", "p1", "p9", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p10"),
+                seven.subList(0, 11));
     }
 
-    @Test public void move_demote_decrementsAndLeavesFirstNonHome() {
-        List<String> order = list(20);
-        int hc = 5;
-        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveDown(order, 1, hc);
-        assertEquals(4, r.homeCount);
-        assertEquals(4, r.index);
-        assertEquals("p1", order.get(4));        // now first non-home app
-        assertEquals(Arrays.asList("p0", "p2", "p3", "p4"), order.subList(0, 4));
+    @Test public void move_up_lowerRow_insertsAndShifts() {
+        List<String> order = list(30);
+        // index 12 = row2 col1 → row1 col1 (index 6); p6..p11 shift one later.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveUp(order, 12, 5);
+        assertEquals(5, r.homeCount);
+        assertEquals(6, r.index);
+        assertEquals(Arrays.asList("p5", "p12", "p6", "p7", "p8", "p9", "p10", "p11", "p13"),
+                order.subList(5, 14));
     }
 
-    @Test public void move_demote_lastHomeStaysInPlaceConceptually() {
+    @Test public void move_up_inFavorites_noop() {
         List<String> order = list(20);
-        int hc = 5;
-        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveDown(order, 4, hc);
-        assertEquals(4, r.homeCount);
-        assertEquals(4, r.index);
-        assertEquals("p4", order.get(4));
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveUp(order, 2, 5);
+        assertEquals(5, r.homeCount);
+        assertEquals(2, r.index);
         assertEquals(list(20), order);
+    }
+
+    @Test public void move_down_demote_landsUnderSameColumn() {
+        List<String> order = list(20);
+        // home index 1 → first grid row col 1; the favourites close the gap.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveDown(order, 1, 5);
+        assertEquals(4, r.homeCount);
+        assertEquals(5, r.index);
+        assertEquals(1, HomeDrawerModel.colOf(r.index, r.homeCount));
+        assertEquals(Arrays.asList("p0", "p2", "p3", "p4", "p5", "p1", "p6", "p7"),
+                order.subList(0, 8));
+    }
+
+    @Test public void move_down_demote_lastFavorite() {
+        List<String> order = list(20);
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveDown(order, 4, 5);
+        assertEquals(4, r.homeCount);
+        assertEquals(8, r.index);
+        assertEquals(4, HomeDrawerModel.colOf(r.index, r.homeCount));
+        assertEquals(Arrays.asList("p0", "p1", "p2", "p3", "p5", "p6", "p7", "p8", "p4", "p9"),
+                order.subList(0, 10));
+    }
+
+    @Test public void move_down_demote_intoShortGrid_goesToEnd() {
+        List<String> order = list(7);
+        // One grid app; the demoted favourite lands after it.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveDown(order, 5, 6);
+        assertEquals(5, r.homeCount);
+        assertEquals(6, r.index);
+        assertEquals(Arrays.asList("p0", "p1", "p2", "p3", "p4", "p6", "p5"), order);
     }
 
     @Test public void move_demoteToZero_thenPromoteBack() {
         List<String> order = list(10);
-        int hc = 1;
-        HomeDrawerModel.MoveResult d = HomeDrawerModel.moveDown(order, 0, hc);
-        assertEquals(0, d.homeCount);            // home now empty
+        HomeDrawerModel.MoveResult d = HomeDrawerModel.moveDown(order, 0, 1);
+        assertEquals(0, d.homeCount);
         assertEquals(0, d.index);
-        // homeCount 0: pushing the top-row app UP rebuilds the home row.
+        assertEquals(list(10), order);
         HomeDrawerModel.MoveResult u = HomeDrawerModel.moveUp(order, 0, 0);
         assertEquals(1, u.homeCount);
         assertEquals(0, u.index);
-        // Any row-0 app (home empty) promotes into a new 1-app home row.
-        HomeDrawerModel.MoveResult u2 = HomeDrawerModel.moveUp(list(10), 5, 0);
+        List<String> other = list(10);
+        HomeDrawerModel.MoveResult u2 = HomeDrawerModel.moveUp(other, 5, 0);
         assertEquals(1, u2.homeCount);
         assertEquals(0, u2.index);
+        assertEquals("p5", other.get(0));
     }
 
-    @Test public void move_leftRight_swapWithinRow() {
+    @Test public void move_down_insertsAndShiftsInsteadOfSwapping() {
+        List<String> order = list(30);
+        // index 6 = row1 col1 → row2 col1 (index 12); p7..p12 shift one earlier.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveDown(order, 6, 5);
+        assertEquals(5, r.homeCount);
+        assertEquals(12, r.index);
+        assertEquals(Arrays.asList("p5", "p7", "p8", "p9", "p10", "p11", "p12", "p6", "p13"),
+                order.subList(5, 14));
+    }
+
+    @Test public void move_down_ontoShortLastRow_goesToEnd() {
         List<String> order = list(20);
-        int hc = 5;
-        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveRight(order, 1, hc);
+        // rows 5, 6, 6, 3: index 16 = row2 col5; last row only 3 wide.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveDown(order, 16, 5);
+        assertEquals(19, r.index);
+        assertEquals(Arrays.asList("p17", "p18", "p19", "p16"), order.subList(16, 20));
+    }
+
+    @Test public void move_down_lastRow_noop() {
+        List<String> order = list(20);
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveDown(order, 18, 5);
+        assertEquals(18, r.index);
+        assertEquals(list(20), order);
+    }
+
+    @Test public void move_downThenUp_restoresOrder() {
+        List<String> order = list(30);
+        HomeDrawerModel.MoveResult d = HomeDrawerModel.moveDown(order, 12, 5);
+        HomeDrawerModel.MoveResult u = HomeDrawerModel.moveUp(order, d.index, d.homeCount);
+        assertEquals(12, u.index);
+        assertEquals(list(30), order);
+    }
+
+    @Test public void move_leftRight_adjacentWithinRow() {
+        List<String> order = list(20);
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveRight(order, 1, 5);
         assertEquals(2, r.index);
         assertEquals("p1", order.get(2));
         assertEquals("p2", order.get(1));
-        HomeDrawerModel.MoveResult l = HomeDrawerModel.moveLeft(order, 2, hc);
+        HomeDrawerModel.MoveResult l = HomeDrawerModel.moveLeft(order, 2, 5);
         assertEquals(1, l.index);
-        assertEquals(list(20), order);           // swapped back
+        assertEquals(list(20), order);
     }
 
-    @Test public void move_rightStopsAtRowBoundary() {
+    @Test public void move_rightAndLeft_wrapBetweenRows() {
         List<String> order = list(20);
-        int hc = 5;
-        // index 4 is last home cell (hc=5) → RIGHT must not bleed into row 1.
-        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveRight(order, 4, hc);
-        assertEquals(4, r.index);
-        assertEquals(list(20), order);
-        // index 10 is last cell of row 1 → RIGHT must not cross to row 2.
-        HomeDrawerModel.MoveResult r2 = HomeDrawerModel.moveRight(order, 10, hc);
-        assertEquals(10, r2.index);
+        // index 10 = last cell of row1 → first cell of row2.
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveRight(order, 10, 5);
+        assertEquals(11, r.index);
+        assertEquals(2, HomeDrawerModel.rowOf(r.index, 5));
+        assertEquals("p10", order.get(11));
+        HomeDrawerModel.MoveResult l = HomeDrawerModel.moveLeft(order, 11, 5);
+        assertEquals(10, l.index);
         assertEquals(list(20), order);
     }
 
-    @Test public void move_verticalSwap_lowerRows() {
-        List<String> order = list(30);
-        int hc = 5;
-        // index 12 (row2 col1) UP → swap with row1 col1 (index 6).
-        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveUp(order, 12, hc);
-        assertEquals(6, r.index);
-        assertEquals(5, r.homeCount);
-        assertEquals("p12", order.get(6));
-        assertEquals("p6", order.get(12));
+    @Test public void move_right_lastFavorite_demotes() {
+        List<String> order = list(20);
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveRight(order, 4, 5);
+        assertEquals(4, r.homeCount);
+        assertEquals(4, r.index);
+        assertEquals(1, HomeDrawerModel.rowOf(r.index, r.homeCount));
+        assertEquals(list(20), order);
+    }
+
+    @Test public void move_left_firstGridSlot_promotes() {
+        List<String> order = list(20);
+        HomeDrawerModel.MoveResult r = HomeDrawerModel.moveLeft(order, 5, 5);
+        assertEquals(6, r.homeCount);
+        assertEquals(5, r.index);
+        assertEquals(list(20), order);
+
+        List<String> full = list(20);
+        HomeDrawerModel.MoveResult f = HomeDrawerModel.moveLeft(full, 6, 6);
+        assertEquals(6, f.homeCount);
+        assertEquals(5, f.index);
+        assertEquals("p6", full.get(5));
+        assertEquals("p5", full.get(6));
+    }
+
+    @Test public void move_ends_noop() {
+        List<String> order = list(20);
+        assertEquals(0, HomeDrawerModel.moveLeft(order, 0, 5).index);
+        assertEquals(19, HomeDrawerModel.moveRight(order, 19, 5).index);
+        assertEquals(list(20), order);
     }
 }

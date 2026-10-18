@@ -7,6 +7,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.0.4] — 2026-10-18
+
+### Changed
+
+- **Moving an app inserts it instead of swapping.** In the app drawer, a
+  moved app is placed at its new spot and the apps in between shift over by
+  one, instead of trading places with the app above or below it.
+- **Moves wrap between rows.** LEFT at the start of a row moves the app to
+  the end of the row above, and RIGHT at the end moves it to the start of the
+  next row.
+- **Favorites follow the same rules.** Moving a favorite down drops it into
+  the grid under the same column. Moving an app up into favorites inserts it
+  at that spot; if favorites are full, the last favorite moves down to the
+  start of the grid.
+- **Favorites can move into the grid from the home screen.** While moving a
+  favorite on the home screen, press DOWN to open the app drawer and keep
+  moving it there.
+
 ## [1.0.3] — 2026-10-18
 
 ### Fixed
