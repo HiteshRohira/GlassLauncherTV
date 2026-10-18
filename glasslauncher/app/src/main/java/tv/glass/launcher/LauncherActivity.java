@@ -1624,6 +1624,7 @@ public class LauncherActivity extends Activity {
         // Toolbar pills fade in to their dim idle alpha (0.6 — the rest value
         // their own focus listeners use), so an unfocused pill lands correctly
         // and the corner cluster no longer pops while the centre cross-fades.
+        fadeViewIn(btBtn, 0.6f);
         fadeViewIn(netBtn, 0.6f);
         fadeViewIn(mapperBtnView, 0.6f);
     }
@@ -1651,6 +1652,7 @@ public class LauncherActivity extends Activity {
         RecyclingShelfView s = shelf; if (s != null) { s.animate().cancel(); s.setAlpha(1f); }
         TextView cv = clockView;      if (cv != null) { cv.animate().cancel(); cv.setAlpha(1f); }
         RingView rv = ringView;       if (rv != null) { rv.animate().cancel(); rv.setAlpha(1f); }
+        View bb = btBtn;              if (bb != null) { bb.animate().cancel(); bb.setAlpha(0.6f); }
         View nb = netBtn;             if (nb != null) { nb.animate().cancel(); nb.setAlpha(0.6f); }
         View mb = mapperBtnView;      if (mb != null) { mb.animate().cancel(); mb.setAlpha(0.6f); }
     }
@@ -1880,6 +1882,7 @@ public class LauncherActivity extends Activity {
      *  sharp toolbar/clock behind it would ghost through the frost. The home
      *  shelf is hidden separately (it owns focus-restore logic). */
     private void setHomeChromeVisible(boolean visible) {
+        View bb = btBtn;         if (bb != null) bb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         View nb = netBtn;        if (nb != null) nb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         View mb = mapperBtnView; if (mb != null) mb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         FavoritesBlurView blur = favoritesBlurLayer;
@@ -11335,7 +11338,7 @@ public class LauncherActivity extends Activity {
     }
 
     /** Fade home UI in (active=false) or out (active=true).
-     *  Views hidden: shelf and its blur layer, netBtn, mapperBtnView, ringView.
+     *  Views hidden: shelf and its blur layer, btBtn, netBtn, mapperBtnView, ringView.
      *  Views kept visible: wallpaper (always), clockView (always).
      *  Duration: 500 ms out, 250 ms in — smooth but snappy. */
     private void applyIdleHide(boolean hide) {
@@ -11345,10 +11348,11 @@ public class LauncherActivity extends Activity {
         long dur     = hide ? 500L : 250L;
         RecyclingShelfView s = shelf;
         FavoritesBlurView blur = favoritesBlurLayer;
-        View nb = netBtn, mb = mapperBtnView;
+        View bb = btBtn, nb = netBtn, mb = mapperBtnView;
         RingView rv = ringView;
         if (s    != null) s   .animate().alpha(target).setDuration(dur).start();
         if (blur != null) blur.animate().alpha(target).setDuration(dur).start();
+        if (bb   != null) bb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
         if (nb   != null) nb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
         if (mb   != null) mb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
         if (rv   != null) rv  .animate().alpha(target).setDuration(dur).start();

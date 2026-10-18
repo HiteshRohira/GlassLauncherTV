@@ -7,6 +7,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-10-18
+
+### Fixed
+
+- **The Bluetooth pill hides with the rest of the toolbar again.** It stayed
+  on screen in idle mode and in the app drawer, including drawer edit mode,
+  while the Wi-Fi and Settings pills hid. The 2.8.1 fix for this was lost
+  when the launcher was renamed.
+
 ## [1.0.2] — 2026-10-18
 
 ### Changed
