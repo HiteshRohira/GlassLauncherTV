@@ -7,6 +7,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.0.5] — 2026-10-19
+
+### Fixed
+
+- **Bluetooth menu no longer crashes the launcher.** Closing the Bluetooth
+  menu (Open Settings, Bluetooth settings, Rename or unpair, or Back) could
+  crash the launcher on Android 14 when a headset-profile device was
+  connected. The launcher restarted instead of opening Settings, and the
+  crash could also clear Glass Launcher as the default home app.
+
 ## [1.0.4] — 2026-10-18
 
 ### Changed
