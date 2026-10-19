@@ -837,12 +837,16 @@ final class BluetoothPanel {
             try { activity.unregisterReceiver(r); } catch (RuntimeException ignored) { }
         }
         BluetoothAdapter a = adapter();
-        for (Map.Entry<Integer, BluetoothProfile> e : proxies.entrySet()) {
-            if (a == null) break;
-            try { a.closeProfileProxy(e.getKey(), e.getValue()); } catch (RuntimeException ignored) { }
-        }
+        // closeProfileProxy can call onServiceDisconnected synchronously
+        // (BluetoothHeadset does on Android 14), which removes from proxies.
+        java.util.List<Map.Entry<Integer, BluetoothProfile>> open =
+                new java.util.ArrayList<>(proxies.entrySet());
         proxies.clear();
         aclConnected.clear();
+        if (a == null) return;
+        for (Map.Entry<Integer, BluetoothProfile> e : open) {
+            try { a.closeProfileProxy(e.getKey(), e.getValue()); } catch (RuntimeException ignored) { }
+        }
     }
 
     private void openProxies() {
