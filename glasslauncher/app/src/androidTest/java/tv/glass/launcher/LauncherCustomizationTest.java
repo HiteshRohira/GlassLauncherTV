@@ -658,6 +658,25 @@ public class LauncherCustomizationTest {
     }
 
     @Test
+    public void dpadUp_fromHomeCell_focusesSettingsPill() {
+        try (ActivityScenario<LauncherActivity> scenario =
+                     launchSettledLauncher()) {
+            View homeCell = focusHomeCell(scenario);
+            scenario.onActivity(activity -> {
+                assertTrue(homeCell.dispatchKeyEvent(
+                        new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)));
+                homeCell.dispatchKeyEvent(
+                        new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
+            });
+
+            awaitValue(scenario, "focused settings pill", activity -> {
+                View gear = (View) field(activity, "mapperBtnView");
+                return gear != null && gear.isFocused() ? gear : null;
+            });
+        }
+    }
+
+    @Test
     public void immediateDrawerClose_cancelsDeferredOpen() {
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
