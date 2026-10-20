@@ -71,6 +71,7 @@
         <item quantity="other">%1$d columns · %2$s</item>
     </plurals>
     <string name="settings_summary_no_folder">No slideshow folder</string>
+    <string name="settings_summary_system_wallpaper">System wallpaper</string>
     <string name="settings_summary_slideshow">Slideshow %1$s</string>
     <string name="settings_summary_wallpaper">%1$s · idle %2$s</string>
     <string name="settings_summary_apps">Hidden apps and remote buttons</string>
@@ -88,6 +89,7 @@
     <string name="settings_value_open">%1$s  ›</string>
     <string name="settings_hint_open">↑↓ Move  ·  OK Open  ·  Back</string>
     <string name="settings_hint_adjust">↑↓ Move  ·  ←→ Change  ·  OK Select  ·  Back</string>
+    <string name="settings_row_system_wallpaper">Use system wallpaper</string>
     <string name="settings_row_set_wallpaper">Set wallpaper</string>
     <string name="settings_row_wallpaper_menu">Wallpaper &amp; idle</string>
     <string name="settings_row_backup_menu">Backup &amp; restore</string>
@@ -166,6 +168,7 @@
     <string name="toast_no_file_picker">No file picker available</string>
     <string name="toast_wallpaper_load_failed">Could not load wallpaper</string>
     <string name="toast_wallpaper_no_permission">Could not get permission for this image</string>
+    <string name="toast_system_wallpaper_unsupported">This TV doesn\'t support a system wallpaper</string>
     <!-- %1$s is the user-visible label of the customized app. -->
     <string name="toast_custom_icon_set">Custom icon set for %1$s. Long-press to reset.</string>
     <string name="toast_custom_icon_failed">Could not use that image</string>

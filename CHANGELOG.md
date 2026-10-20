@@ -9,6 +9,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [1.0.6] — 2026-10-19
 
+### Added
+
+- **Use system wallpaper.** A new Wallpaper setting lets Android draw the
+  system wallpaper behind the launcher, so live wallpapers and wallpaper apps
+  show on the home screen. The launcher's own wallpaper and slideshow pause
+  while it is on, and picking a wallpaper or slideshow folder turns it off.
+  The glass panels are tinted but not blurred in this mode.
+
 ### Fixed
 
 - **UP from the home row lands on Settings.** Pressing UP from an app on the
