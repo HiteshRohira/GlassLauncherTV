@@ -677,6 +677,55 @@ public class LauncherCustomizationTest {
     }
 
     @Test
+    public void systemWallpaper_togglesTransparentWindowAndRestores() {
+        java.util.Map<String, ?> saved = launcherPrefs().getAll();
+        try (ActivityScenario<LauncherActivity> scenario =
+                     launchSettledLauncher()) {
+            scenario.onActivity(activity -> {
+                setSystemWallpaper(activity, true);
+                assertSystemWallpaper(activity, true);
+                setSystemWallpaper(activity, false);
+                assertSystemWallpaper(activity, false);
+            });
+        } finally {
+            restoreLauncherPrefs(saved);
+        }
+    }
+
+    @Test
+    public void systemWallpaper_persistsAcrossRecreate() {
+        java.util.Map<String, ?> saved = launcherPrefs().getAll();
+        try (ActivityScenario<LauncherActivity> scenario =
+                     launchSettledLauncher()) {
+            scenario.onActivity(activity -> setSystemWallpaper(activity, true));
+            scenario.recreate();
+            scenario.onActivity(activity -> assertSystemWallpaper(activity, true));
+        } finally {
+            restoreLauncherPrefs(saved);
+        }
+    }
+
+    @Test
+    public void systemWallpaper_pickingSlideshowFolderTurnsItOff() {
+        java.util.Map<String, ?> saved = launcherPrefs().getAll();
+        try (ActivityScenario<LauncherActivity> scenario =
+                     launchSettledLauncher()) {
+            scenario.onActivity(activity -> {
+                setSystemWallpaper(activity, true);
+                @SuppressWarnings("unchecked")
+                java.util.List<String[]> folders =
+                        (java.util.List<String[]>) field(activity, "folderPickerData");
+                folders.clear();
+                folders.add(new String[] {"glass-test-bucket", "Test", "0"});
+                invoke(activity, "selectFolder", new Class<?>[] {int.class}, 0);
+                assertSystemWallpaper(activity, false);
+            });
+        } finally {
+            restoreLauncherPrefs(saved);
+        }
+    }
+
+    @Test
     public void immediateDrawerClose_cancelsDeferredOpen() {
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
@@ -1045,6 +1094,49 @@ public class LauncherCustomizationTest {
         } while (SystemClock.uptimeMillis() < deadline);
         fail("Timed out waiting for " + description);
         return null;
+    }
+
+    private static SharedPreferences launcherPrefs() {
+        Context context = getInstrumentation().getTargetContext();
+        String prefsName = (String) staticField(LauncherActivity.class, "PREFS");
+        return context.getSharedPreferences(prefsName, Context.MODE_PRIVATE);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void restoreLauncherPrefs(java.util.Map<String, ?> saved) {
+        SharedPreferences.Editor editor = launcherPrefs().edit().clear();
+        for (java.util.Map.Entry<String, ?> entry : saved.entrySet()) {
+            Object value = entry.getValue();
+            String key = entry.getKey();
+            if (value instanceof Boolean) editor.putBoolean(key, (Boolean) value);
+            else if (value instanceof Integer) editor.putInt(key, (Integer) value);
+            else if (value instanceof Long) editor.putLong(key, (Long) value);
+            else if (value instanceof Float) editor.putFloat(key, (Float) value);
+            else if (value instanceof String) editor.putString(key, (String) value);
+            else if (value instanceof java.util.Set) {
+                editor.putStringSet(key, (java.util.Set<String>) value);
+            }
+        }
+        if (!editor.commit()) throw new AssertionError("Failed to restore launcher prefs");
+    }
+
+    private static void setSystemWallpaper(LauncherActivity activity, boolean on) {
+        invoke(activity, "setSystemWallpaper",
+                new Class<?>[] {boolean.class, boolean.class}, on, true);
+    }
+
+    private static void assertSystemWallpaper(LauncherActivity activity, boolean on) {
+        int flags = activity.getWindow().getAttributes().flags;
+        assertEquals("FLAG_SHOW_WALLPAPER", on,
+                (flags & WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER) != 0);
+        assertEquals("launcher wallpaper visibility", on ? View.GONE : View.VISIBLE,
+                ((View) field(activity, "wallpaperFront")).getVisibility());
+        android.graphics.drawable.Drawable background =
+                ((View) field(activity, "root")).getBackground();
+        assertEquals("root background", on ? Color.TRANSPARENT : Color.BLACK,
+                ((android.graphics.drawable.ColorDrawable) background).getColor());
+        String key = (String) staticField(LauncherActivity.class, "KEY_SYSTEM_WALLPAPER");
+        assertEquals("persisted setting", on, launcherPrefs().getBoolean(key, false));
     }
 
     private static void clearPersistedCustomNames() {

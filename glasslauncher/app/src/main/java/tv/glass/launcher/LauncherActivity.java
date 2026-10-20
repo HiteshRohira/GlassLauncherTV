@@ -3,6 +3,7 @@ package tv.glass.launcher;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.app.WallpaperManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -19,11 +20,13 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Outline;
 import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.RenderEffect;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -52,6 +55,7 @@ import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.ViewTreeObserver;
 import android.view.Window;
+import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.Interpolator;
 import android.view.animation.OvershootInterpolator;
@@ -113,6 +117,8 @@ public class LauncherActivity extends Activity {
     private static final String KEY_SLIDESHOW_RESTART  = "slideshow_restart";
     private static final String KEY_SLIDESHOW_INDEX  = "slideshow_index";
     private static final String KEY_SLIDESHOW_SEED   = "slideshow_seed";
+    /** Let Android draw the system wallpaper behind a transparent window. */
+    private static final String KEY_SYSTEM_WALLPAPER = "system_wallpaper";
     private static final String KEY_SCROLL_IDX = "scroll_idx";
     private static final String KEY_APP_ORDER  = "app_order";
     /** v1.5.0: number of leading apps (in the visible / non-hidden order)
@@ -386,6 +392,8 @@ public class LauncherActivity extends Activity {
     private int     slideshowDurationSec = 0;
     /** "Change wallpaper on each restart" toggle (independent of the timer). */
     private boolean slideshowRestart   = false;
+    /** Android draws the system wallpaper; the launcher draws none of its own. */
+    private boolean systemWallpaper    = false;
     /** Position within the shuffled {@link #slideshowImages}. */
     private int     slideshowIndex     = 0;
     /** Seed for the current pass's shuffle order. Persisted so a restart
@@ -407,7 +415,7 @@ public class LauncherActivity extends Activity {
      *  the background. */
     private final Runnable slideshowTick = new Runnable() {
         @Override public void run() {
-            if (destroyed) return;
+            if (destroyed || systemWallpaper) return;
             advanceSlideshow();
             if (slideshowDurationSec > 0 && !uiPaused) {
                 uiHandler.postDelayed(this, slideshowDurationSec * 1000L);
@@ -927,6 +935,7 @@ public class LauncherActivity extends Activity {
     private static final int SR_LAUNCHER_RESTORE    = 21;
     private static final int SR_APPS_MENU            = 22; // → SPAGE_APPS
     private static final int SR_DEVICE_MENU          = 23; // → SPAGE_DEVICE
+    private static final int SR_SYSTEM_WALLPAPER     = 24;
 
     private static final int[] SROWS_MAIN = {
             SR_APPEARANCE_MENU, SR_WALLPAPER_MENU, SR_APPS_MENU,
@@ -935,8 +944,8 @@ public class LauncherActivity extends Activity {
             SR_LAYOUT_COLUMNS, SR_CARD_CORNER, SR_FOCUS_BORDER,
             SR_FOCUS_COLOR, SR_CLOCK };
     private static final int[] SROWS_WALLPAPER = {
-            SR_SET_WALLPAPER, SR_SLIDESHOW_FOLDER, SR_SLIDESHOW_DURATION,
-            SR_SLIDESHOW_RESTART, SR_IDLE_HIDE };
+            SR_SYSTEM_WALLPAPER, SR_SET_WALLPAPER, SR_SLIDESHOW_FOLDER,
+            SR_SLIDESHOW_DURATION, SR_SLIDESHOW_RESTART, SR_IDLE_HIDE };
     private static final int[] SROWS_APPS = {
             SR_HIDE_APPS, SR_KEYMAP };
     private static final int[] SROWS_DEVICE = {
@@ -994,6 +1003,7 @@ public class LauncherActivity extends Activity {
             case SR_CLOCK:              return R.string.settings_row_show_clock;
             case SR_BACKUP_MENU:        return R.string.settings_row_backup_menu;
             case SR_SYSTEM:             return R.string.settings_row_system_settings;
+            case SR_SYSTEM_WALLPAPER:   return R.string.settings_row_system_wallpaper;
             case SR_SET_WALLPAPER:      return R.string.settings_row_set_wallpaper;
             case SR_SLIDESHOW_FOLDER:   return R.string.settings_row_slideshow_folder;
             case SR_SLIDESHOW_DURATION: return R.string.settings_row_slideshow_duration;
@@ -1023,6 +1033,7 @@ public class LauncherActivity extends Activity {
             || rowId == SR_CARD_CORNER
             || rowId == SR_FOCUS_BORDER
             || rowId == SR_FOCUS_COLOR
+            || rowId == SR_SYSTEM_WALLPAPER
             || rowId == SR_SLIDESHOW_FOLDER
             || rowId == SR_SLIDESHOW_DURATION
             || rowId == SR_SLIDESHOW_RESTART
@@ -1045,6 +1056,7 @@ public class LauncherActivity extends Activity {
             case SR_FOCUS_COLOR:        return "< Magenta >";
             case SR_SLIDESHOW_FOLDER:   return "Not set";
             case SR_SLIDESHOW_DURATION: return "< 1.5 min >";
+            case SR_SYSTEM_WALLPAPER:
             case SR_SLIDESHOW_RESTART:  return "Off";
             case SR_IDLE_HIDE:          return "< 5 min >";
             case SR_LAUNCHER_SETUP_MENU: return "Working ›";
@@ -1088,7 +1100,9 @@ public class LauncherActivity extends Activity {
                     layoutColumns, layoutColumns, clockSummaryLabel());
         }
         if (rowId == SR_WALLPAPER_MENU) {
-            String slideshow = slideshowFolderUri == null
+            String slideshow = systemWallpaper
+                    ? getString(R.string.settings_summary_system_wallpaper)
+                    : slideshowFolderUri == null
                     ? getString(R.string.settings_summary_no_folder)
                     : getString(R.string.settings_summary_slideshow,
                             compactDurationLabel(slideshowDurationSec));
@@ -1698,6 +1712,7 @@ public class LauncherActivity extends Activity {
     private void applyDrawerBlur(boolean on, boolean animate) {
         ImageView layer = drawerBlurLayer;
         if (layer == null) return;
+        if (systemWallpaper) on = false;   // nothing of ours to blur
         final int generation = ++drawerBlurTransitionGeneration;
         layer.animate().cancel();
         layer.animate().setUpdateListener(null);
@@ -1808,6 +1823,10 @@ public class LauncherActivity extends Activity {
      *  capture is optional: a bounded watchdog continues without blur when a
      *  legacy compositor never delivers its frame or callback. */
     private void prepareLegacyDrawerBlur(Runnable after) {
+        if (systemWallpaper) {
+            after.run();
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             applyDrawerBlur(true);
             after.run();
@@ -2050,6 +2069,7 @@ public class LauncherActivity extends Activity {
         // shelf paints with the right filter from frame zero.
         loadKeyMap();
         loadHiddenApps();
+        if (systemWallpaper) applySystemWallpaperWindow(true);
         setContentView(buildLayout());
         hideSystemUI();
         loadWallpaper();
@@ -2601,7 +2621,7 @@ public class LauncherActivity extends Activity {
     private View buildLayout() {
         root = new FrameLayout(this);
         root.setLayoutParams(new ViewGroup.LayoutParams(MATCH, MATCH));
-        root.setBackgroundColor(Color.BLACK);
+        root.setBackgroundColor(systemWallpaper ? Color.TRANSPARENT : Color.BLACK);
         root.setClipChildren(false);
         root.setClipToPadding(false);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_LOCALE);
@@ -2651,7 +2671,13 @@ public class LauncherActivity extends Activity {
         // {@link #loadWallpaper()} called later in onCreate is then a
         // no-op (the controller's loadStored short-circuits when the
         // snapshot pre-painted) — no second decode, no flicker.
-        wallpaperCtl.loadSnapshotSync();
+        if (systemWallpaper) {
+            wallpaperFront.setVisibility(View.GONE);
+            wallpaperBack.setVisibility(View.GONE);
+            wallpaperCtl.suspend();
+        } else {
+            wallpaperCtl.loadSnapshotSync();
+        }
 
         drawerBlurLayer = new ImageView(this);
         drawerBlurLayer.setScaleType(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -4047,6 +4073,7 @@ public class LauncherActivity extends Activity {
         }
 
         @Override protected void onDraw(Canvas canvas) {
+            if (systemWallpaper) return;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 drawWallpaperSource(canvas, wallpaperBack);
                 drawWallpaperSource(canvas, wallpaperFront);
@@ -5619,12 +5646,7 @@ public class LauncherActivity extends Activity {
             rowStride = cellH + rowGap;
             topPad    = dp(28);
             bottomPad = dp(28);
-            // Keep the veil translucent enough that the wallpaper blur remains
-            // visible. API 26-30 now has a downsampled blur layer too, so it no
-            // longer needs the old near-opaque dark fallback.
-            setBackgroundColor(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                    ? 0x3326262B      // 20% tint over hardware RenderEffect
-                    : 0x481E1E22);    // 28% tint over cached software blur
+            applyVeil();
             setFocusable(false);
             setClickable(true);
             setClipChildren(false);
@@ -5632,6 +5654,17 @@ public class LauncherActivity extends Activity {
             setWillNotDraw(false);
             favoritesGlass = new FavoritesGlassDrawable(
                     Math.round(bannerHpx * 0.22f), density, true);
+        }
+
+        /** Keep the veil translucent enough that the wallpaper blur remains
+         *  visible. API 26-30 has a downsampled blur layer too, so it no longer
+         *  needs the old near-opaque dark fallback. The system wallpaper is not
+         *  blurred, so it gets a darker veil to keep labels readable. */
+        void applyVeil() {
+            setBackgroundColor(systemWallpaper ? 0x99121216   // 60%, unblurred
+                    : Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    ? 0x3326262B      // 20% tint over hardware RenderEffect
+                    : 0x481E1E22);    // 28% tint over cached software blur
         }
 
         /** Clamped, effective home-row size for the current visible count. */
@@ -8103,14 +8136,20 @@ public class LauncherActivity extends Activity {
                               : clockMode == CLOCK_TIME_ONLY ? "Time" : "Off");
                     if (clockMode == CLOCK_OFF) ind.setTextColor(sel ? 0x66111114 : 0x66FFFFFF);
                     else                        ind.setTextColor(sel ? selTx : EdgeGlassStyle.VALUE_ACCENT);
+                } else if (rowId == SR_SYSTEM_WALLPAPER) {
+                    ind.setText(systemWallpaper ? "On" : "Off");
+                    ind.setTextColor(systemWallpaper ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
+                                                     : (sel ? 0x66111114 : 0x66FFFFFF));
                 } else if (rowId == SR_SLIDESHOW_DURATION) {
                     ind.setText(slideshowDurationLabel());
                     boolean on = slideshowDurationSec != 0;
                     ind.setTextColor(on ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT) : (sel ? 0x66111114 : 0x66FFFFFF));
+                    ind.setAlpha(systemWallpaper ? 0.45f : 1f);
                 } else if (rowId == SR_SLIDESHOW_RESTART) {
                     ind.setText(slideshowRestart ? "On" : "Off");
                     ind.setTextColor(slideshowRestart ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
                                                       : (sel ? 0x66111114 : 0x66FFFFFF));
+                    ind.setAlpha(systemWallpaper ? 0.45f : 1f);
                 } else if (rowId == SR_SLIDESHOW_FOLDER) {
                     boolean set = slideshowFolderUri != null;
                     ind.setText(set ? "Set" : "Not set");
@@ -8161,6 +8200,7 @@ public class LauncherActivity extends Activity {
                 if (rowId == SR_LAYOUT_COLUMNS) stepLayoutColumns(-1);
                 else if (rowId == SR_CARD_CORNER) stepCardCorner(-1);
                 else if (rowId == SR_FOCUS_BORDER) toggleFocusBorder();
+                else if (rowId == SR_SYSTEM_WALLPAPER) toggleSystemWallpaper();
                 else if (rowId == SR_FOCUS_COLOR) stepFocusColor(-1);
                 else if (rowId == SR_SLIDESHOW_DURATION) stepSlideshowDuration(-1);
                 else if (rowId == SR_IDLE_HIDE) stepIdleHide(-1);
@@ -8170,6 +8210,7 @@ public class LauncherActivity extends Activity {
                 if (rowId == SR_LAYOUT_COLUMNS) stepLayoutColumns(+1);
                 else if (rowId == SR_CARD_CORNER) stepCardCorner(+1);
                 else if (rowId == SR_FOCUS_BORDER) toggleFocusBorder();
+                else if (rowId == SR_SYSTEM_WALLPAPER) toggleSystemWallpaper();
                 else if (rowId == SR_FOCUS_COLOR) stepFocusColor(+1);
                 else if (rowId == SR_SLIDESHOW_DURATION) stepSlideshowDuration(+1);
                 else if (rowId == SR_IDLE_HIDE) stepIdleHide(+1);
@@ -8311,6 +8352,9 @@ public class LauncherActivity extends Activity {
             case SR_SYSTEM:
                 hideSettingsPanel();
                 openSystemSettings();
+                break;
+            case SR_SYSTEM_WALLPAPER:
+                toggleSystemWallpaper();
                 break;
             case SR_SET_WALLPAPER:
                 hideSettingsPanel();
@@ -10675,7 +10719,7 @@ public class LauncherActivity extends Activity {
     // forwards the four lifecycle / interaction calls below.
 
     private void loadWallpaper() {
-        if (wallpaperCtl != null) wallpaperCtl.loadStored();
+        if (wallpaperCtl != null && !systemWallpaper) wallpaperCtl.loadStored();
     }
 
     private void loadSystemWallpaper() {
@@ -10880,6 +10924,7 @@ public class LauncherActivity extends Activity {
         slideshowFolderUri   = prefs.getString(KEY_SLIDESHOW_FOLDER, null);
         slideshowDurationSec = prefs.getInt(KEY_SLIDESHOW_DURATION, 0);
         slideshowRestart     = prefs.getBoolean(KEY_SLIDESHOW_RESTART, false);
+        systemWallpaper      = prefs.getBoolean(KEY_SYSTEM_WALLPAPER, false);
         slideshowIndex       = Math.max(0, prefs.getInt(KEY_SLIDESHOW_INDEX, 0));
         if (prefs.contains(KEY_SLIDESHOW_SEED)) {
             slideshowSeed = prefs.getLong(KEY_SLIDESHOW_SEED, 0L);
@@ -11043,6 +11088,64 @@ public class LauncherActivity extends Activity {
         if (slideshowRestart) kickSlideshowNow();
     }
 
+    private void toggleSystemWallpaper() {
+        setSystemWallpaper(!systemWallpaper, true);
+    }
+
+    /** Switch between the system wallpaper, which Android draws behind a
+     *  transparent window, and the launcher's own wallpaper or slideshow.
+     *  Picking a wallpaper or slideshow folder switches it off with
+     *  {@code repaint} false, since that pick paints the next image itself. */
+    private void setSystemWallpaper(boolean on, boolean repaint) {
+        if (on == systemWallpaper) return;
+        if (on && !WallpaperManager.getInstance(this).isWallpaperSupported()) {
+            showToast(getString(R.string.toast_system_wallpaper_unsupported));
+            return;
+        }
+        systemWallpaper = on;
+        prefs.edit().putBoolean(KEY_SYSTEM_WALLPAPER, on).apply();
+        applySystemWallpaperWindow(on);
+        FrameLayout r = root;
+        if (r != null) r.setBackgroundColor(on ? Color.TRANSPARENT : Color.BLACK);
+        int visibility = on ? View.GONE : View.VISIBLE;
+        if (wallpaperFront != null) wallpaperFront.setVisibility(visibility);
+        if (wallpaperBack != null) wallpaperBack.setVisibility(visibility);
+        AppDrawer d = drawer;
+        if (d != null) d.applyVeil();
+        FavoritesBlurView favorites = favoritesBlurLayer;
+        if (favorites != null) favorites.invalidate();
+        legacyGridBlurDirty = true;
+        if (on) {
+            uiHandler.removeCallbacks(slideshowTick);
+            applyDrawerBlur(false, false);
+            if (wallpaperCtl != null) wallpaperCtl.suspend();
+        } else {
+            if (wallpaperCtl != null) wallpaperCtl.resume();
+            if (repaint) {
+                if (slideshowActive()) {
+                    kickSlideshowNow();
+                    restartSlideshowTimer();
+                } else {
+                    loadWallpaper();
+                }
+            }
+        }
+        refreshSettingsRows();
+    }
+
+    private void applySystemWallpaperWindow(boolean on) {
+        Window w = getWindow();
+        if (on) {
+            w.setFormat(PixelFormat.TRANSLUCENT);
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
+        } else {
+            w.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
+            w.setBackgroundDrawable(new ColorDrawable(Color.BLACK));
+            w.setFormat(PixelFormat.OPAQUE);
+        }
+    }
+
     /** Show an image right away when the slideshow is first switched on. */
     private void kickSlideshowNow() {
         if (slideshowFolderUri == null) return;
@@ -11176,7 +11279,7 @@ public class LauncherActivity extends Activity {
      *  fires again at the next interval when the executor is clear. */
     private void applyCurrentSlideshowImage() {
         String[] imgs = slideshowImages;
-        if (imgs == null || imgs.length == 0 || wallpaperCtl == null) return;
+        if (imgs == null || imgs.length == 0 || wallpaperCtl == null || systemWallpaper) return;
         int idx = ((slideshowIndex % imgs.length) + imgs.length) % imgs.length;
         try {
             Uri u = Uri.parse(imgs[idx]);
@@ -11235,7 +11338,8 @@ public class LauncherActivity extends Activity {
      *  start. This only arms the NEXT rotation. */
     private void restartSlideshowTimer() {
         uiHandler.removeCallbacks(slideshowTick);
-        if (uiPaused || slideshowFolderUri == null || slideshowDurationSec <= 0) return;
+        if (uiPaused || systemWallpaper
+                || slideshowFolderUri == null || slideshowDurationSec <= 0) return;
         uiHandler.postDelayed(slideshowTick, slideshowDurationSec * 1000L);
     }
 
@@ -11244,7 +11348,7 @@ public class LauncherActivity extends Activity {
      *  off but the slideshow is active, restore the current image so a cold
      *  restart doesn't leave the stock wallpaper visible. */
     private void slideshowRestartAdvanceOnce() {
-        if (slideshowRestartApplied) return;
+        if (slideshowRestartApplied || systemWallpaper) return;
         if (slideshowFolderUri == null) return;
         if (!slideshowRestart && slideshowDurationSec <= 0) return;
         slideshowRestartApplied = true;
@@ -11669,6 +11773,7 @@ public class LauncherActivity extends Activity {
             ed.putInt(KEY_IDLE_HIDE, idleHideSec);
         }
         ed.apply();
+        setSystemWallpaper(false, false);
         hideFolderPicker();
         refreshSettingsRows();   // reflect a duration we may have just auto-set
         // Show the first image now and arm the interval timer.
@@ -11732,6 +11837,7 @@ public class LauncherActivity extends Activity {
                         .putBoolean(KEY_SLIDESHOW_RESTART, false)
                         .apply();
                 uiHandler.removeCallbacks(slideshowTick);
+                setSystemWallpaper(false, false);
                 if (wallpaperCtl != null) {
                     wallpaperCtl.resetUserLoadingGuard();
                     wallpaperCtl.applyFromUri(uri);

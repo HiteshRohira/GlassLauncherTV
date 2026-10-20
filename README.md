@@ -58,7 +58,7 @@ The home screen shows your wallpaper, clock, and one row of favorite apps. Press
 - **Favorites and app grid:** Keep the apps you use most on the home screen and open the full grid with one press. Reorder or hide entries with the remote.
 - **App customization:** Long-press an app to rename it, choose custom artwork, move it, hide it, open App info, or uninstall it.
 - **Appearance controls:** Choose 4 to 7 icons per row, icon roundness, focus border and color, and whether the clock shows the date, time only, or nothing.
-- **Wallpapers and slideshows:** Use a single wallpaper or rotate through an image folder. Configure idle mode to hide the launcher UI and leave the wallpaper and clock visible.
+- **Wallpapers and slideshows:** Use a single wallpaper, rotate through an image folder, or show the system wallpaper, including live wallpapers set by another app. Configure idle mode to hide the launcher UI and leave the wallpaper and clock visible.
 - **Remote and TV controls:** Add supported HDMI and other TV inputs to the grid. Assign the remote's color, menu, and subtitle buttons to apps.
 - **Backup and restore:** Export the launcher layout and settings to a file, then restore them after reinstalling or moving to another device.
 - **Persistent Google TV Home:** An optional one-time local ADB setup makes Glass Launcher the Home app and includes a restore action for Google TV Home.

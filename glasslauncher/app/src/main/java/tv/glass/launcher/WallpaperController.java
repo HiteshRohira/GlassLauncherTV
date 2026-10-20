@@ -152,6 +152,10 @@ final class WallpaperController {
      *  the resulting cross-fade reads as a flicker on every cold start. */
     private boolean snapshotPrePainted = false;
 
+    /** True while Android draws the system wallpaper behind the launcher.
+     *  Decodes that land in this state are dropped. UI thread only. */
+    private boolean suspended = false;
+
     // ── Frosted preview constants ────────────────────────────────────────
 
     /** About 160×90 at 1080p: enough detail for glass color while staying
@@ -333,7 +337,7 @@ final class WallpaperController {
      *         if there was no snapshot file or it failed to decode.
      */
     boolean loadSnapshotSync() {
-        if (front == null || destroyed) return false;
+        if (front == null || destroyed || suspended) return false;
         File f = snapshotFile();
         if (!f.exists() || f.length() == 0) return false;
         Bitmap bmp = null;
@@ -605,6 +609,43 @@ final class WallpaperController {
         frameInvalidator = null;
     }
 
+    /** Drop the shown wallpaper and glass preview and ignore further decodes
+     *  until {@link #resume()}. Used while Android draws the system
+     *  wallpaper. Bitmaps are recycled a frame later, after the views have
+     *  let go of them. */
+    void suspend() {
+        suspended = true;
+        snapshotPrePainted = false;
+        if (front == null || back == null) return;
+        front.animate().cancel();
+        back.animate().cancel();
+        front.animate().setUpdateListener(null);
+        final Bitmap frontBmp = bitmapOf(front);
+        final Bitmap backBmp = bitmapOf(back);
+        front.setImageDrawable(null);
+        back.setImageDrawable(null);
+        front.setAlpha(1f);
+        final Bitmap preview = frostedPreview;
+        frostedPreview = null;
+        invalidateFrostedFrame();
+        front.postOnAnimation(() -> {
+            if (frontBmp != null && !frontBmp.isRecycled()) frontBmp.recycle();
+            if (backBmp != null && backBmp != frontBmp && !backBmp.isRecycled()) backBmp.recycle();
+            if (preview != null && !preview.isRecycled()) preview.recycle();
+        });
+    }
+
+    /** Accept decodes again after {@link #suspend()}. The caller decides what
+     *  to show next ({@link #loadStored()} or a slideshow image). */
+    void resume() {
+        suspended = false;
+    }
+
+    private static Bitmap bitmapOf(ImageView iv) {
+        Drawable d = iv.getDrawable();
+        return d instanceof BitmapDrawable ? ((BitmapDrawable) d).getBitmap() : null;
+    }
+
     // ── Internals ─────────────────────────────────────────────────────────
 
     /** Build the tiny blurred glass source while a CPU-readable wallpaper
@@ -674,7 +715,7 @@ final class WallpaperController {
      *  frame so no display list can still reference the previous pixels. */
     private void replaceFrostedPreview(Bitmap next) {
         if (next == null) return;
-        if (destroyed) {
+        if (destroyed || suspended) {
             if (!next.isRecycled()) next.recycle();
             return;
         }
@@ -704,6 +745,10 @@ final class WallpaperController {
         // starts after destroy" explicit.
         if (destroyed) return;
         if (front == null || back == null || fb == null) return;
+        if (suspended) {
+            if (!fb.isRecycled()) fb.recycle();
+            return;
+        }
         boolean coldStart = front.getDrawable() == null;
         if (coldStart) {
             front.setImageBitmap(fb);
