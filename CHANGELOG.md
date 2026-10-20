@@ -7,6 +7,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.0.6] — 2026-10-19
+
+### Fixed
+
+- **UP from the home row lands on Settings.** Pressing UP from an app on the
+  home row now selects the Settings (gear) pill instead of the Wi-Fi pill.
+
 ## [1.0.5] — 2026-10-19
 
 ### Fixed

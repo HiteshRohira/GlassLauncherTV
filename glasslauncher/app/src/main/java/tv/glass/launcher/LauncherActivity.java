@@ -2802,20 +2802,13 @@ public class LauncherActivity extends Activity {
         // single daily-frequent action on the toolbar (people dig into
         // network settings far more often than the consolidated config
         // panel). Putting it leftmost in the cluster lines it up with
-        // the visual centre-of-mass of the home shelf below — a TV
-        // remote user pressing UP from any shelf cell lands on WiFi,
-        // a single keypress away from the most common destination.
-        // The gear pill takes the right-edge slot — slightly out of the
-        // primary glance path, but still discoverable as the second pill
-        // and reachable in one extra D-pad RIGHT keypress.
+        // the visual centre-of-mass of the home shelf below.
+        // The gear pill takes the right-edge slot. Pressing UP from a
+        // shelf cell lands on the gear.
         //
         // Both pills are positioned from the right edge: gear sits flush
         // at MARG_E (rightmost), WiFi sits one (BTN_VIEW_SZ + BTN_GAP)
-        // step further left (the "leftmost-in-cluster" slot). Cell-up
-        // navigation already routes to WiFi via netBtn.requestFocus so
-        // that requirement carries over cleanly from v1.3.0 — only the
-        // physical pill positions and the per-pill LEFT/RIGHT/DOWN key
-        // chains needed updating.
+        // step further left (the "leftmost-in-cluster" slot).
         netBtn = buildNetBtn(BTN_SZ);
         FrameLayout.LayoutParams netLp = new FrameLayout.LayoutParams(BTN_VIEW_SZ, BTN_VIEW_SZ);
         netLp.gravity = Gravity.TOP | Gravity.END;
@@ -5341,8 +5334,11 @@ public class LauncherActivity extends Activity {
                         case KeyEvent.KEYCODE_DPAD_RIGHT:
                             requestFocusOnIndex(boundIndex + 1, ev.getRepeatCount() > 0);
                             return true;
-                        case KeyEvent.KEYCODE_DPAD_UP:
-                            View nb = netBtn; if (nb != null) nb.requestFocus(); return true;
+                        case KeyEvent.KEYCODE_DPAD_UP: {
+                            View up = mapperBtnView != null ? mapperBtnView : netBtn;
+                            if (up != null) up.requestFocus();
+                            return true;
+                        }
                         case KeyEvent.KEYCODE_DPAD_DOWN:
                             // v1.5.0: DOWN on a home cell pulls down the app
                             // drawer (TV style). The drawer mirrors the
