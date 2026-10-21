@@ -296,7 +296,7 @@ public class LauncherCustomizationTest {
             awaitValue(scenario, "Appearance settings rows", activity -> {
                 android.widget.LinearLayout column = (android.widget.LinearLayout)
                         field(activity, "settingsColumn");
-                return column != null && column.getChildCount() == 5 ? column : null;
+                return column != null && column.getChildCount() == 6 ? column : null;
             });
 
             scenario.onActivity(activity -> {
@@ -309,7 +309,7 @@ public class LauncherCustomizationTest {
                     scenario, "updated Layout settings", activity -> {
                         android.widget.LinearLayout current = (android.widget.LinearLayout)
                                 field(activity, "settingsColumn");
-                        if (current == null || current.getChildCount() != 5) return null;
+                        if (current == null || current.getChildCount() != 6) return null;
                         String columnsText = ((android.widget.TextView)
                                 ((ViewGroup) current.getChildAt(0)).getChildAt(1))
                                 .getText().toString();
@@ -332,7 +332,7 @@ public class LauncherCustomizationTest {
                 assertEquals(activity.getString(R.string.settings_hint_adjust),
                         ((android.widget.TextView) field(activity, "settingsHintView"))
                                 .getText().toString());
-                assertEquals(5, column.getChildCount());
+                assertEquals(6, column.getChildCount());
                 assertEquals(activity.getString(R.string.settings_row_layout_columns),
                         ((android.widget.TextView) ((ViewGroup) column.getChildAt(0))
                                 .getChildAt(0)).getText().toString());
@@ -688,7 +688,7 @@ public class LauncherCustomizationTest {
                 assertSystemWallpaper(activity, false);
             });
         } finally {
-            restoreLauncherPrefs(saved);
+            restoreLauncherPrefs(saved, "KEY_SYSTEM_WALLPAPER");
         }
     }
 
@@ -701,7 +701,7 @@ public class LauncherCustomizationTest {
             scenario.recreate();
             scenario.onActivity(activity -> assertSystemWallpaper(activity, true));
         } finally {
-            restoreLauncherPrefs(saved);
+            restoreLauncherPrefs(saved, "KEY_SYSTEM_WALLPAPER");
         }
     }
 
@@ -721,7 +721,49 @@ public class LauncherCustomizationTest {
                 assertSystemWallpaper(activity, false);
             });
         } finally {
-            restoreLauncherPrefs(saved);
+            restoreLauncherPrefs(saved, "KEY_SYSTEM_WALLPAPER", "KEY_SLIDESHOW_FOLDER",
+                    "KEY_SLIDESHOW_INDEX", "KEY_SLIDESHOW_SEED", "KEY_SLIDESHOW_DURATION",
+                    "KEY_IDLE_HIDE");
+        }
+    }
+
+    @Test
+    public void favoritesBackground_settingRemovesPlateAfterRebuild() {
+        java.util.Map<String, ?> saved = launcherPrefs().getAll();
+        String key = (String) staticField(LauncherActivity.class, "KEY_FAVORITES_BACKGROUND");
+        try {
+            assertTrue(launcherPrefs().edit().remove(key).commit());
+            try (ActivityScenario<LauncherActivity> scenario =
+                         launchSettledLauncher()) {
+                scenario.onActivity(activity -> assertFavoritesBackground(activity, true));
+
+                scenario.onActivity(activity -> invoke(activity, "showSettingsPanel"));
+                awaitVisibleViewField(scenario, "settingsOverlay");
+                scenario.onActivity(activity -> invoke(activity, "activateSettingsRowId",
+                        new Class<?>[] {int.class},
+                        staticField(LauncherActivity.class, "SR_APPEARANCE_MENU")));
+                awaitValue(scenario, "Appearance settings rows", activity -> {
+                    android.widget.LinearLayout column = (android.widget.LinearLayout)
+                            field(activity, "settingsColumn");
+                    return column != null && column.getChildCount() == 6 ? column : null;
+                });
+
+                scenario.onActivity(activity -> {
+                    assertEquals(activity.getString(R.string.settings_row_favorites_background),
+                            favoritesBackgroundRowText(activity, 0));
+                    assertEquals("On", favoritesBackgroundRowText(activity, 1));
+                    invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
+                            staticField(LauncherActivity.class, "SR_FAVORITES_BACKGROUND"));
+                    assertEquals("Off", favoritesBackgroundRowText(activity, 1));
+                    assertEquals(false, launcherPrefs().getBoolean(key, true));
+                    assertTrue((Boolean) field(activity, "layoutApplyPending"));
+                });
+
+                scenario.recreate();
+                scenario.onActivity(activity -> assertFavoritesBackground(activity, false));
+            }
+        } finally {
+            restoreLauncherPrefs(saved, "KEY_FAVORITES_BACKGROUND");
         }
     }
 
@@ -1102,13 +1144,18 @@ public class LauncherCustomizationTest {
         return context.getSharedPreferences(prefsName, Context.MODE_PRIVATE);
     }
 
+    /** Put back only the prefs a test changed, named by their KEY_ constants.
+     *  Clearing everything also drops home_count, which the launcher saved for
+     *  itself, and the cached app list then pins the next home row to one app. */
     @SuppressWarnings("unchecked")
-    private static void restoreLauncherPrefs(java.util.Map<String, ?> saved) {
-        SharedPreferences.Editor editor = launcherPrefs().edit().clear();
-        for (java.util.Map.Entry<String, ?> entry : saved.entrySet()) {
-            Object value = entry.getValue();
-            String key = entry.getKey();
-            if (value instanceof Boolean) editor.putBoolean(key, (Boolean) value);
+    private static void restoreLauncherPrefs(java.util.Map<String, ?> saved,
+                                             String... keyFields) {
+        SharedPreferences.Editor editor = launcherPrefs().edit();
+        for (String keyField : keyFields) {
+            String key = (String) staticField(LauncherActivity.class, keyField);
+            Object value = saved.get(key);
+            if (value == null) editor.remove(key);
+            else if (value instanceof Boolean) editor.putBoolean(key, (Boolean) value);
             else if (value instanceof Integer) editor.putInt(key, (Integer) value);
             else if (value instanceof Long) editor.putLong(key, (Long) value);
             else if (value instanceof Float) editor.putFloat(key, (Float) value);
@@ -1137,6 +1184,23 @@ public class LauncherCustomizationTest {
                 ((android.graphics.drawable.ColorDrawable) background).getColor());
         String key = (String) staticField(LauncherActivity.class, "KEY_SYSTEM_WALLPAPER");
         assertEquals("persisted setting", on, launcherPrefs().getBoolean(key, false));
+    }
+
+    /** Text of the Favorites background row: child 0 is the label, 1 the value. */
+    private static String favoritesBackgroundRowText(LauncherActivity activity, int child) {
+        android.widget.LinearLayout column = (android.widget.LinearLayout)
+                field(activity, "settingsColumn");
+        ViewGroup row = (ViewGroup) column.getChildAt(4);
+        return ((android.widget.TextView) row.getChildAt(child)).getText().toString();
+    }
+
+    private static void assertFavoritesBackground(LauncherActivity activity, boolean on) {
+        assertEquals("favorites background setting", on,
+                field(activity, "favoritesBackground"));
+        assertEquals("favorites blur layer", on,
+                field(activity, "favoritesBlurLayer") != null);
+        assertEquals("shelf glass background", on,
+                ((View) field(activity, "shelf")).getBackground() != null);
     }
 
     private static void clearPersistedCustomNames() {

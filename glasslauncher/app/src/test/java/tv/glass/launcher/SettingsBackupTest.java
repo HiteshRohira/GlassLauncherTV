@@ -21,7 +21,7 @@ public class SettingsBackupTest {
 
         SettingsBackup.Parsed parsed = SettingsBackup.parse(SettingsBackup.serialize(
                 "com.example", 4, "183=com.example", "com.hidden", 1,
-                6, 20, true, 0xFFFFFFFF, customNames));
+                6, 20, true, 0xFFFFFFFF, true, customNames));
 
         assertNotNull(parsed);
         assertEquals(names,
@@ -36,12 +36,13 @@ public class SettingsBackupTest {
 
         assertNotNull(parsed);
         assertFalse(parsed.has(SettingsBackup.K_CUSTOM_NAMES));
+        assertFalse(parsed.has(SettingsBackup.K_FAVORITES_BACKGROUND));
         assertEquals("com.example", parsed.str(SettingsBackup.K_APP_ORDER));
     }
 
     @Test public void serialize_nullCustomNames_writesPresentEmptyField() {
         SettingsBackup.Parsed parsed = SettingsBackup.parse(SettingsBackup.serialize(
-                "", 1, "", "", 0, 6, 20, true, 0xFFFFFFFF, null));
+                "", 1, "", "", 0, 6, 20, true, 0xFFFFFFFF, true, null));
 
         assertNotNull(parsed);
         assertTrue(parsed.has(SettingsBackup.K_CUSTOM_NAMES));
@@ -50,7 +51,7 @@ public class SettingsBackupTest {
 
     @Test public void serializeAndParse_roundTripsLayoutOptions() {
         SettingsBackup.Parsed parsed = SettingsBackup.parse(SettingsBackup.serialize(
-                "", 4, "", "", 0, 4, 28, false, 0xFF00E5FF, ""));
+                "", 4, "", "", 0, 4, 28, false, 0xFF00E5FF, false, ""));
 
         assertNotNull(parsed);
         assertEquals(4, parsed.intVal(SettingsBackup.K_LAYOUT_COLUMNS, -1));
@@ -58,6 +59,7 @@ public class SettingsBackupTest {
         assertEquals(0, parsed.intVal(SettingsBackup.K_FOCUS_BORDER_ENABLED, -1));
         assertEquals(0xFF00E5FF,
                 parsed.intVal(SettingsBackup.K_FOCUS_BORDER_COLOR, 0));
+        assertEquals(0, parsed.intVal(SettingsBackup.K_FAVORITES_BACKGROUND, -1));
     }
 
     @Test public void parse_futureVersion_isRejected() {

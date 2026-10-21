@@ -83,6 +83,7 @@
     <string name="settings_row_card_corner">Icon roundness</string>
     <string name="settings_row_focus_border">Focus border</string>
     <string name="settings_row_focus_color">Focus color</string>
+    <string name="settings_row_favorites_background">Favorites background</string>
     <string name="settings_value_columns">&lt; %1$d &gt;</string>
     <string name="settings_value_percent">&lt; %1$d%% &gt;</string>
     <string name="settings_value_focus_color">&lt; %1$s &gt;</string>
