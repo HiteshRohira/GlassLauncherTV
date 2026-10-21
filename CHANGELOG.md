@@ -16,6 +16,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   show on the home screen. The launcher's own wallpaper and slideshow pause
   while it is on, and picking a wallpaper or slideshow folder turns it off.
   The glass panels are tinted but not blurred in this mode.
+- **Favorites background.** A new Appearance setting turns off the glass
+  plate behind the favorites row, on the home screen and in the app drawer.
+  It is on by default and is included in backups.
 
 ### Fixed
 

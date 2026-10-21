@@ -136,6 +136,7 @@ public class LauncherActivity extends Activity {
     private static final String KEY_CARD_CORNER_PERCENT = "card_corner_percent";
     private static final String KEY_FOCUS_BORDER_ENABLED = "focus_border_enabled";
     private static final String KEY_FOCUS_BORDER_COLOR = "focus_border_color";
+    private static final String KEY_FAVORITES_BACKGROUND = "favorites_background";
     // Persisted remote-key→app shortcut map. Format: "kc=pkg,kc=pkg,...".
     // Keys are raw Android keycode integers (e.g. 183 = KEYCODE_PROG_RED).
     // Loaded once at startup into the in-memory keyMap SparseArray; every
@@ -294,8 +295,10 @@ public class LauncherActivity extends Activity {
     private int appliedCardCornerPercent = LayoutOptions.DEFAULT_CORNER_PERCENT;
     private boolean focusBorderEnabled = LayoutOptions.DEFAULT_FOCUS_BORDER_ENABLED;
     private int focusBorderColor = LayoutOptions.DEFAULT_FOCUS_COLOR;
+    private boolean favoritesBackground = LayoutOptions.DEFAULT_FAVORITES_BACKGROUND;
     private boolean appliedFocusBorderEnabled = LayoutOptions.DEFAULT_FOCUS_BORDER_ENABLED;
     private int appliedFocusBorderColor = LayoutOptions.DEFAULT_FOCUS_COLOR;
+    private boolean appliedFavoritesBackground = LayoutOptions.DEFAULT_FAVORITES_BACKGROUND;
     private boolean layoutApplyPending = false;
     // Wallpaper rendering uses two stacked ImageViews. wallpaperFront is on
     // top (always visible to the user); wallpaperBack sits below and is the
@@ -936,13 +939,14 @@ public class LauncherActivity extends Activity {
     private static final int SR_APPS_MENU            = 22; // → SPAGE_APPS
     private static final int SR_DEVICE_MENU          = 23; // → SPAGE_DEVICE
     private static final int SR_SYSTEM_WALLPAPER     = 24;
+    private static final int SR_FAVORITES_BACKGROUND = 25;
 
     private static final int[] SROWS_MAIN = {
             SR_APPEARANCE_MENU, SR_WALLPAPER_MENU, SR_APPS_MENU,
             SR_DEVICE_MENU, SR_SYSTEM };
     private static final int[] SROWS_APPEARANCE = {
             SR_LAYOUT_COLUMNS, SR_CARD_CORNER, SR_FOCUS_BORDER,
-            SR_FOCUS_COLOR, SR_CLOCK };
+            SR_FOCUS_COLOR, SR_FAVORITES_BACKGROUND, SR_CLOCK };
     private static final int[] SROWS_WALLPAPER = {
             SR_SYSTEM_WALLPAPER, SR_SET_WALLPAPER, SR_SLIDESHOW_FOLDER,
             SR_SLIDESHOW_DURATION, SR_SLIDESHOW_RESTART, SR_IDLE_HIDE };
@@ -999,6 +1003,7 @@ public class LauncherActivity extends Activity {
             case SR_CARD_CORNER:        return R.string.settings_row_card_corner;
             case SR_FOCUS_BORDER:       return R.string.settings_row_focus_border;
             case SR_FOCUS_COLOR:        return R.string.settings_row_focus_color;
+            case SR_FAVORITES_BACKGROUND: return R.string.settings_row_favorites_background;
             case SR_WALLPAPER_MENU:     return R.string.settings_row_wallpaper_menu;
             case SR_CLOCK:              return R.string.settings_row_show_clock;
             case SR_BACKUP_MENU:        return R.string.settings_row_backup_menu;
@@ -1033,6 +1038,7 @@ public class LauncherActivity extends Activity {
             || rowId == SR_CARD_CORNER
             || rowId == SR_FOCUS_BORDER
             || rowId == SR_FOCUS_COLOR
+            || rowId == SR_FAVORITES_BACKGROUND
             || rowId == SR_SYSTEM_WALLPAPER
             || rowId == SR_SLIDESHOW_FOLDER
             || rowId == SR_SLIDESHOW_DURATION
@@ -1052,7 +1058,8 @@ public class LauncherActivity extends Activity {
         switch (rowId) {
             case SR_LAYOUT_COLUMNS:     return "< 7 >";
             case SR_CARD_CORNER:        return "< 30% >";
-            case SR_FOCUS_BORDER:       return "Off";
+            case SR_FOCUS_BORDER:
+            case SR_FAVORITES_BACKGROUND: return "Off";
             case SR_FOCUS_COLOR:        return "< Magenta >";
             case SR_SLIDESHOW_FOLDER:   return "Not set";
             case SR_SLIDESHOW_DURATION: return "< 1.5 min >";
@@ -2695,15 +2702,19 @@ public class LauncherActivity extends Activity {
 
         final int favoritesMarginH = dp(32);
         final int favoritesBottom = dp(18);
-        favoritesBlurLayer = new FavoritesBlurView(
-                this,
-                favoritesMarginH,
-                Math.max(0, screenH - favoritesBottom - cellHpx));
-        FrameLayout.LayoutParams blurLp = new FrameLayout.LayoutParams(MATCH, cellHpx);
-        blurLp.gravity = Gravity.BOTTOM;
-        blurLp.setMargins(favoritesMarginH, 0, favoritesMarginH, favoritesBottom);
-        favoritesBlurLayer.setLayoutParams(blurLp);
-        root.addView(favoritesBlurLayer);
+        if (favoritesBackground) {
+            favoritesBlurLayer = new FavoritesBlurView(
+                    this,
+                    favoritesMarginH,
+                    Math.max(0, screenH - favoritesBottom - cellHpx));
+            FrameLayout.LayoutParams blurLp = new FrameLayout.LayoutParams(MATCH, cellHpx);
+            blurLp.gravity = Gravity.BOTTOM;
+            blurLp.setMargins(favoritesMarginH, 0, favoritesMarginH, favoritesBottom);
+            favoritesBlurLayer.setLayoutParams(blurLp);
+            root.addView(favoritesBlurLayer);
+        } else {
+            favoritesBlurLayer = null;
+        }
         wallpaperCtl.setFrameInvalidator(() -> {
             FavoritesBlurView favorites = favoritesBlurLayer;
             if (favorites != null) favorites.invalidate();
@@ -2716,8 +2727,10 @@ public class LauncherActivity extends Activity {
         shelfLp.gravity = Gravity.BOTTOM;
         shelfLp.setMargins(favoritesMarginH, 0, favoritesMarginH, favoritesBottom);
         shelf.setLayoutParams(shelfLp);
-        shelf.setBackground(new FavoritesGlassDrawable(
-                Math.round(bannerHpx * 0.22f), density, false));
+        if (favoritesBackground) {
+            shelf.setBackground(new FavoritesGlassDrawable(
+                    Math.round(bannerHpx * 0.22f), density, false));
+        }
         shelf.setContentDescription(getString(R.string.cd_app_shelf));
         shelf.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         root.addView(shelf);
@@ -5855,6 +5868,7 @@ public class LauncherActivity extends Activity {
 
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
+            if (!favoritesBackground) return;
             int favorites = hc();
             if (favorites <= 0) return;
             float top = At4kHomeLayout.favoritesPlateTop(firstRowTop(), scrollY);
@@ -8130,6 +8144,11 @@ public class LauncherActivity extends Activity {
                             LayoutOptions.focusColorName(focusBorderColor)));
                     ind.setTextColor(sel ? selTx : focusBorderColor);
                     ind.setAlpha(focusBorderEnabled ? 1f : 0.45f);
+                } else if (rowId == SR_FAVORITES_BACKGROUND) {
+                    ind.setText(favoritesBackground ? "On" : "Off");
+                    ind.setTextColor(favoritesBackground
+                            ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
+                            : (sel ? 0x66111114 : 0x66FFFFFF));
                 } else if (rowId == SR_CLOCK) {
                     // 3-state clock indicator: Full / Time / Off.
                     ind.setText(clockMode == CLOCK_FULL ? "Full"
@@ -8202,6 +8221,7 @@ public class LauncherActivity extends Activity {
                 else if (rowId == SR_FOCUS_BORDER) toggleFocusBorder();
                 else if (rowId == SR_SYSTEM_WALLPAPER) toggleSystemWallpaper();
                 else if (rowId == SR_FOCUS_COLOR) stepFocusColor(-1);
+                else if (rowId == SR_FAVORITES_BACKGROUND) toggleFavoritesBackground();
                 else if (rowId == SR_SLIDESHOW_DURATION) stepSlideshowDuration(-1);
                 else if (rowId == SR_IDLE_HIDE) stepIdleHide(-1);
                 return true;   // swallow on other rows (panel is modal)
@@ -8212,6 +8232,7 @@ public class LauncherActivity extends Activity {
                 else if (rowId == SR_FOCUS_BORDER) toggleFocusBorder();
                 else if (rowId == SR_SYSTEM_WALLPAPER) toggleSystemWallpaper();
                 else if (rowId == SR_FOCUS_COLOR) stepFocusColor(+1);
+                else if (rowId == SR_FAVORITES_BACKGROUND) toggleFavoritesBackground();
                 else if (rowId == SR_SLIDESHOW_DURATION) stepSlideshowDuration(+1);
                 else if (rowId == SR_IDLE_HIDE) stepIdleHide(+1);
                 return true;
@@ -8310,6 +8331,9 @@ public class LauncherActivity extends Activity {
                 break;
             case SR_FOCUS_COLOR:
                 stepFocusColor(+1);
+                break;
+            case SR_FAVORITES_BACKGROUND:
+                toggleFavoritesBackground();
                 break;
             case SR_WALLPAPER_MENU:
                 enterSettingsPage(SPAGE_WALLPAPER);
@@ -8491,11 +8515,19 @@ public class LauncherActivity extends Activity {
         refreshSettingsRows();
     }
 
+    private void toggleFavoritesBackground() {
+        favoritesBackground = !favoritesBackground;
+        prefs.edit().putBoolean(KEY_FAVORITES_BACKGROUND, favoritesBackground).apply();
+        updateLayoutApplyPending();
+        refreshSettingsRows();
+    }
+
     private void updateLayoutApplyPending() {
         layoutApplyPending = layoutColumns != appliedLayoutColumns
                 || cardCornerPercent != appliedCardCornerPercent
                 || focusBorderEnabled != appliedFocusBorderEnabled
-                || focusBorderColor != appliedFocusBorderColor;
+                || focusBorderColor != appliedFocusBorderColor
+                || favoritesBackground != appliedFavoritesBackground;
     }
 
     // ── Keymap configuration overlay ─────────────────────────────────────
@@ -10777,6 +10809,7 @@ public class LauncherActivity extends Activity {
                 cardCornerPercent,
                 focusBorderEnabled,
                 focusBorderColor,
+                favoritesBackground,
                 prefs.getString(KEY_CUSTOM_NAMES, ""));
         try (java.io.OutputStream os = getContentResolver().openOutputStream(uri, "w")) {
             if (os == null) { showToast(getString(R.string.toast_backup_failed)); return; }
@@ -10842,14 +10875,18 @@ public class LauncherActivity extends Activity {
                 focusBorderEnabled ? 1 : 0) != 0;
         int restoredFocusColor = LayoutOptions.sanitizeFocusColor(p.intVal(
                 SettingsBackup.K_FOCUS_BORDER_COLOR, focusBorderColor));
+        boolean restoredFavoritesBackground = p.intVal(SettingsBackup.K_FAVORITES_BACKGROUND,
+                favoritesBackground ? 1 : 0) != 0;
         boolean applyLayout = (p.has(SettingsBackup.K_LAYOUT_COLUMNS)
                 || p.has(SettingsBackup.K_CARD_CORNER_PERCENT)
                 || p.has(SettingsBackup.K_FOCUS_BORDER_ENABLED)
-                || p.has(SettingsBackup.K_FOCUS_BORDER_COLOR))
+                || p.has(SettingsBackup.K_FOCUS_BORDER_COLOR)
+                || p.has(SettingsBackup.K_FAVORITES_BACKGROUND))
                 && (restoredColumns != appliedLayoutColumns
                 || restoredCorner != appliedCardCornerPercent
                 || restoredFocusBorder != appliedFocusBorderEnabled
-                || restoredFocusColor != appliedFocusBorderColor);
+                || restoredFocusColor != appliedFocusBorderColor
+                || restoredFavoritesBackground != appliedFavoritesBackground);
         if (p.has(SettingsBackup.K_LAYOUT_COLUMNS)) {
             ed.putInt(KEY_LAYOUT_COLUMNS, restoredColumns);
         }
@@ -10862,6 +10899,9 @@ public class LauncherActivity extends Activity {
         if (p.has(SettingsBackup.K_FOCUS_BORDER_COLOR)) {
             ed.putInt(KEY_FOCUS_BORDER_COLOR, restoredFocusColor);
         }
+        if (p.has(SettingsBackup.K_FAVORITES_BACKGROUND)) {
+            ed.putBoolean(KEY_FAVORITES_BACKGROUND, restoredFavoritesBackground);
+        }
         ed.apply();
         if (p.has(SettingsBackup.K_LAYOUT_COLUMNS)) layoutColumns = restoredColumns;
         if (p.has(SettingsBackup.K_CARD_CORNER_PERCENT)) cardCornerPercent = restoredCorner;
@@ -10869,6 +10909,9 @@ public class LauncherActivity extends Activity {
             focusBorderEnabled = restoredFocusBorder;
         }
         if (p.has(SettingsBackup.K_FOCUS_BORDER_COLOR)) focusBorderColor = restoredFocusColor;
+        if (p.has(SettingsBackup.K_FAVORITES_BACKGROUND)) {
+            favoritesBackground = restoredFavoritesBackground;
+        }
 
         // Reload in-memory state from the freshly-written prefs.
         loadKeyMap();
@@ -12187,10 +12230,13 @@ public class LauncherActivity extends Activity {
                 KEY_FOCUS_BORDER_ENABLED, LayoutOptions.DEFAULT_FOCUS_BORDER_ENABLED);
         focusBorderColor = LayoutOptions.sanitizeFocusColor(prefs.getInt(
                 KEY_FOCUS_BORDER_COLOR, LayoutOptions.DEFAULT_FOCUS_COLOR));
+        favoritesBackground = prefs.getBoolean(
+                KEY_FAVORITES_BACKGROUND, LayoutOptions.DEFAULT_FAVORITES_BACKGROUND);
         appliedLayoutColumns = layoutColumns;
         appliedCardCornerPercent = cardCornerPercent;
         appliedFocusBorderEnabled = focusBorderEnabled;
         appliedFocusBorderColor = focusBorderColor;
+        appliedFavoritesBackground = favoritesBackground;
         layoutApplyPending = false;
     }
 

@@ -13,6 +13,7 @@ final class LayoutOptions {
 
     static final boolean DEFAULT_FOCUS_BORDER_ENABLED = false;
     static final int DEFAULT_FOCUS_COLOR = 0xFFFFFFFF;
+    static final boolean DEFAULT_FAVORITES_BACKGROUND = true;
     private static final int FOCUS_COLOR_ORANGE = 0xFFFF9800;
     private static final int LEGACY_FOCUS_COLOR_ORANGE = 0xFFFF3D00;
     private static final int[] FOCUS_COLORS = {
