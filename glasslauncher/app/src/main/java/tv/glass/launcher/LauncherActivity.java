@@ -172,7 +172,7 @@ public class LauncherActivity extends Activity {
     private static final int    REQ_PERM_MEDIA = 71;   // runtime media-read permission
     private static final long   MEDIA_SCAN_TIMEOUT_SEC = 10;
     private static final int    REQ_PERM_BT    = 72;   // runtime Nearby devices permission
-    private static final String BACKUP_FILENAME   = "glasslauncher-settings.txt";
+    private static final String BACKUP_FILENAME   = "glasslauncher-backup.zip";
     /** Slideshow duration steps (seconds):
      *  Off, 20s, 30s, 45s, 1m, 1.5m, 2m, 3m. */
     private static final int[]  SLIDESHOW_STEPS_SEC =
@@ -10778,15 +10778,15 @@ public class LauncherActivity extends Activity {
     private void exportSettings() {
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("text/plain");
+        i.setType("application/zip");
         i.putExtra(Intent.EXTRA_TITLE, BACKUP_FILENAME);
         try { startActivityForResult(i, REQ_BACKUP_EXPORT); }
         catch (Exception e) { showToast(getString(R.string.toast_no_file_picker)); }
     }
 
     /** Launch the system "open document" UI to pick a backup file to restore.
-     *  Accepts any type (some pickers over-filter text/plain); the content is
-     *  validated by its magic header, not its MIME. */
+     *  Accepts any type, so older .txt backups stay selectable; the content is
+     *  validated by its header, not its MIME. */
     @SuppressWarnings("deprecation")
     private void importSettings() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -10796,7 +10796,9 @@ public class LauncherActivity extends Activity {
         catch (Exception e) { showToast(getString(R.string.toast_no_file_picker)); }
     }
 
-    /** Write the current settings to the chosen document URI. */
+    /** Write the settings and every custom icon to the chosen document URI. The
+     *  state is captured here; the file I/O runs on a one-shot thread so a slow
+     *  document provider can't stall the UI. */
     private void writeBackup(Uri uri) {
         int hc = (homeCount >= 0) ? homeCount : prefs.getInt(KEY_HOME_COUNT, -1);
         String text = SettingsBackup.serialize(
@@ -10811,39 +10813,75 @@ public class LauncherActivity extends Activity {
                 focusBorderColor,
                 favoritesBackground,
                 prefs.getString(KEY_CUSTOM_NAMES, ""));
-        try (java.io.OutputStream os = getContentResolver().openOutputStream(uri, "w")) {
-            if (os == null) { showToast(getString(R.string.toast_backup_failed)); return; }
-            os.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            os.flush();
-            showToast(getString(R.string.toast_backup_saved));
+        List<String> identities = new ArrayList<>(appList.size());
+        for (int i = 0, n = appList.size(); i < n; i++) identities.add(appList.get(i).packageName);
+        CustomIconStore store = customIconStore;
+        BackupArchive.IconBytes icons = store != null ? store::readEncoded : identity -> null;
+        android.content.ContentResolver resolver = getContentResolver();
+        try {
+            new Thread(() -> {
+                boolean saved;
+                try (java.io.OutputStream os = resolver.openOutputStream(uri, "w")) {
+                    if (os == null) {
+                        saved = false;
+                    } else {
+                        BackupArchive.write(os, text, identities, icons);
+                        saved = true;
+                    }
+                } catch (Exception | OutOfMemoryError e) {
+                    saved = false;
+                }
+                final boolean ok = saved;
+                uiHandler.post(() -> {
+                    if (destroyed) return;
+                    showToast(getString(ok ? R.string.toast_backup_saved
+                                           : R.string.toast_backup_failed));
+                });
+            }, "settings-backup").start();
         } catch (Exception e) {
             showToast(getString(R.string.toast_backup_failed));
         }
     }
 
-    /** Read + validate a backup document, then apply it atomically. Reads at
-     *  most ~1 MB (a real backup is a few KB) so a wrong, huge file can't
-     *  stall the UI thread. */
+    /** Read a zip or an older text backup on a one-shot thread and store the
+     *  icons it carries, then apply the settings on the UI thread. A file whose
+     *  settings don't parse changes nothing, icons included. */
     private void readBackup(Uri uri) {
-        String raw;
-        try (java.io.InputStream is = getContentResolver().openInputStream(uri)) {
-            if (is == null) { showToast(getString(R.string.toast_restore_failed)); return; }
-            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(8192);
-            byte[] buf = new byte[8192];
-            int n, total = 0;
-            while ((n = is.read(buf)) >= 0) {
-                total += n;
-                if (total > 1_000_000) { showToast(getString(R.string.toast_restore_invalid)); return; }
-                bos.write(buf, 0, n);
-            }
-            raw = new String(bos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+        CustomIconStore store = customIconStore;
+        android.content.ContentResolver resolver = getContentResolver();
+        try {
+            new Thread(() -> {
+                BackupArchive.Contents contents = null;
+                boolean readFailed = false;
+                try (java.io.InputStream is = resolver.openInputStream(uri)) {
+                    if (is == null) readFailed = true;
+                    else contents = BackupArchive.readAny(is);
+                } catch (Exception | OutOfMemoryError e) {
+                    readFailed = true;
+                }
+                SettingsBackup.Parsed parsed =
+                        contents != null ? SettingsBackup.parse(contents.settings) : null;
+                List<String> restoredIcons = new ArrayList<>();
+                if (parsed != null && store != null) {
+                    for (BackupArchive.Icon icon : contents.icons) {
+                        if (store.save(icon.data, icon.identity)) restoredIcons.add(icon.identity);
+                    }
+                }
+                final boolean failed = readFailed;
+                uiHandler.post(() -> {
+                    if (destroyed) return;
+                    if (failed) { showToast(getString(R.string.toast_restore_failed)); return; }
+                    if (parsed == null) { showToast(getString(R.string.toast_restore_invalid)); return; }
+                    for (int i = 0, n = restoredIcons.size(); i < n; i++) {
+                        AppInfo app = findAppByPackage(restoredIcons.get(i));
+                        if (app != null) refreshAppArtwork(app);
+                    }
+                    applyBackup(parsed);
+                });
+            }, "settings-restore").start();
         } catch (Exception e) {
             showToast(getString(R.string.toast_restore_failed));
-            return;
         }
-        SettingsBackup.Parsed p = SettingsBackup.parse(raw);
-        if (p == null) { showToast(getString(R.string.toast_restore_invalid)); return; }
-        applyBackup(p);
     }
 
     /** Apply a validated backup: write the prefs in one commit, then reload

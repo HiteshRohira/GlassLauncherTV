@@ -60,7 +60,7 @@ The home screen shows your wallpaper, clock, and one row of favorite apps. Press
 - **Appearance controls:** Choose 4 to 7 icons per row, icon roundness, focus border and color, whether the favorites bar has its glass background, and whether the clock shows the date, time only, or nothing.
 - **Wallpapers and slideshows:** Use a single wallpaper, rotate through an image folder, or show the system wallpaper, including live wallpapers set by another app. Configure idle mode to hide the launcher UI and leave the wallpaper and clock visible.
 - **Remote and TV controls:** Add supported HDMI and other TV inputs to the grid. Assign the remote's color, menu, and subtitle buttons to apps.
-- **Backup and restore:** Export the launcher layout and settings to a file, then restore them after reinstalling or moving to another device.
+- **Backup and restore:** Export the launcher layout, settings, and custom icons to a zip file, then restore them after reinstalling or moving to another device. Older .txt backups still restore.
 - **Persistent Google TV Home:** An optional one-time local ADB setup makes Glass Launcher the Home app and includes a restore action for Google TV Home.
 
 ## Privacy and size

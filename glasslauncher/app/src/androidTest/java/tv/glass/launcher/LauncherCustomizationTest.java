@@ -768,6 +768,81 @@ public class LauncherCustomizationTest {
     }
 
     @Test
+    public void backup_zipRoundTripsCustomIconAndName() throws Exception {
+        java.util.Map<String, ?> saved = launcherPrefs().getAll();
+        Context context = getInstrumentation().getTargetContext();
+        java.io.File backup = new java.io.File(context.getCacheDir(), "glass-test-backup.zip");
+        AtomicReference<String> identity = new AtomicReference<>();
+        CustomIconStore store = new CustomIconStore(context);
+        try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
+            AppInfo app = awaitValue(scenario, "a loaded app", LauncherCustomizationTest::firstApp);
+            identity.set(app.packageName);
+            assertTrue(store.save(solidPng(Color.GREEN), app.packageName));
+            scenario.onActivity(activity -> {
+                customNames(activity).put(app.packageName, "Backup Test Name");
+                invoke(activity, "saveCustomNames");
+            });
+            awaitBackupWithIcon(backup, app.packageName, () -> scenario.onActivity(activity ->
+                    invoke(activity, "writeBackup", new Class<?>[] {android.net.Uri.class},
+                            android.net.Uri.fromFile(backup))));
+            assertTrue(isZip(backup));
+
+            assertTrue(store.delete(app.packageName));
+            scenario.onActivity(activity -> {
+                customNames(activity).remove(app.packageName);
+                invoke(activity, "saveCustomNames");
+                invoke(activity, "readBackup", new Class<?>[] {android.net.Uri.class},
+                        android.net.Uri.fromFile(backup));
+            });
+            awaitValue(scenario, "restored custom name", activity ->
+                    "Backup Test Name".equals(customNames(activity).get(app.packageName))
+                            ? activity : null);
+            assertTrue(store.has(app.packageName));
+            Bitmap restored = store.read(app.packageName);
+            try {
+                assertNotNull(restored);
+                int pixel = restored.getPixel(0, 0);
+                assertTrue(Color.green(pixel) > 200 && Color.red(pixel) < 40);
+            } finally {
+                if (restored != null && !restored.isRecycled()) restored.recycle();
+            }
+        } finally {
+            if (identity.get() != null) store.delete(identity.get());
+            restoreLauncherPrefs(saved, "KEY_CUSTOM_NAMES", "KEY_APP_ORDER", "KEY_KEYMAP",
+                    "KEY_HIDDEN", "KEY_CLOCK_MODE", "KEY_SHOW_CLOCK", "KEY_LAYOUT_COLUMNS",
+                    "KEY_CARD_CORNER_PERCENT", "KEY_FOCUS_BORDER_ENABLED",
+                    "KEY_FOCUS_BORDER_COLOR", "KEY_FAVORITES_BACKGROUND");
+            //noinspection ResultOfMethodCallIgnored
+            backup.delete();
+        }
+    }
+
+    @Test
+    public void backup_legacyTextFileStillRestores() throws Exception {
+        java.util.Map<String, ?> saved = launcherPrefs().getAll();
+        Context context = getInstrumentation().getTargetContext();
+        java.io.File backup = new java.io.File(context.getCacheDir(), "glass-test-backup.txt");
+        try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
+            AppInfo app = awaitValue(scenario, "a loaded app", LauncherCustomizationTest::firstApp);
+            java.util.Map<String, String> names = new java.util.HashMap<>();
+            names.put(app.packageName, "Legacy Backup Name");
+            String text = "GLBK\t2\ncustom_names\t" + CustomNameStore.serialize(names) + "\n";
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(backup)) {
+                out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            scenario.onActivity(activity -> invoke(activity, "readBackup",
+                    new Class<?>[] {android.net.Uri.class}, android.net.Uri.fromFile(backup)));
+            awaitValue(scenario, "restored legacy custom name", activity ->
+                    "Legacy Backup Name".equals(customNames(activity).get(app.packageName))
+                            ? activity : null);
+        } finally {
+            restoreLauncherPrefs(saved, "KEY_CUSTOM_NAMES");
+            //noinspection ResultOfMethodCallIgnored
+            backup.delete();
+        }
+    }
+
+    @Test
     public void immediateDrawerClose_cancelsDeferredOpen() {
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
@@ -1184,6 +1259,62 @@ public class LauncherCustomizationTest {
                 ((android.graphics.drawable.ColorDrawable) background).getColor());
         String key = (String) staticField(LauncherActivity.class, "KEY_SYSTEM_WALLPAPER");
         assertEquals("persisted setting", on, launcherPrefs().getBoolean(key, false));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AppInfo firstApp(LauncherActivity activity) {
+        for (AppInfo app : (java.util.List<AppInfo>) field(activity, "appList")) {
+            if (!AppInfo.isTvInputIdentity(app.packageName)) return app;
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<String, String> customNames(LauncherActivity activity) {
+        return (java.util.Map<String, String>) field(activity, "customNames");
+    }
+
+    private static byte[] solidPng(int color) {
+        Bitmap bitmap = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888);
+        try {
+            bitmap.eraseColor(color);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, out));
+            return out.toByteArray();
+        } finally {
+            bitmap.recycle();
+        }
+    }
+
+    private static boolean isZip(java.io.File file) throws java.io.IOException {
+        byte[] head = new byte[4];
+        try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+            return BackupArchive.isZip(head, in.read(head));
+        }
+    }
+
+    /** Start an export, then wait until the file it writes holds this identity's icon. */
+    private static void awaitBackupWithIcon(java.io.File file, String identity, Runnable export) {
+        //noinspection ResultOfMethodCallIgnored
+        file.delete();
+        export.run();
+        long deadline = SystemClock.uptimeMillis() + WAIT_TIMEOUT_MS;
+        do {
+            if (file.isFile()) {
+                try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+                    BackupArchive.Contents contents = BackupArchive.readAny(in);
+                    if (contents != null) {
+                        for (BackupArchive.Icon icon : contents.icons) {
+                            if (identity.equals(icon.identity)) return;
+                        }
+                    }
+                } catch (java.io.IOException stillWriting) {
+                    // Retry until the deadline.
+                }
+            }
+            SystemClock.sleep(50);
+        } while (SystemClock.uptimeMillis() < deadline);
+        fail("Timed out waiting for a backup holding " + identity);
     }
 
     /** Text of the Favorites background row: child 0 is the label, 1 the value. */
