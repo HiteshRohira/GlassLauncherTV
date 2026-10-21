@@ -94,15 +94,6 @@ public class LauncherActivity extends Activity {
     private volatile int        bannerHpx    = 0;   // banner height (5:3)
     private volatile int        tileCornerPx = 0;   // corner radius
     private volatile int        cellHpx      = 0;   // cell height (banner + focused label)
-    /** Hide-apps vertical list: per-row height and how many rows are visible
-     *  before the list scrolls (v1.5.0 redesign). */
-    private static final int    HIDE_ROW_H_DP    = 36;
-    private static final int    HIDE_VISIBLE_ROWS = 6;
-    /** Max width of a hidden-app row label. The panel hugs its content (so
-     *  short names give a compact menu, no dead space) but long names
-     *  ellipsize at this cap instead of widening the card — the "max
-     *  character limit" that keeps the panel size bounded. */
-    private static final int    HIDE_LABEL_MAX_W_DP = 150;
     // Clock cadence lives in {@link ClockFormatter#nextMinuteDelay} now.
     // The launcher schedules ticks aligned to the minute boundary so a
     // 1 Hz wakeup loop is avoided; the clock has no seconds, so anything
@@ -113,6 +104,7 @@ public class LauncherActivity extends Activity {
      *  ({@code 0}=off, {@code 1}=each restart, {@code 5..60}=minutes), and the
      *  current sequential position. */
     private static final String KEY_SLIDESHOW_FOLDER = "slideshow_folder";
+    private static final String KEY_SLIDESHOW_FOLDER_NAME = "slideshow_folder_name";
     private static final String KEY_SLIDESHOW_DURATION = "slideshow_duration_sec";
     private static final String KEY_SLIDESHOW_RESTART  = "slideshow_restart";
     private static final String KEY_SLIDESHOW_INDEX  = "slideshow_index";
@@ -173,12 +165,8 @@ public class LauncherActivity extends Activity {
     private static final long   MEDIA_SCAN_TIMEOUT_SEC = 10;
     private static final int    REQ_PERM_BT    = 72;   // runtime Nearby devices permission
     private static final String BACKUP_FILENAME   = "glasslauncher-backup.zip";
-    /** Slideshow duration steps (seconds):
-     *  Off, 20s, 30s, 45s, 1m, 1.5m, 2m, 3m. */
-    private static final int[]  SLIDESHOW_STEPS_SEC =
-            { 0, 20, 30, 45, 60, 90, 120, 180 };
     /** Interval auto-enabled when a folder is picked while the slideshow is
-     *  completely off. Must be a member of {@link #SLIDESHOW_STEPS_SEC}. */
+     *  completely off. Must be one of {@link WallpaperModes#CHANGE_STEPS}. */
     private static final int    SLIDESHOW_DEFAULT_SEC = 30;
 
     // Subtle focus pop — animations toned down for performance / stability.
@@ -354,7 +342,7 @@ public class LauncherActivity extends Activity {
      *  the one source of BACK handling on devices that route gestures
      *  through the platform's OnBackInvokedDispatcher (instead of via
      *  {@link #dispatchKeyEvent} / {@link #onBackPressed}). It must mirror
-     *  the legacy back-priority chain: keymap overlay → context menu /
+     *  the legacy back-priority chain: settings sheet → context menu /
      *  reorder mode → no-op (the launcher is HOME so it never finishes). */
     private android.window.OnBackInvokedCallback backInvokedCallback;
 
@@ -391,7 +379,7 @@ public class LauncherActivity extends Activity {
     // ── Wallpaper slideshow state (all UI-thread) ────────────────────────
     /** Picked folder tree-URI string, or {@code null} when no folder is set. */
     private String  slideshowFolderUri = null;
-    /** Rotation interval in SECONDS: 0 = off, else one of {@link #SLIDESHOW_STEPS_SEC}. */
+    /** Rotation interval in SECONDS: 0 = off, else one of {@link WallpaperModes#CHANGE_STEPS}. */
     private int     slideshowDurationSec = 0;
     /** "Change wallpaper on each restart" toggle (independent of the timer). */
     private boolean slideshowRestart   = false;
@@ -426,14 +414,8 @@ public class LauncherActivity extends Activity {
         }
     };
 
-    // ── Slideshow folder picker (custom TV-native, MediaStore-backed) ────
-    private FrameLayout                 folderPickerOverlay = null;
-    private android.widget.LinearLayout folderPickerCard    = null;
-    private android.widget.LinearLayout folderPickerCol     = null;
-    private android.widget.ScrollView   folderPickerScroll  = null;
     /** Rows shown in the picker: each = {bucketId, displayName, count}. */
     private final java.util.List<String[]> folderPickerData = new ArrayList<>();
-    private int folderPickerSel = 0;
 
     // ── Idle UI hide ──────────────────────────────────────────────────────
     /** Idle-hide timeout options in seconds: Off, 1 min, 2 min, 3 min, 5 min. */
@@ -536,10 +518,8 @@ public class LauncherActivity extends Activity {
     private final ArrayMap<String, List<IconTarget>> bannerInflight = new ArrayMap<>();
     private final List<AppInfo> appList = new ArrayList<>();
     /** Companion to {@link #appList} keyed by package name for O(1)
-     *  {@link #findAppByPackage} lookups. The previous linear scan was a
-     *  measurable cost inside {@link #refreshKeymapRows} (called on every
-     *  UP / DOWN press in the keymap overlay — 6 rows × N apps of
-     *  String.equals per press). Single source of truth: the map is
+     *  {@link #findAppByPackage} lookups, used on every key press and
+     *  settings refresh. Single source of truth: the map is
      *  rebuilt atomically inside the same UI block that mutates
      *  {@link #appList}, so the two never diverge mid-frame. */
     private final ArrayMap<String, AppInfo> appByPackage = new ArrayMap<>();
@@ -638,14 +618,6 @@ public class LauncherActivity extends Activity {
      *  happens on the main UI thread (focus animator update listeners,
      *  {@link Activity#onConfigurationChanged}). */
     private boolean rootLocCached = false;
-    /** Scratch arrays used by {@link #anchorCardUnderGear} to read the
-     *  gear pill's and the root's on-screen positions. Promoted to
-     *  fields so the per-overlay-open path stays allocation-free —
-     *  matches the {@link #ringCellLoc} / {@link #menuCellLoc} pattern.
-     *  Anchor reads run only on the main thread so no synchronisation
-     *  is needed. */
-    private final int[]    anchorMbLoc      = new int[2];
-    private final int[]    anchorRootLoc    = new int[2];
     private       int      ringLayoutW      = 0;  // RingView box width (landscape banner + margin)
     private       int      ringLayoutH      = 0;  // RingView box height
     private       float    cachedIcyOffset  = 0f;
@@ -744,352 +716,45 @@ public class LauncherActivity extends Activity {
     // Keyed by raw keycode → package name. SparseArray fits the small,
     // dense-int-key access pattern with zero autoboxing on every key press.
     private final SparseArray<String> keyMap            = new SparseArray<>();
-    private FrameLayout               keymapOverlay     = null;
-    // The animated card lives inside keymapOverlay; we hold a separate
-    // reference because the dropdown animation (scale + fade + Y-translate)
-    // is applied to the card, not to the full-screen backdrop overlay.
-    private android.widget.LinearLayout keymapCard      = null;
-    private android.widget.LinearLayout keymapColumn    = null;
-    private int                       keymapSelectedRow = 0;
 
-    // ── Keymap overlay app-picker state ──────────────────────────────────
-    // The overlay has two visual modes that swap visibility inside the card:
-    //   • SLOTS  — vertical list of remappable keys (default)
-    //   • PICKER — horizontal scrollable list of installed apps for the
-    //              slot the user just opened
-    // Mode-switching is driven by handleKeymapOverlayKey: OK on a slot
-    // enters PICKER, OK on an app commits the binding and returns to SLOTS,
-    // BACK in PICKER cancels back to SLOTS, BACK in SLOTS closes the overlay.
-    private static final int            KEYMAP_MODE_SLOTS  = 0;
-    private static final int            KEYMAP_MODE_PICKER = 1;
-    // Hide-manager mode: the scale-up card swaps from the slot list to a
-    // vertical, OK-toggleable list of every installed app. UP/DOWN navigate,
-    // OK toggles the hidden flag, BACK returns to slot mode.
-    private static final int            KEYMAP_MODE_HIDE   = 2;
-    private int                         keymapMode          = KEYMAP_MODE_SLOTS;
-    private android.widget.LinearLayout keymapPickerView    = null;  // vertical wrapper for picker
-    private TextView                    keymapPickerTitle   = null;  // "Pick app for Red"
-    private android.widget.HorizontalScrollView keymapPickerHsv = null;
-    private android.widget.LinearLayout keymapPickerStrip   = null;  // horizontal app chips
-    private int                         keymapPickerIdx     = 0;     // 0 = "None" sentinel, 1..N = keymapPickerApps[i-1]
-    private int                         keymapPickerLastIdx = -1;    // tracks last-painted selection so refresh only animates the two chips that changed
-    private int                         keymapPickerSlotRow = 0;     // which slot row triggered the picker
-    /** Stable, ALPHABETICALLY-SORTED snapshot of the apps shown in the
-     *  picker chip strip. Built together with the chips in
-     *  {@link #rebuildPickerChips}; every picker consumer (commit,
-     *  pre-select, icon top-up, live icon delivery) resolves through THIS
-     *  list, never through {@link #appList} by position. That is the fix
-     *  for the "I pick app A but app B gets bound" bug: the home/drawer
-     *  order can be reordered freely without ever changing which chip maps
-     *  to which package, because the picker order is alphabetical and
-     *  independent of the shelf/drawer order. Chip {@code i} (after the
-     *  leading "Not assigned" sentinel) maps to {@code keymapPickerApps.get(i)}. */
-    private final java.util.List<AppInfo> keymapPickerApps = new ArrayList<>();
-    // Picker chip strip is rebuilt only when the underlying app list
-    // changes — avoids re-allocating ~N TextViews on every overlay open.
-    private int                         keymapPickerBuiltSize = -1;
-
-    // ── Hide-manager state ───────────────────────────────────────────────
+    // ── Hidden apps ──────────────────────────────────────────────────────
     // Set of packages the user has hidden from the home shelf. Read on
-    // every loadApps() to filter the shelf list; written on every toggle
-    // inside the hide-manager mode. Iteration order doesn't matter — we
-    // never list this set directly; we only do contains() checks.
+    // every loadApps() to filter the shelf list; written when an app is
+    // hidden from its menu or unhidden in settings. Iteration order doesn't
+    // matter — we never list this set directly; we only do contains() checks.
     private final ArraySet<String>      hiddenApps        = new ArraySet<>();
     /** User-owned local labels keyed by real package or synthetic TV-input identity. */
     private final ConcurrentHashMap<String, String> customNames = new ConcurrentHashMap<>();
-    // Manage-hidden-apps used to live as a 7th, visually-offset row at
-    // the bottom of the slot column. v1.3.0 moves it into the unified
-    // settings panel (alongside Set wallpaper / Show clock / System
-    // Settings). The keymap card is now exclusively key-binding rows.
-    // The HIDE sub-mode the manage row used to enter still exists and
-    // is reachable from the settings panel's "Manage hidden apps" row.
-    // Hide-manager sub-view (third child of the card, sibling of the slot
-    // list and picker — visibility is swapped between the three). The hide
-    // manager intentionally mirrors the keymap PICKER's UX exactly: a
-    // horizontal chip strip with the same selection language (bright pill
-    // + dark text + 1.05x scale + auto-scroll). The only delta is that
-    // hidden chips render their label with a strike-through, so the user
-    // can read the hidden flag at a glance in either selected or idle
-    // state without breaking the picker's visual vocabulary.
-    private android.widget.LinearLayout keymapHideView    = null;
-    private TextView                    keymapHideTitle   = null;
-    private android.widget.ScrollView   keymapHideScroll  = null;  // vertical list scroller (v1.5.0)
-    private android.widget.LinearLayout keymapHideStrip   = null;  // vertical row list
-    /** v1.5.x: the hidden-apps manager now lists ONLY hidden apps (OK unhides
-     *  each). This is the per-row backing list — row {@code i} maps to
-     *  {@code hideListApps.get(i)}. Rebuilt from {@link #hiddenApps} on every
-     *  open of the manager. Empty → a single non-selectable "No hidden apps"
-     *  placeholder row is shown and {@link #keymapHideIdx} is -1. */
-    private final java.util.List<AppInfo> hideListApps = new ArrayList<>();
-    private int                         keymapHideIdx     = 0;
-    private int                         keymapHideLastIdx = -1;
-    // Built-row count cached so we only rebuild the toggle rows when the
-    // app list size actually changes between opens.
-    private int                         keymapHideBuiltSize = -1;
-    // Set true whenever a slot row's text content (binding/label) might
-    // have changed. equalizeKeymapRowWidths is expensive (7 view measures)
-    // and was previously called on every UP/DOWN press — a no-op since
-    // text didn't change between presses. With this flag we only re-
-    // measure on the first refresh after the overlay opens, after a
-    // commit from the picker, or after a package broadcast invalidates
-    // the chip caches.
-    private boolean keymapRowsNeedEqualize = true;
-    // Set true on every toggle; on overlay close we re-apply the filtered
-    // list to the shelf only if anything actually changed during the
-    // session (avoids a full shelf rebuild for read-only opens).
-    private boolean                     keymapHideDirty   = false;
 
     // Third toolbar icon (next to wifi) that opens the unified settings
     // panel — the v1.3.0 consolidation entry point. Held as a field so
     // focus-chain handlers and onDestroy can reach it.
     private View                        mapperBtnView     = null;
 
-    // ── Settings panel (v1.3.0) ──────────────────────────────────────────
-    //
-    // Top-level overlay that opens as a dropdown under the gear button
-    // and hosts the page-based launcher settings rows. Replaces the
-    // wallpaper toolbar pill (deleted) and the "Manage hidden apps" 7th
-    // row that used to live inside the keymap card. Same visual language
-    // as the keymap card (dark slate plate + 1 dp white rim, drop-down
-    // animation pivoted at the gear's top-right corner).
-    //
-    // Lifecycle: built lazily on first {@link #showSettingsPanel} so
-    // cold-start doesn't pay for ~12 view allocations and 5 click
-    // listeners for a feature most users only touch occasionally.
-    // Re-used across opens, torn down on activity destroy.
-    private FrameLayout                 settingsOverlay   = null;
-    private android.widget.LinearLayout settingsCard      = null;
-    private TextView                    settingsTitleView = null;
-    private android.widget.LinearLayout settingsColumn    = null;
-    private TextView                    settingsHintView  = null;
-    /** Selection cursor inside the panel — UP/DOWN cycle, OK activates. */
-    private int                         settingsSelectedRow = 0;
+    /** The settings sheet, built the first time the gear is pressed. */
+    private SettingsSheet               settingsSheet     = null;
+    /** Layout settings changed while the sheet was open; the launcher is
+     *  rebuilt once the sheet has finished closing. */
+    private boolean                     settingsRecreatePending = false;
+    /** An app was unhidden from the Hidden apps page; the home row and grid
+     *  are rebuilt once when that page closes. */
+    private boolean                     hiddenAppsChanged = false;
+    /** Change picture value to restore when the source goes back from
+     *  Picture to Slideshow in the same session. */
+    private int                         rememberedSlideshowChange = SLIDESHOW_DEFAULT_SEC;
+
     /** Prevents duplicate local-ADB operations while authorization or package
      *  commands are in flight. */
     private final AtomicBoolean         googleTvSetupRunning = new AtomicBoolean(false);
     private AlertDialog                 googleTvSetupDialog = null;
     private GoogleTvSetup.Status        googleTvSetupStatus = null;
-    /** Row to land on the next time the panel is opened. Set by
-     *  {@link #activateSettingsRow} before drilling into the keymap card,
-     *  consumed inside {@link #showSettingsPanel}. v1.3.2 fix for the
-     *  "settings cursor jumps back to row 0" bug — when a user clicks
-     *  "Button shortcuts" then presses Back, the panel re-opens with
-     *  the cursor on "Button shortcuts" instead of "Manage hidden apps". */
-    private int                         pendingSettingsCursor = 0;
-    /** Set when the user enters the keymap card via the settings panel
-     *  (Manage hidden apps row → HIDE mode, Button shortcuts row →
-     *  SLOTS mode). {@link #hideKeymapOverlay} consults this flag and
-     *  re-opens the settings panel instead of dropping focus to the home
-     *  shelf, so a deep "settings → button shortcuts → bind a key →
-     *  back" gesture lands the user exactly where they left the panel. */
-    private boolean                     keymapOpenedFromSettings = false;
-
-    /** Set alongside {@link #keymapOpenedFromSettings} when the panel
-     *  enters HIDE mode directly (from the "Manage hidden apps" row).
-     *  {@link #exitHideManager} consults this and skips the v1.2.x
-     *  "back-from-HIDE returns to SLOTS" behaviour — the user came in
-     *  from the panel, not from the slot list, so back should bypass
-     *  SLOTS and dismiss the keymap card so the panel re-opens. */
-    private boolean                     hideManagerSkipSlotsOnExit = false;
 
     /** Single shared dim backdrop View added to {@link #root} in
-     *  {@link #buildLayout}. Both the settings panel and the keymap
-     *  card reference it via {@link #ensureOverlayBackdropVisible} /
-     *  {@link #dismissOverlayBackdropIfIdle}. Replaces the v1.3.0
-     *  initial design's per-overlay {@code setBackgroundColor(0x33000000)}
-     *  which produced a visible dim flicker when transitioning from
-     *  the panel to the keymap card (settings backdrop fading out
-     *  while keymap backdrop faded in compounded for ~110 ms above
-     *  the wallpaper). With one shared backdrop the dim level stays
+     *  {@link #buildLayout}. The settings sheet and the Bluetooth panel
+     *  share it via {@link #ensureOverlayBackdropVisible} /
+     *  {@link #dismissOverlayBackdropIfIdle}, so the dim level stays
      *  constant across the entire modal flow. */
     private View                        overlayBackdrop = null;
-
-    /** Settings category hub and its drill-through pages. Every first-level
-     *  category returns to the five-row hub; maintenance pages return to
-     *  Default home & backup. Appearance changes still close the panel when Back must
-     *  recreate the launcher geometry. */
-    private static final int SPAGE_MAIN = 0, SPAGE_WALLPAPER = 1,
-            SPAGE_BACKUP = 2, SPAGE_APPEARANCE = 3, SPAGE_LAUNCHER_SETUP = 4,
-            SPAGE_APPS = 5, SPAGE_DEVICE = 6;
-    private int settingsPage = SPAGE_MAIN;
-
-    // Stable settings-row identifiers (NOT list positions — the panel is
-    // page-based, so identity must remain position-independent).
-    private static final int SR_HIDE_APPS          = 0;
-    private static final int SR_KEYMAP             = 1;
-    private static final int SR_WALLPAPER_MENU     = 2;   // → SPAGE_WALLPAPER
-    private static final int SR_CLOCK              = 3;
-    private static final int SR_BACKUP_MENU        = 4;   // → SPAGE_BACKUP
-    private static final int SR_SYSTEM             = 5;
-    private static final int SR_SET_WALLPAPER      = 7;
-    private static final int SR_SLIDESHOW_FOLDER   = 8;
-    private static final int SR_SLIDESHOW_DURATION = 9;
-    private static final int SR_SLIDESHOW_RESTART  = 10;
-    private static final int SR_BACKUP             = 11;
-    private static final int SR_RESTORE            = 12;
-    private static final int SR_IDLE_HIDE          = 13;
-    private static final int SR_APPEARANCE_MENU    = 14;  // → SPAGE_APPEARANCE
-    private static final int SR_LAYOUT_COLUMNS     = 15;
-    private static final int SR_CARD_CORNER        = 16;
-    private static final int SR_FOCUS_BORDER       = 17;
-    private static final int SR_FOCUS_COLOR        = 18;
-    private static final int SR_LAUNCHER_SETUP_MENU = 19; // → SPAGE_LAUNCHER_SETUP
-    private static final int SR_LAUNCHER_ACTIVATE   = 20;
-    private static final int SR_LAUNCHER_RESTORE    = 21;
-    private static final int SR_APPS_MENU            = 22; // → SPAGE_APPS
-    private static final int SR_DEVICE_MENU          = 23; // → SPAGE_DEVICE
-    private static final int SR_SYSTEM_WALLPAPER     = 24;
-    private static final int SR_FAVORITES_BACKGROUND = 25;
-
-    private static final int[] SROWS_MAIN = {
-            SR_APPEARANCE_MENU, SR_WALLPAPER_MENU, SR_APPS_MENU,
-            SR_DEVICE_MENU, SR_SYSTEM };
-    private static final int[] SROWS_APPEARANCE = {
-            SR_LAYOUT_COLUMNS, SR_CARD_CORNER, SR_FOCUS_BORDER,
-            SR_FOCUS_COLOR, SR_FAVORITES_BACKGROUND, SR_CLOCK };
-    private static final int[] SROWS_WALLPAPER = {
-            SR_SYSTEM_WALLPAPER, SR_SET_WALLPAPER, SR_SLIDESHOW_FOLDER,
-            SR_SLIDESHOW_DURATION, SR_SLIDESHOW_RESTART, SR_IDLE_HIDE };
-    private static final int[] SROWS_APPS = {
-            SR_HIDE_APPS, SR_KEYMAP };
-    private static final int[] SROWS_DEVICE = {
-            SR_LAUNCHER_SETUP_MENU, SR_BACKUP_MENU };
-    private static final int[] SROWS_BACKUP = {
-            SR_BACKUP, SR_RESTORE };
-    private static final int[] SROWS_LAUNCHER_SETUP = {
-            SR_LAUNCHER_ACTIVATE, SR_LAUNCHER_RESTORE };
-
-    /** Row IDs of the page currently shown. */
-    private int[] settingsPageRows() {
-        switch (settingsPage) {
-            case SPAGE_APPEARANCE:     return SROWS_APPEARANCE;
-            case SPAGE_WALLPAPER:      return SROWS_WALLPAPER;
-            case SPAGE_APPS:           return SROWS_APPS;
-            case SPAGE_DEVICE:         return SROWS_DEVICE;
-            case SPAGE_BACKUP:         return SROWS_BACKUP;
-            case SPAGE_LAUNCHER_SETUP: return SROWS_LAUNCHER_SETUP;
-            default:                   return SROWS_MAIN;
-        }
-    }
-
-    /** Title resource for the current page. */
-    private int settingsPageTitleRes() {
-        switch (settingsPage) {
-            case SPAGE_APPEARANCE:     return R.string.settings_title_appearance;
-            case SPAGE_WALLPAPER:      return R.string.settings_title_wallpaper;
-            case SPAGE_APPS:           return R.string.settings_title_apps;
-            case SPAGE_DEVICE:         return R.string.settings_title_device;
-            case SPAGE_BACKUP:         return R.string.settings_title_backup;
-            case SPAGE_LAUNCHER_SETUP: return R.string.settings_title_launcher_setup;
-            default:                   return R.string.settings_title_main;
-        }
-    }
-
-    /** Remote-control hint for the current page. */
-    private int settingsPageHintRes() {
-        return settingsPage == SPAGE_APPEARANCE || settingsPage == SPAGE_WALLPAPER
-                ? R.string.settings_hint_adjust : R.string.settings_hint_open;
-    }
-
-    /** Label resource for a row id. */
-    private static int settingsRowLabelRes(int rowId) {
-        switch (rowId) {
-            case SR_HIDE_APPS:          return R.string.settings_row_manage_hidden;
-            case SR_KEYMAP:             return R.string.settings_row_button_shortcuts;
-            case SR_APPEARANCE_MENU:    return R.string.settings_row_appearance_menu;
-            case SR_APPS_MENU:          return R.string.settings_row_apps_menu;
-            case SR_DEVICE_MENU:        return R.string.settings_row_device_menu;
-            case SR_LAYOUT_COLUMNS:     return R.string.settings_row_layout_columns;
-            case SR_CARD_CORNER:        return R.string.settings_row_card_corner;
-            case SR_FOCUS_BORDER:       return R.string.settings_row_focus_border;
-            case SR_FOCUS_COLOR:        return R.string.settings_row_focus_color;
-            case SR_FAVORITES_BACKGROUND: return R.string.settings_row_favorites_background;
-            case SR_WALLPAPER_MENU:     return R.string.settings_row_wallpaper_menu;
-            case SR_CLOCK:              return R.string.settings_row_show_clock;
-            case SR_BACKUP_MENU:        return R.string.settings_row_backup_menu;
-            case SR_SYSTEM:             return R.string.settings_row_system_settings;
-            case SR_SYSTEM_WALLPAPER:   return R.string.settings_row_system_wallpaper;
-            case SR_SET_WALLPAPER:      return R.string.settings_row_set_wallpaper;
-            case SR_SLIDESHOW_FOLDER:   return R.string.settings_row_slideshow_folder;
-            case SR_SLIDESHOW_DURATION: return R.string.settings_row_slideshow_duration;
-            case SR_SLIDESHOW_RESTART:  return R.string.settings_row_slideshow_restart;
-            case SR_IDLE_HIDE:          return R.string.settings_row_idle_hide;
-            case SR_BACKUP:             return R.string.settings_row_backup;
-            case SR_RESTORE:            return R.string.settings_row_restore;
-            case SR_LAUNCHER_SETUP_MENU: return R.string.settings_row_launcher_setup_menu;
-            case SR_LAUNCHER_ACTIVATE:  return R.string.settings_row_launcher_activate;
-            case SR_LAUNCHER_RESTORE:   return R.string.settings_row_launcher_restore;
-            default:                    return R.string.settings_row_system_settings;
-        }
-    }
-
-    /** True for the four two-line category rows on the main hub. */
-    private static boolean settingsRowHasSummary(int rowId) {
-        return rowId == SR_APPEARANCE_MENU
-                || rowId == SR_WALLPAPER_MENU
-                || rowId == SR_APPS_MENU
-                || rowId == SR_DEVICE_MENU;
-    }
-
-    /** True for rows that show a value, state, or drill-through chevron. */
-    private static boolean settingsRowHasIndicator(int rowId) {
-        return rowId == SR_CLOCK
-            || rowId == SR_LAYOUT_COLUMNS
-            || rowId == SR_CARD_CORNER
-            || rowId == SR_FOCUS_BORDER
-            || rowId == SR_FOCUS_COLOR
-            || rowId == SR_FAVORITES_BACKGROUND
-            || rowId == SR_SYSTEM_WALLPAPER
-            || rowId == SR_SLIDESHOW_FOLDER
-            || rowId == SR_SLIDESHOW_DURATION
-            || rowId == SR_SLIDESHOW_RESTART
-            || rowId == SR_IDLE_HIDE
-            || rowId == SR_LAUNCHER_SETUP_MENU
-            || rowId == SR_APPEARANCE_MENU
-            || rowId == SR_WALLPAPER_MENU
-            || rowId == SR_APPS_MENU
-            || rowId == SR_DEVICE_MENU
-            || rowId == SR_BACKUP_MENU;
-    }
-
-    /** Widest state string an indicator row can show, used to reserve width at
-     *  build time so the live value never clips the label. */
-    private static String settingsIndicatorWidestText(int rowId) {
-        switch (rowId) {
-            case SR_LAYOUT_COLUMNS:     return "< 7 >";
-            case SR_CARD_CORNER:        return "< 30% >";
-            case SR_FOCUS_BORDER:
-            case SR_FAVORITES_BACKGROUND: return "Off";
-            case SR_FOCUS_COLOR:        return "< Magenta >";
-            case SR_SLIDESHOW_FOLDER:   return "Not set";
-            case SR_SLIDESHOW_DURATION: return "< 1.5 min >";
-            case SR_SYSTEM_WALLPAPER:
-            case SR_SLIDESHOW_RESTART:  return "Off";
-            case SR_IDLE_HIDE:          return "< 5 min >";
-            case SR_LAUNCHER_SETUP_MENU: return "Working ›";
-            case SR_APPEARANCE_MENU:
-            case SR_WALLPAPER_MENU:
-            case SR_APPS_MENU:
-            case SR_DEVICE_MENU:
-            case SR_BACKUP_MENU:        return "›";
-            default:                    return "Full";
-        }
-    }
-
-    /** Plain duration for a category summary, without adjustment brackets. */
-    private static String compactDurationLabel(int seconds) {
-        if (seconds <= 0) return "Off";
-        if (seconds < 60) return seconds + " sec";
-        if (seconds == 90) return "1.5 min";
-        if (seconds % 60 == 0) return (seconds / 60) + " min";
-        return seconds + " sec";
-    }
-
-    private String clockSummaryLabel() {
-        if (clockMode == CLOCK_FULL) return getString(R.string.settings_clock_full);
-        if (clockMode == CLOCK_TIME_ONLY) return getString(R.string.settings_clock_time);
-        return getString(R.string.settings_clock_off);
-    }
 
     private String googleTvHomeStatusLabel() {
         if (googleTvSetupRunning.get()) return getString(R.string.google_tv_status_working);
@@ -1098,74 +763,6 @@ public class LauncherActivity extends Activity {
         if (state == GoogleTvSetup.State.ACTIVE) return getString(R.string.google_tv_status_active);
         if (state == GoogleTvSetup.State.PARTIAL) return getString(R.string.google_tv_status_partial);
         return getString(R.string.google_tv_status_not_set);
-    }
-
-    /** Secondary line for the current main-hub category. */
-    private String settingsCategorySummary(int rowId) {
-        if (rowId == SR_APPEARANCE_MENU) {
-            return getResources().getQuantityString(R.plurals.settings_summary_appearance,
-                    layoutColumns, layoutColumns, clockSummaryLabel());
-        }
-        if (rowId == SR_WALLPAPER_MENU) {
-            String slideshow = systemWallpaper
-                    ? getString(R.string.settings_summary_system_wallpaper)
-                    : slideshowFolderUri == null
-                    ? getString(R.string.settings_summary_no_folder)
-                    : getString(R.string.settings_summary_slideshow,
-                            compactDurationLabel(slideshowDurationSec));
-            return getString(R.string.settings_summary_wallpaper,
-                    slideshow, compactDurationLabel(idleHideSec));
-        }
-        if (rowId == SR_APPS_MENU) {
-            return getString(R.string.settings_summary_apps);
-        }
-        if (rowId == SR_DEVICE_MENU) {
-            return getString(R.string.settings_summary_device, googleTvHomeStatusLabel());
-        }
-        return "";
-    }
-
-    /** Styled two-line label for a main category, or a normal one-line label. */
-    private CharSequence settingsRowText(int rowId, boolean selected) {
-        String title = getString(settingsRowLabelRes(rowId));
-        if (!settingsRowHasSummary(rowId)) return title;
-        String summary = settingsCategorySummary(rowId);
-        android.text.SpannableString text = new android.text.SpannableString(
-                title + "\n" + summary);
-        int summaryStart = title.length() + 1;
-        text.setSpan(new android.text.style.RelativeSizeSpan(0.76f), summaryStart,
-                text.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        text.setSpan(new android.text.style.StyleSpan(Typeface.NORMAL), summaryStart,
-                text.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        text.setSpan(new android.text.style.ForegroundColorSpan(
-                        selected ? 0xFF626268 : 0x99FFFFFF),
-                summaryStart, text.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        return text;
-    }
-
-    /** Parent page for Back navigation from {@code page}. */
-    private static int settingsParentPage(int page) {
-        return page == SPAGE_BACKUP || page == SPAGE_LAUNCHER_SETUP
-                ? SPAGE_DEVICE : SPAGE_MAIN;
-    }
-
-    /** Row to reselect on the parent page after leaving {@code page}. */
-    private static int settingsParentRowId(int page) {
-        switch (page) {
-            case SPAGE_APPEARANCE:     return SR_APPEARANCE_MENU;
-            case SPAGE_WALLPAPER:      return SR_WALLPAPER_MENU;
-            case SPAGE_APPS:           return SR_APPS_MENU;
-            case SPAGE_DEVICE:         return SR_DEVICE_MENU;
-            case SPAGE_BACKUP:         return SR_BACKUP_MENU;
-            case SPAGE_LAUNCHER_SETUP: return SR_LAUNCHER_SETUP_MENU;
-            default:                   return SR_APPEARANCE_MENU;
-        }
-    }
-
-    /** Index of {@code rowId} within {@code rows}, or the first row. */
-    private static int settingsRowIndex(int[] rows, int rowId) {
-        for (int i = 0; i < rows.length; i++) if (rows[i] == rowId) return i;
-        return 0;
     }
 
     /** Hides the selection ring whenever focus moves OUT of any shelf cell.
@@ -1307,16 +904,6 @@ public class LauncherActivity extends Activity {
                 }
             }
             pkgChangedWhilePaused = true;
-            // Invalidate cached picker chip strip — its identities can no
-            // longer be trusted to match the in-memory appList after a
-            // package install / remove / replace. Same applies to the
-            // hide-manager toggle rows. Slot rows must be re-measured
-            // because a relabelled package can change the equalised width.
-            // These invalidations run regardless of pause state because
-            // the next overlay open (whenever it happens) needs them.
-            keymapPickerBuiltSize = -1;
-            keymapHideBuiltSize   = -1;
-            keymapRowsNeedEqualize = true;
             // v1.4.3 audit: skip the deferred reconcile while the
             // activity is paused. The {@link #pkgChangedWhilePaused}
             // flag set above triggers the same reconcile in the next
@@ -1998,10 +1585,6 @@ public class LauncherActivity extends Activity {
         // slot simply disappears instead of the first drawer app being pulled
         // up to keep the row at its old size. (Drawer apps don't affect it.)
         if (wasHome && homeCount > 1) { homeCount--; saveHomeCount(); }
-        // The Manage-hidden-apps list is rebuilt lazily; this app must now
-        // appear there. (buildHideChips rebuilds from hiddenApps on open.)
-        keymapHideBuiltSize = -1;
-        keymapHideDirty     = true;
         RecyclingShelfView s = shelf;
         if (s == null) return;
         applyShelfApps(s);   // rebuilds the home row AND drawer.setApps, both minus hidden
@@ -2065,9 +1648,8 @@ public class LauncherActivity extends Activity {
         // rendered every installed app on cold start until either:
         //   • the background PM scan reconciled with {@code changed = true}
         //     (rare — only fires when the cache disagrees with PM), OR
-        //   • the user opened the hide-manager and toggled any chip
-        //     (which sets {@code keymapHideDirty} and forces an
-        //     applyShelfApps on overlay close).
+        //   • the user unhid an app in settings, which re-applies the
+        //     filtered list to the shelf.
         // The visible symptom: every force-stop / cold-start showed all
         // apps including hidden ones until the user round-tripped the
         // hide manager. Loading hiddenApps and the keymap synchronously
@@ -2089,30 +1671,10 @@ public class LauncherActivity extends Activity {
             // user-visible behaviour stays identical regardless of which
             // delivery path the platform chose.
             backInvokedCallback = () -> {
-                // 0. Slideshow folder picker open → close it (top-most modal).
-                FrameLayout fp = folderPickerOverlay;
-                if (fp != null && fp.getVisibility() == View.VISIBLE) {
-                    hideFolderPicker();
-                    return;
-                }
-                // 1. Keymap overlay open → close it.
-                FrameLayout ko = keymapOverlay;
-                if (ko != null && ko.getVisibility() == View.VISIBLE) {
-                    if (keymapMode == KEYMAP_MODE_PICKER) { exitAppPicker();   return; }
-                    if (keymapMode == KEYMAP_MODE_HIDE)   { exitHideManager(); return; }
-                    hideKeymapOverlay();
-                    return;
-                }
-                // 2. Settings panel open → close it. Lower priority than
-                //    the keymap overlay because the keymap overlay can sit
-                //    on top of the settings panel (drilled in via "Manage
-                //    hidden apps" or "Button shortcuts"). hideKeymapOverlay
-                //    re-opens the settings panel automatically when
-                //    keymapOpenedFromSettings is set, so back-stack
-                //    behaviour matches user expectations.
-                FrameLayout sp = settingsOverlay;
-                if (sp != null && sp.getVisibility() == View.VISIBLE) {
-                    hideSettingsPanel();
+                // 1. Settings sheet open → back one page, or close it.
+                SettingsSheet sheet = settingsSheet;
+                if (sheet != null && sheet.isShowing()) {
+                    sheet.back();
                     return;
                 }
                 // 3. Context menu / reorder mode open → exit it. The context
@@ -2423,16 +1985,9 @@ public class LauncherActivity extends Activity {
         btPanel = null;
         btBtn = null; btAdapter = null;
         mapperBtnView = null;
-        settingsOverlay = null; settingsCard = null; settingsTitleView = null;
-        settingsColumn = null; settingsHintView = null;
-        folderPickerOverlay = null; folderPickerCard = null; folderPickerCol = null; folderPickerScroll = null;
+        settingsSheet = null;
         menuOverlay = null; menuHide = null; menuChangeIcon = null; menuResetIcon = null;
         menuRename = null; menuUninstall = null; menuAppInfo = null; menuMove = null;
-        keymapOverlay = null; keymapColumn = null; keymapCard = null;
-        keymapPickerView = null; keymapPickerTitle = null;
-        keymapPickerHsv = null; keymapPickerStrip = null;
-        keymapHideView = null; keymapHideTitle = null;
-        keymapHideScroll = null; keymapHideStrip = null;
         super.onDestroy();
     }
 
@@ -2543,13 +2098,9 @@ public class LauncherActivity extends Activity {
 
     @Override @SuppressWarnings("deprecation")
     public void onBackPressed() {
-        FrameLayout fp = folderPickerOverlay;
-        if (fp != null && fp.getVisibility() == View.VISIBLE) {
-            hideFolderPicker(); return;
-        }
-        FrameLayout sp = settingsOverlay;
-        if (sp != null && sp.getVisibility() == View.VISIBLE) {
-            hideSettingsPanel(); return;
+        SettingsSheet sheet = settingsSheet;
+        if (sheet != null && sheet.isShowing()) {
+            sheet.back(); return;
         }
         // v1.5.0: drawer open → exit its Move mode, else close the drawer.
         AppDrawer d = drawer;
@@ -2807,7 +2358,7 @@ public class LauncherActivity extends Activity {
         final int MARG_T      = dp(14);
         final int MARG_E      = dp(16);
 
-        // Shared dim backdrop for the settings panel and the keymap card.
+        // Shared dim backdrop for the settings sheet and the Bluetooth panel.
         // Added to root z-order BEFORE the toolbar pills so both modal
         // overlays can sit above it (their show* methods bring themselves
         // to front, putting them above the backdrop). GONE by default —
@@ -4396,23 +3947,6 @@ public class LauncherActivity extends Activity {
             }
             if (aMaster >= 0 && bMaster >= 0 && aMaster != bMaster) {
                 Collections.swap(appList, aMaster, bMaster);
-                // Invalidate the chip-strip caches in the keymap overlay.
-                // Both strips (hide-manager + keymap picker) are built once
-                // and re-used across overlay opens; the rebuild trigger is
-                // a size-change check (keymapHideBuiltSize / keymapPickerBuiltSize
-                // == appList.size()). A reorder leaves the size unchanged
-                // — only positions move — so without this nudge a stale
-                // chip strip would survive a swap. The user-visible symptom
-                // was "I select chip showing app A, app B gets toggled":
-                // chip i still carries the OLD label / icon while
-                // toggleSelectedHide and commitKeymapPicker resolve the
-                // package via appList[i] at the new position. Same shape
-                // of invalidation the package-broadcast handler already
-                // does for install / uninstall / replace; reorder is the
-                // third class of mutation that needs the same nudge.
-                LauncherActivity.this.keymapHideBuiltSize    = -1;
-                LauncherActivity.this.keymapPickerBuiltSize  = -1;
-                LauncherActivity.this.keymapRowsNeedEqualize = true;
             }
             dragIndex    = targetIdx;
             focusedIndex = dragIndex;
@@ -6936,17 +6470,9 @@ public class LauncherActivity extends Activity {
                                     });
                                 }
                             }
-                            // A2 fix: when a package broadcast fires
-                            // while the user is INSIDE the keymap card's
-                            // PICKER or HIDE chip strip, the strip's
-                            // identities just changed under their hands.
-                            // The package receiver invalidated the
-                            // {@code *BuiltSize} caches so the NEXT open
-                            // would rebuild — but the user is currently
-                            // looking at stale chips. Force a rebuild
-                            // here so OK on chip {@code i} hits the right
-                            // package.
-                            rebuildOpenChipStripsAfterReconcile();
+                            // An open Hidden apps or Button shortcuts page
+                            // lists apps, so rebuild it from the new list.
+                            refreshSettingsRows();
                             // Persist the reconciled list to the on-disk
                             // AppListCache so the next cold start can
                             // render the shelf instantly. Snapshotted on a
@@ -7098,53 +6624,6 @@ public class LauncherActivity extends Activity {
             if (!hiddenApps.contains(list.get(i).packageName)) n++;
         }
         return n;
-    }
-
-    /** Rebuild the keymap card's PICKER / HIDE chip strips RIGHT NOW
-     *  if the user is currently inside one of them. Called from the
-     *  reconcile path so a package broadcast that lands while the
-     *  overlay is open can never leave the strip's chips and the
-     *  in-memory {@code appList} disagreeing about which chip
-     *  represents which package.
-     *
-     *  <p>The {@code keymapPickerBuiltSize} / {@code keymapHideBuiltSize}
-     *  caches are invalidated in the {@link #packageReceiver} so the
-     *  NEXT enter*() rebuilds; this forces an IMMEDIATE rebuild for
-     *  the case where the user is already inside. After the rebuild,
-     *  the {@code *BuiltSize} caches are updated to match so the next
-     *  enter*() short-circuits via the existing
-     *  refresh{Picker,Hide}ChipIcons fast-path.
-     *
-     *  <p>Selection is clamped to the new strip length — a chip that
-     *  previously sat past the new tail (because a package was
-     *  uninstalled) lands on the last surviving chip instead of an
-     *  out-of-range slot. */
-    private void rebuildOpenChipStripsAfterReconcile() {
-        FrameLayout ko = keymapOverlay;
-        if (ko == null || ko.getVisibility() != View.VISIBLE) return;
-        if (keymapMode == KEYMAP_MODE_PICKER) {
-            rebuildPickerChips();
-            keymapPickerBuiltSize = appList.size();
-            keymapPickerLastIdx   = -1;
-            android.widget.LinearLayout ps = keymapPickerStrip;
-            if (ps != null) {
-                int max = Math.max(0, ps.getChildCount() - 1);
-                if (keymapPickerIdx > max) keymapPickerIdx = max;
-                if (keymapPickerIdx < 0)   keymapPickerIdx = 0;
-            }
-            refreshKeymapPicker();
-        } else if (keymapMode == KEYMAP_MODE_HIDE) {
-            buildHideChips();
-            keymapHideLastIdx   = -1;
-            int n = hideListApps.size();
-            keymapHideIdx = n > 0 ? Math.min(Math.max(0, keymapHideIdx), n - 1) : -1;
-            refreshHideStrip();
-        }
-        // SLOTS mode: the keymap card already calls refreshKeymapRows
-        // on every UP/DOWN press, and the stale-binding fallback in
-        // dispatchKeyEvent's "Mapped to an uninstalled package" path
-        // covers the rare press during a reconcile. No extra work
-        // needed here.
     }
 
     private List<AppInfo> queryApps() {
@@ -7396,8 +6875,8 @@ public class LauncherActivity extends Activity {
         KeymapStore.parseHiddenApps(raw, hiddenApps::add);
     }
 
-    /** Persist the in-memory hiddenApps set. Called synchronously from
-     *  every toggle in the hide-manager so the user never has to confirm. */
+    /** Persist the in-memory hiddenApps set. Called synchronously on every
+     *  hide or unhide so the user never has to confirm. */
     private void saveHiddenApps() {
         // ArraySet<String> implements Iterable<String> via the inherited
         // Collection / Set typed signature, so it can be passed straight
@@ -7496,8 +6975,8 @@ public class LauncherActivity extends Activity {
      *
      *  <h3>Hidden-app icon warming</h3>
      *  Hidden apps are NOT pre-warmed here (was the v1.2.2 behaviour).
-     *  They get warmed lazily inside {@link #showKeymapOverlay()} which
-     *  is the only consumer that displays their icons. Pre-warming on
+     *  The settings sheet warms each icon it lists ({@link #smallIconFor})
+     *  as the only consumer that displays them. Pre-warming on
      *  every loadApps reconcile (which fires on every package broadcast)
      *  triggered N disk reads through the IconDiskCache LruCache.create
      *  fallback for the empty-memory-cache case — measurable cost on
@@ -7538,7 +7017,7 @@ public class LauncherActivity extends Activity {
         // Clamp BEFORE building the home row so every applyShelfApps()
         // caller gets a safe focusedIndex for free. Without this, a stale
         // index left over from a shrunk home row (hiding several home
-        // apps at once via the keymap overlay, a smaller-count settings
+        // apps, a smaller-count settings
         // restore, or a cache-vs-live mismatch on cold start) falls
         // through to RecyclingShelfView.setApps()'s
         // Math.min(keepIdx, displayed.size() - 1) fallback, which always
@@ -7549,18 +7028,6 @@ public class LauncherActivity extends Activity {
         pushHomeRow(s, visible, hc);
         AppDrawer d = drawer;
         if (d != null) d.setApps(visible, hc);
-    }
-
-    /** Pre-warm the small round chip icons for the keymap overlay. v1.5.0:
-     *  the home / drawer cells now load BANNER tiles (not the round icons),
-     *  so nothing warms {@link #iconCache} for the chips until the overlay
-     *  opens — warm every app here so the picker / hide-list / slot rows
-     *  resolve their icons. {@link #preWarmIcon} early-returns on a cache
-     *  hit, so repeat opens are O(N) cheap containsKey checks. */
-    private void preWarmChipIcons() {
-        for (int i = 0, n = appList.size(); i < n; i++) {
-            preWarmIcon(appList.get(i));
-        }
     }
 
     private AppInfo findAppByPackage(String pkg) {
@@ -7612,10 +7079,10 @@ public class LauncherActivity extends Activity {
     }
 
     /** Activity-level key dispatch. Two responsibilities:
-     *    1. While the keymap overlay is visible, swallow every key into
-     *       the overlay's own d-pad navigator. Stops mapped shortcuts
-     *       from firing while the user is configuring them, and stops
-     *       stray keys from bleeding through to the shelf underneath.
+     *    1. While the settings sheet or Bluetooth panel is open, send every
+     *       key to it. Stops mapped shortcuts from firing while the user is
+     *       configuring them, and stops stray keys from bleeding through
+     *       to the shelf underneath.
      *    2. Otherwise, look up the keycode in the in-memory keyMap.
      *       Match → launch the assigned app and consume. Lookup runs only
      *       on the first ACTION_DOWN (repeatCount == 0) to avoid relaunch
@@ -7635,43 +7102,14 @@ public class LauncherActivity extends Activity {
         }
         // Any key press resets the idle timer (user is active).
         if (event.getAction() == KeyEvent.ACTION_DOWN) scheduleIdleHide();
-        FrameLayout fp = folderPickerOverlay;
-        if (fp != null && fp.getVisibility() == View.VISIBLE) {
+        SettingsSheet sheet = settingsSheet;
+        if (sheet != null && sheet.isShowing()) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                if (handleFolderPickerKey(event.getKeyCode())) return true;
+                if (sheet.handleKey(event.getKeyCode())) return true;
                 return super.dispatchKeyEvent(event);
             }
-            if (isLetThroughKey(event.getKeyCode())) return super.dispatchKeyEvent(event);
-            return true;
-        }
-        FrameLayout ko = keymapOverlay;
-        if (ko != null && ko.getVisibility() == View.VISIBLE) {
-            if (handleKeymapOverlayKey(event)) return true;
-            return super.dispatchKeyEvent(event);
-        }
-        FrameLayout sp = settingsOverlay;
-        if (sp != null && sp.getVisibility() == View.VISIBLE) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                if (handleSettingsKey(event.getKeyCode())) return true;
-                return super.dispatchKeyEvent(event);
-            }
-            // Non-DOWN (KEY_UP / multiple): mirror the keymap overlay's
-            // {@link #handleKeymapOverlayKey} contract exactly. Only swallow
-            // the UP edge for keys we actually consume on DOWN; let the
-            // device-control keys ({@link #isLetThroughKey}: volume / mute /
-            // power / sleep / wake / media-transport) reach the platform on
-            // their UP edge too.
-            //
-            // Why this matters: on DOWN, handleSettingsKey already returns
-            // false for let-through keys so the DOWN edge falls through to
-            // super → the platform's global handler (AudioService,
-            // PowerManager, MediaSession). Pre-1.4.5 the matching UP edge was
-            // unconditionally swallowed here, so on the rare ROMs that route
-            // both edges to user space (HDMI-CEC volume bridges, some set-top
-            // remotes) AudioService saw an unbalanced DOWN-without-UP while
-            // the settings panel was open. Letting the UP through restores
-            // the balanced DOWN+UP pair. Everything else stays swallowed so
-            // an unmapped remote button can't bleed to the shelf underneath.
+            // Let volume, power and media keys reach Android on their UP
+            // edge as well, so the platform always sees a DOWN+UP pair.
             if (isLetThroughKey(event.getKeyCode())) return super.dispatchKeyEvent(event);
             return true;
         }
@@ -7701,28 +7139,17 @@ public class LauncherActivity extends Activity {
         return super.dispatchKeyEvent(event);
     }
 
-    // ── Settings panel (v1.3.0) ──────────────────────────────────────────
+    // ── Settings sheet ───────────────────────────────────────────────────
     //
-    // Top-level overlay that opens as a dropdown under the gear toolbar
-    // pill. Hosts the page-based settings rows and drill-through pages.
-    // Visual language matches the keymap card (deep slate plate + 1 dp white rim, drop-
-    // down animation pivoted at the gear's top-right corner). Same
-    // selection vocabulary too: idle row transparent + light-grey text,
-    // selected row a bright frosted-white pill with dark text.
-    //
-    // Drill-through actions (hide apps, button shortcuts, wallpaper,
-    // system settings) close the panel before launching the next
-    // surface. The Show clock toggle stays in place — the user can flip
-    // it and continue browsing the panel. The keymap card knows it was
-    // opened from the panel via {@link #keymapOpenedFromSettings} and
-    // re-opens the panel after the keymap card is dismissed, so a deep
-    // "settings → button shortcuts → bind a key → back" gesture lands
-    // exactly back at the panel cursor where the user left off.
+    // Full-height sheet on the right edge (see SettingsSheet), opened from
+    // the gear pill. Every page is built from current state by one of the
+    // settings*Page() methods below, so a page always shows live values.
+    // Hidden apps, button shortcuts and the slideshow folder list are pages
+    // of the same sheet. Pickers that leave the launcher (wallpaper image,
+    // backup file, Android settings) close the sheet first.
 
-    /** Show the shared dim backdrop if it isn't already visible. Idempotent
-     *  — the second consecutive call (e.g. opening keymap on top of an
-     *  already-open settings panel) is a no-op so the dim level stays
-     *  constant across the modal flow. */
+    /** Show the shared dim backdrop if it isn't already visible. Idempotent,
+     *  so moving between overlays keeps the dim level constant. */
     private void ensureOverlayBackdropVisible() {
         // Any overlay opening cancels idle-hide immediately so the UI is
         // fully visible while the user interacts with a modal card.
@@ -7736,11 +7163,7 @@ public class LauncherActivity extends Activity {
         bd.animate().alpha(1f).setDuration(140).start();
     }
 
-    /** Hide the shared backdrop only when neither overlay is logically
-     *  open. "Logically open" includes a queued re-open via
-     *  {@link #keymapOpenedFromSettings} — the 60 ms postDelayed window
-     *  between hideKeymapOverlay's withEndAction and the panel re-show
-     *  must not flash the wallpaper visible. */
+    /** Hide the shared backdrop once no overlay is open. */
     private void dismissOverlayBackdropIfIdle() {
         View bd = overlayBackdrop;
         if (bd == null) return;
@@ -7757,657 +7180,596 @@ public class LauncherActivity extends Activity {
                 .start();
     }
 
-    /** True when any modal overlay is currently visible OR a deferred
-     *  re-open is queued. Drives the backdrop's stay-or-fade decision. */
+    /** True when the settings sheet or the Bluetooth panel is open. Drives
+     *  the backdrop's stay-or-fade decision and pauses idle-hide. */
     private boolean anyOverlayLogicallyOpen() {
-        if (keymapOpenedFromSettings) return true;
-        FrameLayout fp = folderPickerOverlay;
-        if (fp != null && fp.getVisibility() == View.VISIBLE) return true;
-        FrameLayout sp = settingsOverlay;
-        if (sp != null && sp.getVisibility() == View.VISIBLE) return true;
-        FrameLayout ko = keymapOverlay;
-        if (ko != null && ko.getVisibility() == View.VISIBLE) return true;
+        SettingsSheet sheet = settingsSheet;
+        if (sheet != null && sheet.isShowing()) return true;
         BluetoothPanel bp = btPanel;
         if (bp != null && bp.isVisible()) return true;
         return false;
     }
 
-    /** Equalise every settings-panel row's width to the widest measured
-     *  row. Same pattern as {@code equalizeKeymapRowWidths} on the keymap
-     *  card. Eliminates the right-side dead space the v1.3.0 initial
-     *  design left when {@code FrameLayout.LayoutParams(dp(252), WRAP)}
-     *  forced every row to a fixed-width column regardless of content.
-     *  Indicators stay aligned at the right edge across all rows because
-     *  every row ends at the same x. Called once after the panel is
-     *  built (post-layout via {@link View#post}); the row widths don't
-     *  drift after that since the rows are i18n-static
-     *  {@code String} resources. */
-    private void equalizeSettingsRowWidths(android.widget.LinearLayout col) {
-        int max = 0;
-        for (int i = 0; i < col.getChildCount(); i++) {
-            View child = col.getChildAt(i);
-            if (!(child instanceof android.widget.LinearLayout)) continue;
-            child.measure(
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-            int w = child.getMeasuredWidth();
-            if (w > max) max = w;
-        }
-        if (max <= 0) return;
-        for (int i = 0; i < col.getChildCount(); i++) {
-            View child = col.getChildAt(i);
-            if (!(child instanceof android.widget.LinearLayout)) continue;
-            android.view.ViewGroup.LayoutParams lp = child.getLayoutParams();
-            if (lp == null) continue;
-            lp.width = max;
-            child.setLayoutParams(lp);
-        }
-    }
-
-    // ── Settings panel build / show / hide / refresh / activate ─────────
-
-    /** Lazy-build the settings panel on first {@link #showSettingsPanel}.
-     *  Re-used across opens. Same plate / row / animation primitives as
-     *  the keymap overlay — only the row count and content differ. */
-    private void buildSettingsPanel() {
-        FrameLayout r = root; if (r == null) return;
-        FrameLayout ov = new FrameLayout(this) {
-            @Override public boolean onTouchEvent(MotionEvent ev) {
-                // Tap-outside-the-card dismisses, matching the keymap
-                // card and context-menu UX.
-                if (ev.getAction() == MotionEvent.ACTION_DOWN) {
-                    android.widget.LinearLayout c = settingsCard;
-                    if (c != null) {
-                        float x = ev.getX(), y = ev.getY();
-                        float l = c.getX(), t = c.getY();
-                        float rt = l + c.getWidth(), b = t + c.getHeight();
-                        if (x < l || x > rt || y < t || y > b) {
-                            hideSettingsPanel();
-                            return true;
-                        }
-                    }
-                }
-                return super.onTouchEvent(ev);
-            }
-        };
-        ov.setLayoutParams(new FrameLayout.LayoutParams(MATCH, MATCH));
-        ov.setVisibility(View.GONE);
-        // The dim is provided by the shared overlayBackdrop view; this
-        // overlay is a transparent click-catcher only. See
-        // ensureOverlayBackdropVisible / dismissOverlayBackdropIfIdle.
-        ov.setClickable(true);
-        ov.setFocusable(true);
-
-        // Card — shared edge-glass slate panel (same primitive as the per-app
-        // menu): rounded slate fill with a bright upper rim/sheen fading to a
-        // quiet lower edge, standard padding + elevation. Built by
-        // EdgeGlassStyle so the two surfaces stay visually identical.
-        android.widget.LinearLayout card = new android.widget.LinearLayout(this);
-        card.setOrientation(android.widget.LinearLayout.VERTICAL);
-        EdgeGlassStyle.applyPanel(card, density);
-        card.setClipChildren(false);
-        card.setClipToPadding(false);
-
-        TextView title = new TextView(this);
-        title.setText(settingsPageTitleRes());
-        title.setTextColor(0x99FFFFFF);
-        title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setAllCaps(true);
-        title.setLetterSpacing(0.08f);
-        title.setPadding(dp(10), dp(3), dp(10), dp(7));
-        card.addView(title, new android.widget.LinearLayout.LayoutParams(WRAP, WRAP));
-
-        // Vertical column for the current page's rows.
-        android.widget.LinearLayout col = new android.widget.LinearLayout(this);
-        col.setOrientation(android.widget.LinearLayout.VERTICAL);
-        col.setClipChildren(false);
-        col.setClipToPadding(false);
-
-        card.addView(col, new android.widget.LinearLayout.LayoutParams(WRAP, WRAP));
-
-        TextView hint = new TextView(this);
-        hint.setText(settingsPageHintRes());
-        hint.setTextColor(0x80FFFFFF);
-        hint.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9);
-        hint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        hint.setSingleLine(true);
-        hint.setPadding(dp(10), dp(7), dp(10), dp(3));
-        card.addView(hint, new android.widget.LinearLayout.LayoutParams(WRAP, WRAP));
-
-        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(WRAP, WRAP);
-        cardLp.gravity = Gravity.TOP | Gravity.END;
-        card.setLayoutParams(cardLp);
-        ov.addView(card);
-        r.addView(ov);
-        settingsOverlay   = ov;
-        settingsCard      = card;
-        settingsTitleView = title;
-        settingsColumn    = col;
-        settingsHintView  = hint;
-        settingsPage      = SPAGE_MAIN;
-        rebuildSettingsColumn();
-    }
-
-    /** (Re)build the row column for the current {@link #settingsPage}. Each row
-     *  is a label plus an optional right-side state indicator; click listeners
-     *  map the row's position to its page row-id. Width equalisation runs
-     *  post-layout so indicators line up and the card hugs the longest label.
-     *  Called on first build and whenever the page changes (main ↔ sub-view). */
-    private void rebuildSettingsColumn() {
-        final android.widget.LinearLayout col = settingsColumn;
-        if (col == null) return;
-        TextView title = settingsTitleView;
-        if (title != null) title.setText(settingsPageTitleRes());
-        TextView hint = settingsHintView;
-        if (hint != null) hint.setText(settingsPageHintRes());
-        col.removeAllViews();
-        for (int rowId : settingsPageRows()) {
-            android.widget.LinearLayout row = new android.widget.LinearLayout(this);
-            row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(10), dp(7), dp(10), dp(7));
-            row.setMinimumWidth(dp(250));
-            android.graphics.drawable.GradientDrawable rowBg =
-                    new android.graphics.drawable.GradientDrawable();
-            rowBg.setCornerRadius(EdgeGlassStyle.rowRadiusPx(density));
-            rowBg.setColor(EdgeGlassStyle.ROW_IDLE_BG);
-            row.setBackground(rowBg);
-
-            TextView label = new TextView(this);
-            label.setText(settingsRowText(rowId, false));
-            label.setTextColor(0xCCFFFFFF);
-            label.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-            label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            boolean hasSummary = settingsRowHasSummary(rowId);
-            label.setSingleLine(!hasSummary);
-            label.setMaxLines(hasSummary ? 2 : 1);
-            label.setLineSpacing(0f, 0.95f);
-            label.setEllipsize(TextUtils.TruncateAt.END);
-            android.widget.LinearLayout.LayoutParams labelLp =
-                    new android.widget.LinearLayout.LayoutParams(0, WRAP, 1f);
-            labelLp.setMarginEnd(settingsRowHasIndicator(rowId) ? dp(10) : 0);
-            row.addView(label, labelLp);
-
-            if (settingsRowHasIndicator(rowId)) {
-                TextView indicator = new TextView(this);
-                indicator.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-                indicator.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-                indicator.setSingleLine(true);
-                // Seed with the widest state string so equalisation reserves
-                // room — the live text (refreshSettingsRows) is never wider.
-                indicator.setText(settingsIndicatorWidestText(rowId));
-                // Gravity.END so the indicator text right-aligns within its
-                // fixed-width slot — keeps the right edge of the row stable
-                // as the text changes (e.g. "< 20s >" ↔ "< 1.5 min >").
-                indicator.setGravity(Gravity.END);
-                // Lock the minimum width to the widest possible value at
-                // build time. measureText is cheap (one measure pass on a
-                // ~12-char string). This prevents any layout reflow when
-                // the live text changes — the column stays the same size
-                // regardless of which value is showing.
-                indicator.measure(
-                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-                indicator.setMinWidth(indicator.getMeasuredWidth());
-                row.addView(indicator,
-                        new android.widget.LinearLayout.LayoutParams(WRAP, WRAP));
-            }
-
-            android.widget.LinearLayout.LayoutParams rowLp =
-                    new android.widget.LinearLayout.LayoutParams(WRAP, WRAP);
-            rowLp.bottomMargin = dp(2);
-            col.addView(row, rowLp);
-        }
-        // Click support: tap moves the cursor to the row, then activates it.
-        for (int i = 0; i < col.getChildCount(); i++) {
-            final int idx = i;
-            View row = col.getChildAt(i);
-            row.setClickable(true);
-            row.setOnClickListener(v -> {
-                v.playSoundEffect(SoundEffectConstants.CLICK);
-                settingsSelectedRow = idx;
-                refreshSettingsRows();
-                activateSettingsAt(idx);
-            });
-        }
-        // Equalise widths post-layout so each row's measure pass has run.
-        col.post(() -> {
-            if (col != settingsColumn) return;
-            equalizeSettingsRowWidths(col);
-        });
-    }
-
-    /** Animate the panel in as a dropdown under the gear toolbar pill.
-     *  Same anchor logic as {@link #showKeymapOverlay} so both surfaces
-     *  appear to fall out of the same icon — but the keymap card's anchor
-     *  resolves against the gear too, so opening keymap from inside the
-     *  settings panel keeps the visual continuity. */
+    /** Open the settings sheet on its first page. */
     private void showSettingsPanel() {
         if (destroyed) return;
         googleTvSetupStatus = GoogleTvSetup.inspect(this);
-        if (settingsOverlay == null) buildSettingsPanel();
-        FrameLayout ov = settingsOverlay;
-        final android.widget.LinearLayout card = settingsCard;
-        if (ov == null || card == null) return;
-
-        // Hide focus ring — it belongs to the shelf which is now logically
-        // behind the panel.
+        if (settingsSheet == null) settingsSheet = new SettingsSheet(this, settingsSheetHost());
+        if (settingsSheet.isShowing()) return;
         RingView rv = ringView; if (rv != null) rv.setVisibility(View.INVISIBLE);
-
-        // Bring up the shared dim backdrop. Idempotent — when this is
-        // called as part of a settings → keymap → settings round-trip
-        // the backdrop is already at full alpha and this call is a
-        // no-op, so the dim level stays constant.
         ensureOverlayBackdropVisible();
-
-        // Always open on the MAIN page (the panel may have been closed while
-        // on a sub-view). Rebuild, then land the cursor on the row a
-        // drill-through restores to (set by the activation handler before it
-        // called hideSettingsPanel); reset the pending cursor so the NEXT
-        // fresh open from the gear starts at the top row.
-        settingsPage = SPAGE_MAIN;
-        rebuildSettingsColumn();
-        settingsSelectedRow = settingsRowIndex(SROWS_MAIN, pendingSettingsCursor);
-        pendingSettingsCursor = SR_APPEARANCE_MENU;
-        refreshSettingsRows();
-
-        // Anchor the card just below the gear toolbar pill — shared
-        // helper since the keymap card uses the identical math.
-        anchorCardUnderGear(card, dp(78), dp(20));
-
-        ov.setVisibility(View.VISIBLE);
-        ov.bringToFront();
-        ov.requestFocus();
-
-        // Drop-down animation: same shape and timing as the keymap card so
-        // both surfaces feel like the same primitive opening from the same
-        // pill.
-        card.animate().cancel();
-        card.setAlpha(0f);
-        card.setScaleX(0.94f); card.setScaleY(0.86f);
-        card.setTranslationY(-dp(6));
-        card.post(() -> {
-            if (card != settingsCard) return;
-            card.setPivotX(card.getWidth());
-            card.setPivotY(0f);
-            card.animate()
-                    .alpha(1f)
-                    .scaleX(1f).scaleY(1f)
-                    .translationY(0f)
-                    .setDuration(160)
-                    .setInterpolator(MENU_IN)
-                    .withLayer()
-                    .start();
-        });
+        settingsSheet.show(settingsHomePage());
     }
 
-    /** Animate the panel out and restore focus to the gear pill. */
+    /** Close the settings sheet. Layout changes rebuild the launcher once the
+     *  sheet has slid away. */
     private void hideSettingsPanel() {
-        final FrameLayout ov = settingsOverlay;
-        final android.widget.LinearLayout card = settingsCard;
-        if (ov == null) return;
-        final boolean applyLayout = layoutApplyPending;
-        if (applyLayout) layoutApplyPending = false;
-        if (card != null) {
-            card.animate().cancel();
-            card.animate()
-                    .alpha(0f)
-                    .scaleX(0.96f).scaleY(0.9f)
-                    .translationY(-dp(4))
-                    .setDuration(110)
-                    .setInterpolator(MENU_OUT)
-                    .withLayer()
-                    .withEndAction(() -> {
-                        if (ov != settingsOverlay) return;
-                        ov.setVisibility(View.GONE);
-                        // Drop the dim only if no other overlay is
-                        // logically open (covers the immediate-close
-                        // case AND the settings → keymap transition
-                        // where the keymap card has already taken
-                        // over the modal flow).
-                        dismissOverlayBackdropIfIdle();
-                        if (applyLayout && !destroyed) recreate();
-                    })
-                    .start();
-        } else {
-            ov.setVisibility(View.GONE);
-            dismissOverlayBackdropIfIdle();
-            if (applyLayout && !destroyed) recreate();
-        }
-        // Restore focus to the gear pill so the user lands back where
-        // they triggered the panel. Falls through to the WiFi pill if
-        // the gear has been GC'd (paranoia — it is held as a field).
-        View mb = mapperBtnView;
-        if (mb != null) mb.requestFocus();
-        else {
-            View nb = netBtn;
-            if (nb != null) nb.requestFocus();
-        }
+        SettingsSheet sheet = settingsSheet;
+        if (sheet != null) sheet.hide();
     }
 
-    /** Repaint each row to reflect {@link #settingsSelectedRow} and the
-     *  current state values. The small current-page row set is repainted in
-     *  place; selected rows use a bright frosted-white pill with dark text. */
+    /** Re-read every value on the open settings page. */
     private void refreshSettingsRows() {
-        android.widget.LinearLayout col = settingsColumn;
-        if (col == null) return;
-        final int hlWhite = EdgeGlassStyle.SELECTED_PILL;
-        final int idleBg  = EdgeGlassStyle.ROW_IDLE_BG;
-        final int idleTx  = EdgeGlassStyle.IDLE_TEXT;
-        final int selTx   = EdgeGlassStyle.SELECTED_TEXT;
-        for (int i = 0; i < col.getChildCount(); i++) {
-            View child = col.getChildAt(i);
-            if (!(child instanceof android.widget.LinearLayout)) continue;
-            android.widget.LinearLayout row = (android.widget.LinearLayout) child;
-            boolean sel = (i == settingsSelectedRow);
-            // Background — mutate the existing GradientDrawable so the
-            // 9 dp corner radius is preserved across paints. Wrapping in
-            // setBackgroundColor would clobber the drawable.
-            android.graphics.drawable.Drawable bg = row.getBackground();
-            if (bg instanceof android.graphics.drawable.GradientDrawable) {
-                ((android.graphics.drawable.GradientDrawable) bg)
-                        .setColor(sel ? hlWhite : idleBg);
+        SettingsSheet sheet = settingsSheet;
+        if (sheet != null) sheet.refresh();
+    }
+
+    private SettingsSheet.Host settingsSheetHost() {
+        return new SettingsSheet.Host() {
+            @Override public FrameLayout root() { return root; }
+            @Override public Interpolator menuIn() { return MENU_IN; }
+            @Override public Interpolator menuOut() { return MENU_OUT; }
+            @Override public boolean isLetThroughKey(int keyCode) {
+                return LauncherActivity.isLetThroughKey(keyCode);
             }
-            int[] pageRows = settingsPageRows();
-            int rowId = (i < pageRows.length) ? pageRows[i] : -1;
-            View labelView     = row.getChildAt(0);
-            View indicatorView = row.getChildAt(1);
-            if (labelView instanceof TextView) {
-                TextView label = (TextView) labelView;
-                label.setText(settingsRowText(rowId, sel));
-                label.setTextColor(sel ? selTx : idleTx);
-            }
-            if (indicatorView instanceof TextView) {
-                TextView ind = (TextView) indicatorView;
-                ind.setAlpha(1f);
-                if (rowId == SR_APPEARANCE_MENU
-                        || rowId == SR_WALLPAPER_MENU
-                        || rowId == SR_APPS_MENU
-                        || rowId == SR_DEVICE_MENU
-                        || rowId == SR_BACKUP_MENU) {
-                    ind.setText("›");
-                    ind.setTextColor(sel ? selTx : 0x99FFFFFF);
-                } else if (rowId == SR_LAYOUT_COLUMNS) {
-                    ind.setText(getString(R.string.settings_value_columns, layoutColumns));
-                    ind.setTextColor(sel ? selTx : EdgeGlassStyle.VALUE_ACCENT);
-                } else if (rowId == SR_CARD_CORNER) {
-                    ind.setText(getString(R.string.settings_value_percent, cardCornerPercent));
-                    ind.setTextColor(sel ? selTx : EdgeGlassStyle.VALUE_ACCENT);
-                } else if (rowId == SR_FOCUS_BORDER) {
-                    ind.setText(focusBorderEnabled ? "On" : "Off");
-                    ind.setTextColor(focusBorderEnabled
-                            ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
-                            : (sel ? 0x66111114 : 0x66FFFFFF));
-                } else if (rowId == SR_FOCUS_COLOR) {
-                    ind.setText(getString(R.string.settings_value_focus_color,
-                            LayoutOptions.focusColorName(focusBorderColor)));
-                    ind.setTextColor(sel ? selTx : focusBorderColor);
-                    ind.setAlpha(focusBorderEnabled ? 1f : 0.45f);
-                } else if (rowId == SR_FAVORITES_BACKGROUND) {
-                    ind.setText(favoritesBackground ? "On" : "Off");
-                    ind.setTextColor(favoritesBackground
-                            ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
-                            : (sel ? 0x66111114 : 0x66FFFFFF));
-                } else if (rowId == SR_CLOCK) {
-                    // 3-state clock indicator: Full / Time / Off.
-                    ind.setText(clockMode == CLOCK_FULL ? "Full"
-                              : clockMode == CLOCK_TIME_ONLY ? "Time" : "Off");
-                    if (clockMode == CLOCK_OFF) ind.setTextColor(sel ? 0x66111114 : 0x66FFFFFF);
-                    else                        ind.setTextColor(sel ? selTx : EdgeGlassStyle.VALUE_ACCENT);
-                } else if (rowId == SR_SYSTEM_WALLPAPER) {
-                    ind.setText(systemWallpaper ? "On" : "Off");
-                    ind.setTextColor(systemWallpaper ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
-                                                     : (sel ? 0x66111114 : 0x66FFFFFF));
-                } else if (rowId == SR_SLIDESHOW_DURATION) {
-                    ind.setText(slideshowDurationLabel());
-                    boolean on = slideshowDurationSec != 0;
-                    ind.setTextColor(on ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT) : (sel ? 0x66111114 : 0x66FFFFFF));
-                    ind.setAlpha(systemWallpaper ? 0.45f : 1f);
-                } else if (rowId == SR_SLIDESHOW_RESTART) {
-                    ind.setText(slideshowRestart ? "On" : "Off");
-                    ind.setTextColor(slideshowRestart ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
-                                                      : (sel ? 0x66111114 : 0x66FFFFFF));
-                    ind.setAlpha(systemWallpaper ? 0.45f : 1f);
-                } else if (rowId == SR_SLIDESHOW_FOLDER) {
-                    boolean set = slideshowFolderUri != null;
-                    ind.setText(set ? "Set" : "Not set");
-                    ind.setTextColor(set ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT) : (sel ? 0x66111114 : 0x66FFFFFF));
-                } else if (rowId == SR_IDLE_HIDE) {
-                    ind.setText(idleHideLabel());
-                    boolean on = idleHideSec != 0;
-                    ind.setTextColor(on ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT) : (sel ? 0x66111114 : 0x66FFFFFF));
-                } else if (rowId == SR_LAUNCHER_SETUP_MENU) {
-                    GoogleTvSetup.State state = googleTvSetupStatus == null
-                            ? GoogleTvSetup.State.NOT_CONFIGURED : googleTvSetupStatus.state;
-                    boolean working = googleTvSetupRunning.get();
-                    ind.setText(getString(R.string.settings_value_open,
-                            googleTvHomeStatusLabel()));
-                    boolean ready = state == GoogleTvSetup.State.ACTIVE && !working;
-                    ind.setTextColor(ready ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
-                                           : (sel ? 0x66111114 : 0x99FFFFFF));
-                } else {
-                    ind.setTextColor(sel ? selTx : idleTx);
+            @Override public void onSheetClosing() {
+                settingsRecreatePending = layoutApplyPending;
+                layoutApplyPending = false;
+                View mb = mapperBtnView;
+                if (mb != null) mb.requestFocus();
+                else {
+                    View nb = netBtn;
+                    if (nb != null) nb.requestFocus();
                 }
             }
-        }
-        // Re-equalise row widths after any indicator text change so the card
-        // never clips the indicator (e.g. stepping duration from "< 45s >"
-        // to "< 1 min >" — different text widths). Cheap: just measures and
-        // sets LayoutParams on the already-built views, no inflation.
-        col.post(() -> {
-            if (col != settingsColumn) return;
-            equalizeSettingsRowWidths(col);
+            @Override public void onSheetHidden() {
+                dismissOverlayBackdropIfIdle();
+                if (settingsRecreatePending && !destroyed) {
+                    settingsRecreatePending = false;
+                    recreate();
+                }
+            }
+        };
+    }
+
+    private static String stepper(CharSequence value) {
+        return "< " + value + " >";
+    }
+
+    /** A setting that is either on or off; Left, Right and OK all flip it. */
+    private SettingsSheet.Row onOffRow(String key, int labelRes, int descRes, boolean on,
+                                       Runnable toggle) {
+        return new SettingsSheet.Row(key, getString(labelRes))
+                .description(getString(descRes))
+                .value(stepper(getString(on ? R.string.settings_value_on : R.string.settings_value_off)),
+                        on ? SettingsSheet.VALUE_ACCENT : SettingsSheet.VALUE_OFF)
+                .onStep(direction -> toggle.run());
+    }
+
+    /** A row that opens another page. */
+    private SettingsSheet.Row pageRow(String key, int labelRes, CharSequence description,
+                                      CharSequence value, int valueStyle, Runnable open) {
+        return new SettingsSheet.Row(key, getString(labelRes))
+                .description(description)
+                .value(value != null ? getString(R.string.settings_value_open, value) : "›", valueStyle)
+                .onActivate(open);
+    }
+
+    private SettingsSheet.Page settingsHomePage() {
+        SettingsSheet.Page page = new SettingsSheet.Page("home",
+                getString(R.string.settings_title_main), getString(R.string.settings_hint_open), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            rows.add(pageRow("appearance", R.string.settings_row_appearance_menu,
+                    appearanceSummary(), null, SettingsSheet.VALUE_LINK,
+                    () -> settingsSheet.push(settingsAppearancePage())));
+            rows.add(pageRow("wallpaper", R.string.settings_row_wallpaper_menu,
+                    wallpaperSummary(), null, SettingsSheet.VALUE_LINK,
+                    () -> settingsSheet.push(settingsWallpaperPage())));
+            rows.add(pageRow("apps", R.string.settings_row_apps_menu,
+                    getString(R.string.settings_summary_apps,
+                            countLabel(R.plurals.settings_count_hidden,
+                                    R.string.settings_count_hidden_none, hiddenAppsSorted().size()),
+                            countLabel(R.plurals.settings_count_shortcuts,
+                                    R.string.settings_count_shortcuts_none, assignedShortcutCount())),
+                    null, SettingsSheet.VALUE_LINK, () -> settingsSheet.push(settingsAppsPage())));
+            rows.add(pageRow("device", R.string.settings_row_device_menu,
+                    getString(R.string.settings_summary_device,
+                            googleTvHomeStatusLabel().toLowerCase(java.util.Locale.getDefault())),
+                    null, SettingsSheet.VALUE_LINK, () -> settingsSheet.push(settingsDevicePage())));
+            rows.add(new SettingsSheet.Row("system", getString(R.string.settings_row_system_settings))
+                    .description(getString(R.string.settings_desc_system))
+                    .onActivate(() -> {
+                        hideSettingsPanel();
+                        openSystemSettings();
+                    }));
+            return rows;
+        });
+        page.footer = this::appVersionLabel;
+        return page;
+    }
+
+    private SettingsSheet.Page settingsAppearancePage() {
+        SettingsSheet.Page page = new SettingsSheet.Page("appearance",
+                getString(R.string.settings_title_appearance), getString(R.string.settings_hint_adjust), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            rows.add(new SettingsSheet.Row("columns", getString(R.string.settings_row_layout_columns))
+                    .description(getString(R.string.settings_desc_layout_columns))
+                    .value(stepper(Integer.toString(layoutColumns)), SettingsSheet.VALUE_ACCENT)
+                    .onStep(this::stepLayoutColumns));
+            rows.add(new SettingsSheet.Row("corner", getString(R.string.settings_row_card_corner))
+                    .description(getString(R.string.settings_desc_card_corner))
+                    .value(stepper(cardCornerPercent + "%"), SettingsSheet.VALUE_ACCENT)
+                    .onStep(this::stepCardCorner));
+            rows.add(onOffRow("focus_border", R.string.settings_row_focus_border,
+                    R.string.settings_desc_focus_border, focusBorderEnabled, this::toggleFocusBorder));
+            rows.add(new SettingsSheet.Row("focus_color", getString(R.string.settings_row_focus_color))
+                    .description(getString(R.string.settings_desc_focus_color))
+                    .value(stepper(LayoutOptions.focusColorName(focusBorderColor)), SettingsSheet.VALUE_ACCENT)
+                    .valueColor(focusBorderColor)
+                    .dimmed(!focusBorderEnabled)
+                    .onStep(this::stepFocusColor));
+            rows.add(onOffRow("favorites_background", R.string.settings_row_favorites_background,
+                    R.string.settings_desc_favorites_background, favoritesBackground,
+                    this::toggleFavoritesBackground));
+            rows.add(new SettingsSheet.Row("clock", getString(R.string.settings_row_show_clock))
+                    .description(getString(R.string.settings_desc_clock))
+                    .value(stepper(getString(clockMode == CLOCK_FULL ? R.string.settings_clock_value_full
+                                    : clockMode == CLOCK_TIME_ONLY ? R.string.settings_clock_value_time
+                                    : R.string.settings_value_off)),
+                            clockMode == CLOCK_OFF ? SettingsSheet.VALUE_OFF : SettingsSheet.VALUE_ACCENT)
+                    .onStep(this::stepClockMode));
+            return rows;
+        });
+        page.footer = () -> layoutApplyPending ? getString(R.string.settings_footer_apply_on_close) : null;
+        // Layout changes rebuild the launcher, so leaving this page with
+        // pending changes closes the sheet to apply them.
+        page.onBack = () -> {
+            if (!layoutApplyPending) return false;
+            hideSettingsPanel();
+            return true;
+        };
+        return page;
+    }
+
+    private SettingsSheet.Page settingsWallpaperPage() {
+        return new SettingsSheet.Page("wallpaper",
+                getString(R.string.settings_title_wallpaper), getString(R.string.settings_hint_adjust), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            int source = wallpaperSource();
+            rows.add(new SettingsSheet.Row("source", getString(R.string.settings_row_wallpaper_source))
+                    .description(getString(source == WallpaperModes.SYSTEM ? R.string.settings_desc_source_system
+                            : source == WallpaperModes.SLIDESHOW ? R.string.settings_desc_source_slideshow
+                            : R.string.settings_desc_source_picture))
+                    .value(stepper(wallpaperSourceLabel(source)), SettingsSheet.VALUE_ACCENT)
+                    .onStep(direction -> setWallpaperSource(
+                            WallpaperModes.stepSource(wallpaperSource(), direction))));
+            if (source == WallpaperModes.PICTURE) {
+                boolean chosen = prefs.getString(KEY_WP_URI, null) != null;
+                rows.add(new SettingsSheet.Row("picture", getString(R.string.settings_row_picture))
+                        .description(getString(R.string.settings_desc_picture))
+                        .value(getString(R.string.settings_value_open, getString(chosen
+                                ? R.string.settings_value_change : R.string.settings_value_choose)),
+                                SettingsSheet.VALUE_LINK)
+                        .onActivate(() -> {
+                            hideSettingsPanel();
+                            openStoragePicker();
+                        }));
+            } else if (source == WallpaperModes.SLIDESHOW) {
+                rows.add(new SettingsSheet.Row("folder", getString(R.string.settings_row_slideshow_folder))
+                        .description(getString(R.string.settings_desc_slideshow_folder))
+                        .value(getString(R.string.settings_value_open, slideshowFolderLabel()),
+                                SettingsSheet.VALUE_LINK)
+                        .onActivate(this::pickSlideshowFolder));
+                rows.add(new SettingsSheet.Row("change", getString(R.string.settings_row_change_picture))
+                        .description(getString(R.string.settings_desc_change_picture))
+                        .value(stepper(changePictureLabel(
+                                WallpaperModes.changeValue(slideshowDurationSec, slideshowRestart))),
+                                SettingsSheet.VALUE_ACCENT)
+                        .onStep(direction -> setChangePicture(WallpaperModes.stepChange(
+                                WallpaperModes.changeValue(slideshowDurationSec, slideshowRestart),
+                                direction, SLIDESHOW_DEFAULT_SEC))));
+            }
+            rows.add(new SettingsSheet.Row("idle", getString(R.string.settings_row_idle_hide))
+                    .description(getString(R.string.settings_desc_idle_hide))
+                    .value(stepper(durationLabel(idleHideSec)),
+                            idleHideSec > 0 ? SettingsSheet.VALUE_ACCENT : SettingsSheet.VALUE_OFF)
+                    .onStep(this::stepIdleHide));
+            return rows;
         });
     }
 
-    /** D-pad / OK / Back navigation inside the settings panel. Returns
-     *  {@code true} when handled, the activity-level dispatcher relays
-     *  every other key to {@code super.dispatchKeyEvent} so volume /
-     *  power / media keys reach the platform unchanged. */
-    private boolean handleSettingsKey(int kc) {
-        int n = settingsPageRows().length;
-        switch (kc) {
-            case KeyEvent.KEYCODE_DPAD_UP:
-                if (n > 0) settingsSelectedRow = (settingsSelectedRow - 1 + n) % n;
-                refreshSettingsRows(); return true;
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                if (n > 0) settingsSelectedRow = (settingsSelectedRow + 1) % n;
-                refreshSettingsRows(); return true;
-            case KeyEvent.KEYCODE_DPAD_LEFT:
-                int rowId = currentSettingsRowId();
-                if (rowId == SR_LAYOUT_COLUMNS) stepLayoutColumns(-1);
-                else if (rowId == SR_CARD_CORNER) stepCardCorner(-1);
-                else if (rowId == SR_FOCUS_BORDER) toggleFocusBorder();
-                else if (rowId == SR_SYSTEM_WALLPAPER) toggleSystemWallpaper();
-                else if (rowId == SR_FOCUS_COLOR) stepFocusColor(-1);
-                else if (rowId == SR_FAVORITES_BACKGROUND) toggleFavoritesBackground();
-                else if (rowId == SR_SLIDESHOW_DURATION) stepSlideshowDuration(-1);
-                else if (rowId == SR_IDLE_HIDE) stepIdleHide(-1);
-                return true;   // swallow on other rows (panel is modal)
-            case KeyEvent.KEYCODE_DPAD_RIGHT:
-                rowId = currentSettingsRowId();
-                if (rowId == SR_LAYOUT_COLUMNS) stepLayoutColumns(+1);
-                else if (rowId == SR_CARD_CORNER) stepCardCorner(+1);
-                else if (rowId == SR_FOCUS_BORDER) toggleFocusBorder();
-                else if (rowId == SR_SYSTEM_WALLPAPER) toggleSystemWallpaper();
-                else if (rowId == SR_FOCUS_COLOR) stepFocusColor(+1);
-                else if (rowId == SR_FAVORITES_BACKGROUND) toggleFavoritesBackground();
-                else if (rowId == SR_SLIDESHOW_DURATION) stepSlideshowDuration(+1);
-                else if (rowId == SR_IDLE_HIDE) stepIdleHide(+1);
-                return true;
-            case KeyEvent.KEYCODE_DPAD_CENTER:
-            case KeyEvent.KEYCODE_ENTER:
-            case KeyEvent.KEYCODE_BUTTON_A:
-                activateSettingsAt(settingsSelectedRow);
-                return true;
-            case KeyEvent.KEYCODE_BACK:
-            case KeyEvent.KEYCODE_ESCAPE:
-                // Appearance changes still close the panel so recreate cannot
-                // collide with a different category action. Every other page
-                // returns to its mapped parent and reselects the opening row.
-                if (settingsPage == SPAGE_APPEARANCE && layoutApplyPending) {
-                    hideSettingsPanel();
-                } else if (settingsPage != SPAGE_MAIN) {
-                    returnToSettingsParent();
-                } else {
-                    hideSettingsPanel();
-                }
-                return true;
+    private SettingsSheet.Page settingsFoldersPage() {
+        SettingsSheet.Page page = new SettingsSheet.Page("folders",
+                getString(R.string.settings_title_folders), getString(R.string.settings_hint_choose), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            for (int i = 0; i < folderPickerData.size(); i++) {
+                final int index = i;
+                String[] folder = folderPickerData.get(i);
+                int count = parseCount(folder[2]);
+                rows.add(new SettingsSheet.Row("folder:" + folder[0], folder[1])
+                        .description(getResources().getQuantityString(
+                                R.plurals.settings_count_photos, count, count))
+                        .value(folder[0].equals(slideshowFolderUri) ? "✓" : null, SettingsSheet.VALUE_ACCENT)
+                        .onActivate(() -> selectFolder(index)));
+            }
+            return rows;
+        });
+        page.initialKey = slideshowFolderUri != null ? "folder:" + slideshowFolderUri : null;
+        return page;
+    }
+
+    private SettingsSheet.Page settingsAppsPage() {
+        return new SettingsSheet.Page("apps",
+                getString(R.string.settings_title_apps), getString(R.string.settings_hint_open), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            int hidden = hiddenAppsSorted().size();
+            int shortcuts = assignedShortcutCount();
+            rows.add(pageRow("hidden", R.string.settings_row_manage_hidden,
+                    getString(R.string.settings_desc_hidden_apps),
+                    hidden > 0 ? Integer.toString(hidden) : getString(R.string.settings_value_none),
+                    SettingsSheet.VALUE_LINK, () -> settingsSheet.push(settingsHiddenAppsPage())));
+            rows.add(pageRow("shortcuts", R.string.settings_row_button_shortcuts,
+                    getString(R.string.settings_desc_button_shortcuts),
+                    shortcuts > 0 ? Integer.toString(shortcuts) : getString(R.string.settings_value_none),
+                    SettingsSheet.VALUE_LINK, () -> settingsSheet.push(settingsShortcutsPage())));
+            return rows;
+        });
+    }
+
+    private SettingsSheet.Page settingsHiddenAppsPage() {
+        SettingsSheet.Page page = new SettingsSheet.Page("hidden",
+                getString(R.string.settings_title_hidden), getString(R.string.settings_hint_unhide), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            for (AppInfo app : hiddenAppsSorted()) {
+                rows.add(new SettingsSheet.Row("app:" + app.packageName, app.label)
+                        .icon(smallIconFor(app), app.packageName)
+                        .value(getString(R.string.settings_value_unhide), SettingsSheet.VALUE_LINK)
+                        .onActivate(() -> unhideFromSettings(app)));
+            }
+            if (rows.isEmpty()) {
+                rows.add(SettingsSheet.Row.info("empty", getString(R.string.settings_hidden_empty)));
+            }
+            return rows;
+        });
+        page.onLeave = this::applyHiddenAppsChanges;
+        return page;
+    }
+
+    private SettingsSheet.Page settingsShortcutsPage() {
+        return new SettingsSheet.Page("shortcuts",
+                getString(R.string.settings_title_shortcuts), getString(R.string.settings_hint_open), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            for (int i = 0; i < SHORTCUT_KEYCODES.length; i++) {
+                final int slot = i;
+                String pkg = keyMap.get(SHORTCUT_KEYCODES[i]);
+                AppInfo app = pkg != null ? findAppByPackage(pkg) : null;
+                rows.add(new SettingsSheet.Row("slot:" + SHORTCUT_KEYCODES[i],
+                        getString(R.string.settings_row_shortcut_button, SHORTCUT_LABELS[i]))
+                        .iconView(new ShortcutTagView(SHORTCUT_GLYPHS[i], SHORTCUT_TAGS[i]), 11)
+                        .value(getString(R.string.settings_value_open, app != null
+                                        ? app.label : getString(R.string.keymap_not_assigned)),
+                                app != null ? SettingsSheet.VALUE_ACCENT : SettingsSheet.VALUE_OFF)
+                        .onActivate(() -> settingsSheet.push(settingsShortcutAppPage(slot))));
+            }
+            return rows;
+        });
+    }
+
+    private SettingsSheet.Page settingsShortcutAppPage(int slot) {
+        final int keyCode = SHORTCUT_KEYCODES[slot];
+        SettingsSheet.Page page = new SettingsSheet.Page("shortcut_app",
+                getString(R.string.settings_row_shortcut_button, SHORTCUT_LABELS[slot]),
+                getString(R.string.settings_hint_choose), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            String bound = keyMap.get(keyCode);
+            rows.add(new SettingsSheet.Row("none", getString(R.string.keymap_not_assigned))
+                    .icon(null, "")
+                    .value(bound == null ? "✓" : null, SettingsSheet.VALUE_ACCENT)
+                    .onActivate(() -> assignShortcut(keyCode, null)));
+            List<AppInfo> apps = new ArrayList<>(appList);
+            Collections.sort(apps, (a, b) -> String.CASE_INSENSITIVE_ORDER.compare(a.label, b.label));
+            for (AppInfo app : apps) {
+                rows.add(new SettingsSheet.Row("app:" + app.packageName, app.label)
+                        .icon(smallIconFor(app), app.packageName)
+                        .value(app.packageName.equals(bound) ? "✓" : null, SettingsSheet.VALUE_ACCENT)
+                        .onActivate(() -> assignShortcut(keyCode, app.packageName)));
+            }
+            return rows;
+        });
+        String current = keyMap.get(keyCode);
+        page.initialKey = current != null ? "app:" + current : "none";
+        return page;
+    }
+
+    private SettingsSheet.Page settingsDevicePage() {
+        return new SettingsSheet.Page("device",
+                getString(R.string.settings_title_device), getString(R.string.settings_hint_open), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            boolean active = !googleTvSetupRunning.get() && googleTvSetupStatus != null
+                    && googleTvSetupStatus.state == GoogleTvSetup.State.ACTIVE;
+            rows.add(pageRow("launcher_setup", R.string.settings_row_launcher_setup_menu,
+                    getString(R.string.settings_desc_default_home), googleTvHomeStatusLabel(),
+                    active ? SettingsSheet.VALUE_ACCENT : SettingsSheet.VALUE_LINK,
+                    () -> settingsSheet.push(settingsLauncherSetupPage())));
+            rows.add(new SettingsSheet.Row("backup", getString(R.string.settings_row_backup))
+                    .description(getString(R.string.settings_desc_backup))
+                    .onActivate(() -> {
+                        hideSettingsPanel();
+                        exportSettings();
+                    }));
+            rows.add(new SettingsSheet.Row("restore", getString(R.string.settings_row_restore))
+                    .description(getString(R.string.settings_desc_restore))
+                    .onActivate(() -> {
+                        hideSettingsPanel();
+                        importSettings();
+                    }));
+            return rows;
+        });
+    }
+
+    private SettingsSheet.Page settingsLauncherSetupPage() {
+        return new SettingsSheet.Page("launcher_setup",
+                getString(R.string.settings_title_launcher_setup), getString(R.string.settings_hint_open), () -> {
+            List<SettingsSheet.Row> rows = new ArrayList<>();
+            rows.add(new SettingsSheet.Row("launcher_activate", getString(R.string.settings_row_launcher_activate))
+                    .description(getString(R.string.settings_desc_launcher_activate))
+                    .onActivate(() -> {
+                        hideSettingsPanel();
+                        showGoogleTvSetupConfirmation(false);
+                    }));
+            rows.add(new SettingsSheet.Row("launcher_restore", getString(R.string.settings_row_launcher_restore))
+                    .description(getString(R.string.settings_desc_launcher_restore))
+                    .onActivate(() -> {
+                        hideSettingsPanel();
+                        showGoogleTvSetupConfirmation(true);
+                    }));
+            return rows;
+        });
+    }
+
+    private String appearanceSummary() {
+        int clock = clockMode == CLOCK_FULL ? R.string.settings_clock_full
+                : clockMode == CLOCK_TIME_ONLY ? R.string.settings_clock_time : R.string.settings_clock_off;
+        return getResources().getQuantityString(R.plurals.settings_summary_appearance,
+                layoutColumns, layoutColumns, getString(clock));
+    }
+
+    private String wallpaperSummary() {
+        int source = wallpaperSource();
+        String what;
+        if (source == WallpaperModes.SYSTEM) {
+            what = getString(R.string.settings_summary_system_wallpaper);
+        } else if (source == WallpaperModes.SLIDESHOW) {
+            what = slideshowRestart ? getString(R.string.settings_summary_slideshow_restart)
+                    : getString(R.string.settings_summary_slideshow_every, durationLabel(slideshowDurationSec));
+        } else {
+            what = getString(R.string.settings_summary_picture);
         }
-        // Allow volume / power / media to pass through; swallow other
-        // keys so they don't bleed to the shelf underneath.
-        if (isLetThroughKey(kc)) return false;
-        return true;
+        return getString(R.string.settings_summary_wallpaper, what,
+                idleHideSec > 0 ? durationLabel(idleHideSec) : getString(R.string.settings_summary_off));
     }
 
-    /** Row id under the cursor on the current page, or -1. */
-    private int currentSettingsRowId() {
-        int[] rows = settingsPageRows();
-        int i = settingsSelectedRow;
-        return (i >= 0 && i < rows.length) ? rows[i] : -1;
+    private String countLabel(int pluralsRes, int noneRes, int count) {
+        if (count <= 0) return getString(noneRes);
+        return getResources().getQuantityString(pluralsRes, count, count);
     }
 
-    /** Open a settings page at its first row. */
-    private void enterSettingsPage(int page) {
-        settingsPage = page;
-        settingsSelectedRow = 0;
-        rebuildSettingsColumn();
-        refreshSettingsRows();
+    private static int parseCount(String text) {
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
-    /** Return to the mapped parent page and reselect the row that opened it. */
-    private void returnToSettingsParent() {
-        int childPage = settingsPage;
-        settingsPage = settingsParentPage(childPage);
-        rebuildSettingsColumn();
-        settingsSelectedRow = settingsRowIndex(
-                settingsPageRows(), settingsParentRowId(childPage));
-        refreshSettingsRows();
+    /** Short duration text: Off, 45 sec, 1.5 min, 2 min. */
+    private static String durationLabel(int seconds) {
+        if (seconds <= 0) return "Off";
+        if (seconds < 60) return seconds + " sec";
+        if (seconds == 90) return "1.5 min";
+        if (seconds % 60 == 0) return (seconds / 60) + " min";
+        return seconds + " sec";
     }
 
-    /** Activate the row at {@code index} on the current page. */
-    private void activateSettingsAt(int index) {
-        int[] rows = settingsPageRows();
-        if (index < 0 || index >= rows.length) return;
-        activateSettingsRowId(rows[index]);
+    private String changePictureLabel(int value) {
+        if (value == WallpaperModes.EACH_RESTART) return getString(R.string.settings_value_each_restart);
+        return getString(R.string.settings_value_every, durationLabel(value));
     }
 
-    /** Execute the action bound to a settings row id. */
-    private void activateSettingsRowId(int rowId) {
-        switch (rowId) {
-            case SR_HIDE_APPS:
-                // Hand off to HIDE mode, then return to the Apps category.
-                pendingSettingsCursor       = SR_APPS_MENU;
-                keymapOpenedFromSettings    = true;
-                hideManagerSkipSlotsOnExit  = true;
-                hideSettingsPanel();
-                showKeymapOverlay();
-                enterHideManager();
-                break;
-            case SR_KEYMAP:
-                pendingSettingsCursor    = SR_APPS_MENU;
-                keymapOpenedFromSettings = true;
-                hideSettingsPanel();
-                showKeymapOverlay();
-                break;
-            case SR_APPEARANCE_MENU:
-                enterSettingsPage(SPAGE_APPEARANCE);
-                break;
-            case SR_APPS_MENU:
-                enterSettingsPage(SPAGE_APPS);
-                break;
-            case SR_DEVICE_MENU:
-                enterSettingsPage(SPAGE_DEVICE);
-                break;
-            case SR_LAYOUT_COLUMNS:
-                stepLayoutColumns(+1);
-                break;
-            case SR_CARD_CORNER:
-                stepCardCorner(+1);
-                break;
-            case SR_FOCUS_BORDER:
-                toggleFocusBorder();
-                break;
-            case SR_FOCUS_COLOR:
-                stepFocusColor(+1);
-                break;
-            case SR_FAVORITES_BACKGROUND:
-                toggleFavoritesBackground();
-                break;
-            case SR_WALLPAPER_MENU:
-                enterSettingsPage(SPAGE_WALLPAPER);
-                break;
-            case SR_BACKUP_MENU:
-                enterSettingsPage(SPAGE_BACKUP);
-                break;
-            case SR_CLOCK:
-                // 3-state cycle: FULL → TIME_ONLY → OFF → FULL.
-                clockMode = (clockMode + 1) % 3;
-                showClock = (clockMode != CLOCK_OFF);
-                prefs.edit()
-                        .putInt(KEY_CLOCK_MODE, clockMode)
-                        .putBoolean(KEY_SHOW_CLOCK, showClock)
-                        .apply();
-                if (showClock) {
-                    clockFmt.reset();
-                    TextView cvOn = clockView;
-                    if (cvOn != null) cvOn.setVisibility(View.VISIBLE);
-                    startClock();
-                    tickClock(System.currentTimeMillis());
-                } else {
-                    stopClock();
-                    TextView cv = clockView;
-                    if (cv != null) cv.setVisibility(View.GONE);
-                }
-                refreshSettingsRows();
-                break;
-            case SR_LAUNCHER_SETUP_MENU:
-                enterSettingsPage(SPAGE_LAUNCHER_SETUP);
-                break;
-            case SR_LAUNCHER_ACTIVATE:
-                hideSettingsPanel();
-                showGoogleTvSetupConfirmation(false);
-                break;
-            case SR_LAUNCHER_RESTORE:
-                hideSettingsPanel();
-                showGoogleTvSetupConfirmation(true);
-                break;
-            case SR_SYSTEM:
-                hideSettingsPanel();
-                openSystemSettings();
-                break;
-            case SR_SYSTEM_WALLPAPER:
-                toggleSystemWallpaper();
-                break;
-            case SR_SET_WALLPAPER:
-                hideSettingsPanel();
-                openStoragePicker();
-                break;
-            case SR_SLIDESHOW_FOLDER:
-                hideSettingsPanel();
+    private String wallpaperSourceLabel(int source) {
+        return getString(source == WallpaperModes.SYSTEM ? R.string.settings_source_system
+                : source == WallpaperModes.SLIDESHOW ? R.string.settings_source_slideshow
+                : R.string.settings_source_picture);
+    }
+
+    private String slideshowFolderLabel() {
+        if (slideshowFolderUri == null) return getString(R.string.settings_value_choose);
+        String name = prefs.getString(KEY_SLIDESHOW_FOLDER_NAME, null);
+        return name != null && !name.isEmpty() ? name : getString(R.string.settings_value_folder_unnamed);
+    }
+
+    @SuppressWarnings("deprecation")
+    private CharSequence appVersionLabel() {
+        try {
+            android.content.pm.PackageInfo info = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                    ? getPackageManager().getPackageInfo(getPackageName(),
+                            PackageManager.PackageInfoFlags.of(0))
+                    : getPackageManager().getPackageInfo(getPackageName(), 0);
+            return getString(R.string.settings_footer_version, info.versionName);
+        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    // ── Settings actions ─────────────────────────────────────────────────
+
+    private int wallpaperSource() {
+        return WallpaperModes.source(systemWallpaper, slideshowActive());
+    }
+
+    /** Switch the wallpaper between a picture, a slideshow folder and the
+     *  system wallpaper. Slideshow without a folder opens the folder list;
+     *  the source changes once a folder is picked. */
+    private void setWallpaperSource(int target) {
+        int current = wallpaperSource();
+        if (target == current) return;
+        if (target == WallpaperModes.SYSTEM) {
+            setSystemWallpaper(true, true);
+        } else if (target == WallpaperModes.PICTURE) {
+            if (slideshowActive()) {
+                rememberedSlideshowChange = WallpaperModes.changeValue(slideshowDurationSec, slideshowRestart);
+            }
+            stopSlideshowRotation();
+            if (systemWallpaper) setSystemWallpaper(false, true);
+            else showStoredPicture();
+        } else {
+            if (slideshowFolderUri == null) {
                 pickSlideshowFolder();
-                break;
-            case SR_SLIDESHOW_DURATION:
-                stepSlideshowDuration(+1);   // OK advances; LEFT/RIGHT also step
-                break;
-            case SR_SLIDESHOW_RESTART:
-                toggleSlideshowRestart();
-                break;
-            case SR_IDLE_HIDE:
-                stepIdleHide(+1);
-                break;
-            case SR_BACKUP:
-                hideSettingsPanel();
-                exportSettings();
-                break;
-            case SR_RESTORE:
-                hideSettingsPanel();
-                importSettings();
-                break;
-            default:
-                break;
+                return;
+            }
+            if (!slideshowActive()) applyChangePicture(rememberedSlideshowChange);
+            if (systemWallpaper) {
+                setSystemWallpaper(false, true);
+            } else {
+                kickSlideshowNow();
+                restartSlideshowTimer();
+            }
         }
+        refreshSettingsRows();
+    }
+
+    private void setChangePicture(int value) {
+        applyChangePicture(value);
+        rememberedSlideshowChange = value;
+        refreshSettingsRows();
+    }
+
+    /** Store a Change picture value: a new picture each restart, or a timer. */
+    private void applyChangePicture(int value) {
+        boolean restart = value == WallpaperModes.EACH_RESTART;
+        int interval = restart ? 0
+                : value > 0 && WallpaperModes.isValidInterval(value) ? value : SLIDESHOW_DEFAULT_SEC;
+        boolean wasActive = slideshowActive();
+        slideshowRestart = restart;
+        slideshowDurationSec = interval;
+        prefs.edit()
+                .putInt(KEY_SLIDESHOW_DURATION, interval)
+                .putBoolean(KEY_SLIDESHOW_RESTART, restart)
+                .apply();
+        if (!wasActive && slideshowActive()) kickSlideshowNow();
+        restartSlideshowTimer();
+    }
+
+    /** Keep the slideshow folder but stop changing pictures. */
+    private void stopSlideshowRotation() {
+        slideshowDurationSec = 0;
+        slideshowRestart = false;
+        prefs.edit()
+                .putInt(KEY_SLIDESHOW_DURATION, 0)
+                .putBoolean(KEY_SLIDESHOW_RESTART, false)
+                .apply();
+        uiHandler.removeCallbacks(slideshowTick);
+    }
+
+    /** Show the picked wallpaper again, or Android's wallpaper when none was picked. */
+    private void showStoredPicture() {
+        WallpaperController ctl = wallpaperCtl;
+        if (ctl == null || systemWallpaper) return;
+        String stored = prefs.getString(KEY_WP_URI, null);
+        ctl.resetUserLoadingGuard();
+        if (stored != null) ctl.applyFromUri(Uri.parse(stored));
+        else ctl.loadSystem();
+    }
+
+    private void stepClockMode(int direction) {
+        clockMode = Math.floorMod(clockMode + Integer.signum(direction), 3);
+        showClock = clockMode != CLOCK_OFF;
+        prefs.edit()
+                .putInt(KEY_CLOCK_MODE, clockMode)
+                .putBoolean(KEY_SHOW_CLOCK, showClock)
+                .apply();
+        TextView cv = clockView;
+        if (showClock) {
+            clockFmt.reset();
+            if (cv != null) cv.setVisibility(View.VISIBLE);
+            startClock();
+            tickClock(System.currentTimeMillis());
+        } else {
+            stopClock();
+            if (cv != null) cv.setVisibility(View.GONE);
+        }
+        refreshSettingsRows();
+    }
+
+    /** Hidden apps in alphabetical order, so the list never shifts under a reorder. */
+    private List<AppInfo> hiddenAppsSorted() {
+        List<AppInfo> out = new ArrayList<>();
+        for (int i = 0, n = appList.size(); i < n; i++) {
+            AppInfo app = appList.get(i);
+            if (hiddenApps.contains(app.packageName)) out.add(app);
+        }
+        Collections.sort(out, (a, b) -> String.CASE_INSENSITIVE_ORDER.compare(a.label, b.label));
+        return out;
+    }
+
+    private int assignedShortcutCount() {
+        int n = 0;
+        for (int keyCode : SHORTCUT_KEYCODES) {
+            String pkg = keyMap.get(keyCode);
+            if (pkg != null && findAppByPackage(pkg) != null) n++;
+        }
+        return n;
+    }
+
+    /** The round list icon for an app, or null while it loads; it then
+     *  arrives through {@link #onIconLoaded}. TV inputs get an input glyph. */
+    private Bitmap smallIconFor(AppInfo app) {
+        Bitmap icon = iconCache != null ? iconCache.get(app.packageName) : null;
+        if (icon != null) return icon;
+        if (app.tvInputId != null) return IconRenderer.generateInputGlyphIcon(dp(22), density);
+        preWarmIcon(app);
+        return null;
+    }
+
+    /** A round app icon finished loading; show it if the settings sheet lists that app. */
+    private void onIconLoaded(String pkg, Bitmap bmp) {
+        SettingsSheet sheet = settingsSheet;
+        if (sheet != null) sheet.deliverIcon(pkg, bmp);
+    }
+
+    private void unhideFromSettings(AppInfo app) {
+        if (!hiddenApps.remove(app.packageName)) return;
+        saveHiddenApps();
+        // Bring it back at the top of the app grid, so the home row stays as it is.
+        repositionUnhiddenIntoDrawer(app);
+        hiddenAppsChanged = true;
+        refreshSettingsRows();
+    }
+
+    /** Rebuild the home row and grid once, after the Hidden apps page closes. */
+    private void applyHiddenAppsChanges() {
+        if (!hiddenAppsChanged) return;
+        hiddenAppsChanged = false;
+        applyShelfApps(shelf);
+    }
+
+    private void assignShortcut(int keyCode, String pkg) {
+        if (pkg == null) keyMap.delete(keyCode);
+        else keyMap.put(keyCode, pkg);
+        saveKeyMap();
+        SettingsSheet sheet = settingsSheet;
+        if (sheet != null && "shortcut_app".equals(sheet.pageId())) sheet.back();
+        refreshSettingsRows();
     }
 
     /** Confirm the elevated package changes before connecting to local ADB. */
@@ -8530,1054 +7892,7 @@ public class LauncherActivity extends Activity {
                 || favoritesBackground != appliedFavoritesBackground;
     }
 
-    // ── Keymap configuration overlay ─────────────────────────────────────
-    //
-    // The overlay is a full-screen FrameLayout sitting at the top of the
-    // launcher's existing root z-order. Inside the overlay sits a centred
-    // "card" LinearLayout that holds two sibling sub-views which alternate
-    // visibility based on keymapMode:
-    //
-    //   keymapColumn    — vertical list of slot rows (default mode)
-    //   keymapPickerView — horizontal scrollable app chips (picker mode)
-    //
-    // No new Activity, no new Fragment, no new resources. Everything is
-    // built programmatically and reused across opens.
-
-    /** Build the overlay lazily on first open. Reused for every subsequent
-     *  open — keeping it inflated is cheap (one FrameLayout + ~20 child views)
-     *  and avoids the inflate cost on every reopen.
-     *
-     *  Visual style: compact dropdown anchored just below the mapper button
-     *  (top-right toolbar). Dark frosted palette: deep slate plate with
-     *  a hairline rim, idle rows transparent + light-grey text, focused row
-     *  becomes a bright frosted-white pill with dark text — exactly the same
-     *  language as the toolbar buttons (idle dark / focused white-frosted),
-     *  so the launcher's visual vocabulary stays consistent.
-     *
-     *  Compactness: rows flow content-tight (tag → name col → icon → app
-     *  label) with NO flex spacer pushing label and value to opposite
-     *  edges. The previous design had ~180 dp of dead space in every row;
-     *  the new layout uses only what the content needs. */
-    private void buildKeymapOverlay() {
-        FrameLayout r = root; if (r == null) return;
-        FrameLayout ov = new FrameLayout(this) {
-            @Override public boolean onTouchEvent(MotionEvent ev) {
-                // Tap-outside-the-card dismisses (matches the context-menu UX).
-                if (ev.getAction() == MotionEvent.ACTION_DOWN) {
-                    android.widget.LinearLayout c = keymapCard;
-                    if (c != null) {
-                        float x = ev.getX(), y = ev.getY();
-                        float l = c.getX(), t = c.getY();
-                        float rt = l + c.getWidth(), b = t + c.getHeight();
-                        if (x < l || x > rt || y < t || y > b) {
-                            hideKeymapOverlay();
-                            return true;
-                        }
-                    }
-                }
-                return true;
-            }
-        };
-        ov.setLayoutParams(new FrameLayout.LayoutParams(MATCH, MATCH));
-        // Light contextual dim — this is a dropdown, not a full-screen modal.
-        // Keeps the home shelf faintly visible behind so the action feels
-        // anchored to the page rather than blocking it.
-        // v1.3.0: dim is now provided by the shared overlayBackdrop view
-        // (see ensureOverlayBackdropVisible / dismissOverlayBackdropIfIdle)
-        // so transitioning settings → keymap doesn't flash a re-dim.
-        ov.setClickable(true);
-        ov.setFocusable(true);
-        ov.setFocusableInTouchMode(true);
-        ov.setVisibility(View.GONE);
-
-        // Frosted card: deep slate plate, soft 14 dp corners, 1 px
-        // hairline rim, subtle elevation. Slot list and picker swap
-        // visibility inside the same card — no second card needed.
-        android.widget.LinearLayout card = new android.widget.LinearLayout(this);
-        card.setOrientation(android.widget.LinearLayout.VERTICAL);
-        android.graphics.drawable.GradientDrawable cardBg =
-                new android.graphics.drawable.GradientDrawable();
-        cardBg.setColor(0xF21A1A1F);          // deep slate, ~95% opacity
-        cardBg.setCornerRadius(dp(14));
-        cardBg.setStroke(1, 0x1AFFFFFF);      // ~10% white hairline rim
-        card.setBackground(cardBg);
-        card.setPadding(dp(8), dp(8), dp(8), dp(8));
-        card.setElevation(dp(10));
-        // Highlight pills are clipped to the card's rounded outline by
-        // hardware regardless of these flags; setting them avoids any
-        // accidental scale-overflow clipping for the picker chips.
-        card.setClipChildren(false);
-        card.setClipToPadding(false);
-
-        // ── Slot list view (default) ──────────────────────────────
-        android.widget.LinearLayout col = new android.widget.LinearLayout(this);
-        col.setOrientation(android.widget.LinearLayout.VERTICAL);
-
-        // Each row: [tag dot][name (fixed col)][icon][app label] — left-flow,
-        // no flex spacer. Rows use WRAP_CONTENT and are equalised to the
-        // widest row's measured width in equalizeKeymapRowWidths() after
-        // every binding update — that way the menu shrinks to fit the
-        // longest visible app name (no dead space on the right) but the
-        // selection pill still aligns across all rows.
-        final int nameColW = dp(56);
-        for (int i = 0; i < SHORTCUT_LABELS.length; i++) {
-            android.widget.LinearLayout row = new android.widget.LinearLayout(this);
-            row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(10), dp(7), dp(10), dp(7));
-            android.graphics.drawable.GradientDrawable rowBg =
-                    new android.graphics.drawable.GradientDrawable();
-            rowBg.setCornerRadius(dp(9));
-            rowBg.setColor(Color.TRANSPARENT);
-            row.setBackground(rowBg);
-
-            // [0] indicator — colour disc for the four colour keys, 3-line
-            //     hamburger for Menu, "CC" badge for Subtitle. v1.3.3:
-            //     glyphs invert their colour when the row is selected
-            //     (the row's bright frosted-white selection pill would
-            //     hide the warm-white idle glyph colour otherwise — the
-            //     "white selector blends, icon not visible" issue from
-            //     v1.3.2 device testing). Colour discs keep their full
-            //     saturated colour in both states. Container size dp(11)
-            //     gives the hamburger / CC glyphs enough room to stay
-            //     legible at TV viewing distance; the dot variant scales
-            //     its drawn radius to match the pre-v1.3.2 dp(7) visual
-            //     diameter so colour-row symmetry is preserved.
-            ShortcutTagView tag = new ShortcutTagView(SHORTCUT_GLYPHS[i], SHORTCUT_TAGS[i]);
-            android.widget.LinearLayout.LayoutParams tagLp =
-                    new android.widget.LinearLayout.LayoutParams(dp(11), dp(11));
-            tagLp.setMarginEnd(dp(8));
-            row.addView(tag, tagLp);
-
-            // [1] button name (fixed-width column for vertical alignment)
-            TextView name = new TextView(this);
-            name.setText(SHORTCUT_LABELS[i]);
-            name.setTextColor(0xCCFFFFFF);
-            name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-            name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            name.setSingleLine(true);
-            android.widget.LinearLayout.LayoutParams nameLp =
-                    new android.widget.LinearLayout.LayoutParams(nameColW, WRAP);
-            nameLp.setMarginEnd(dp(12));
-            row.addView(name, nameLp);
-
-            // [2] app icon (visible only when assigned and cached)
-            ImageView icon = new ImageView(this);
-            icon.setVisibility(View.GONE);
-            clipCircular(icon);   // round small icon
-            android.widget.LinearLayout.LayoutParams iconLp =
-                    new android.widget.LinearLayout.LayoutParams(dp(18), dp(18));
-            iconLp.setMarginEnd(dp(8));
-            row.addView(icon, iconLp);
-
-            // [3] app label — flows left-aligned next to the icon. No
-            //     flex spacer: this is the whole point of the redesign.
-            TextView val = new TextView(this);
-            val.setTextColor(0x88FFFFFF);
-            val.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-            val.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-            val.setSingleLine(true);
-            val.setEllipsize(TextUtils.TruncateAt.END);
-            val.setMaxWidth(dp(130));
-            row.addView(val, new android.widget.LinearLayout.LayoutParams(WRAP, WRAP));
-
-            // Row width starts as WRAP_CONTENT; equalizeKeymapRowWidths()
-            // resizes every row to the widest one after refreshKeymapRows()
-            // re-binds the value text. This eliminates the ~70 dp of right-
-            // side dead space the old fixed dp(252) layout had for short
-            // app names while keeping selection pills perfectly aligned.
-            android.widget.LinearLayout.LayoutParams rlp =
-                    new android.widget.LinearLayout.LayoutParams(WRAP, WRAP);
-            rlp.bottomMargin = dp(2);
-            col.addView(row, rlp);
-        }
-
-        // The divider + "Manage hidden apps" row that used to sit at the
-        // bottom of the slot list moved to the unified settings panel in
-        // v1.3.0. The keymap card is now strictly key-binding territory —
-        // 6 rows, no extras. Hide-apps drill-in lives at
-        // {@code SETTINGS_ROW_HIDE_APPS} and reaches the same
-        // {@link #enterHideManager} surface this card hosts in HIDE mode.
-
-        // ── App picker view ─────────────────────────────────────
-        android.widget.LinearLayout picker = new android.widget.LinearLayout(this);
-        picker.setOrientation(android.widget.LinearLayout.VERTICAL);
-        picker.setVisibility(View.GONE);
-        picker.setClipChildren(false);
-        picker.setClipToPadding(false);
-
-        TextView pickerTitle = new TextView(this);
-        pickerTitle.setTextColor(0xFFEFEFEF);
-        pickerTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-        pickerTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        pickerTitle.setLetterSpacing(0.04f);
-        pickerTitle.setPadding(dp(4), dp(2), dp(4), dp(8));
-        picker.addView(pickerTitle);
-
-        // Horizontal scroller, capped at ~52% of the screen so the picker
-        // never balloons across the display on big TVs.
-        android.widget.HorizontalScrollView hsv =
-                new android.widget.HorizontalScrollView(this);
-        hsv.setHorizontalScrollBarEnabled(false);
-        hsv.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        int hsvW = Math.min(dp(540), Math.round(screenW * 0.52f));
-        if (hsvW < dp(300)) hsvW = dp(300);
-        android.widget.LinearLayout.LayoutParams hsvLp =
-                new android.widget.LinearLayout.LayoutParams(hsvW, WRAP);
-        picker.addView(hsv, hsvLp);
-
-        android.widget.LinearLayout strip = new android.widget.LinearLayout(this);
-        strip.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        strip.setPadding(dp(2), dp(4), dp(2), dp(4));
-        // Allow chip scale-up to draw outside the strip's logical bounds.
-        strip.setClipChildren(false);
-        strip.setClipToPadding(false);
-        hsv.setClipChildren(false);
-        hsv.setClipToPadding(false);
-        hsv.addView(strip, new android.widget.FrameLayout.LayoutParams(WRAP, WRAP));
-
-        // ── Hide-manager view (v1.5.0: vertical list) ───────────────
-        // Redesigned from the old horizontal chip strip to a vertical,
-        // OK-toggleable list that mirrors the button-shortcuts slot list:
-        // round app icon + label per row, ~6 rows visible and the rest
-        // scrollable, no dead space. The hidden flag is a strike-through on
-        // the label (kept from the previous design).
-        android.widget.LinearLayout hideView = new android.widget.LinearLayout(this);
-        hideView.setOrientation(android.widget.LinearLayout.VERTICAL);
-        hideView.setVisibility(View.GONE);
-        // CLIP this view (unlike the picker, whose chips scale outside their
-        // bounds): hide rows never scale, and clipping stops scrolled list
-        // rows from bleeding up over the "OK to unhide" title.
-        hideView.setClipChildren(true);
-        hideView.setClipToPadding(true);
-
-        // Header: the "Hide apps from shelf · OK toggles" title. It names the
-        // list and reminds the user that OK toggles the hidden flag — restored
-        // per user request and styled like the picker title (tight padding so
-        // there's no dead space above the list).
-        TextView hideTitle = new TextView(this);
-        hideTitle.setText(R.string.keymap_hide_title);
-        hideTitle.setTextColor(0xFFEFEFEF);
-        hideTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-        hideTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        hideTitle.setLetterSpacing(0.03f);
-        hideTitle.setSingleLine(true);
-        hideTitle.setEllipsize(TextUtils.TruncateAt.END);
-        hideTitle.setMaxWidth(dp(HIDE_LABEL_MAX_W_DP) + dp(42));   // label cap + icon/padding allowance
-        hideTitle.setPadding(dp(4), dp(2), dp(4), dp(6));
-        hideView.addView(hideTitle);
-
-        // Vertical scroller capped at HIDE_VISIBLE_ROWS rows tall — content
-        // shorter than that wraps (no empty space); longer scrolls.
-        final int hideRowH = dp(HIDE_ROW_H_DP);
-        android.widget.ScrollView hideScroll = new android.widget.ScrollView(this) {
-            @Override protected void onMeasure(int wSpec, int hSpec) {
-                // Cap at HIDE_VISIBLE_ROWS rows (row height + 2dp bottom margin)
-                // so exactly that many show; shorter content wraps (no empty
-                // space), longer scrolls.
-                int cap = (hideRowH + dp(2)) * HIDE_VISIBLE_ROWS;
-                super.onMeasure(wSpec,
-                        View.MeasureSpec.makeMeasureSpec(cap, View.MeasureSpec.AT_MOST));
-            }
-        };
-        hideScroll.setVerticalScrollBarEnabled(false);
-        hideScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        // Width hugs the widest visible row (capped by the label max-width in
-        // addHideRow) → a compact, variable-width menu with no dead space for
-        // short names; long names ellipsize rather than widen the card.
-        android.widget.LinearLayout.LayoutParams hsLp =
-                new android.widget.LinearLayout.LayoutParams(WRAP, WRAP);
-        hideView.addView(hideScroll, hsLp);
-
-        android.widget.LinearLayout hideStrip = new android.widget.LinearLayout(this);
-        hideStrip.setOrientation(android.widget.LinearLayout.VERTICAL);
-        hideScroll.addView(hideStrip,
-                new android.widget.FrameLayout.LayoutParams(WRAP, WRAP));
-
-        card.addView(col);
-        card.addView(picker);
-        card.addView(hideView);
-
-        // Top-right anchored. Exact margins are computed in showKeymapOverlay
-        // so the card sits immediately below the mapper toolbar button and
-        // visually "drops out" of it.
-        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(WRAP, WRAP);
-        cardLp.gravity = Gravity.TOP | Gravity.END;
-        ov.addView(card, cardLp);
-
-        r.addView(ov);
-        keymapOverlay     = ov;
-        keymapCard        = card;
-        keymapColumn      = col;
-        keymapPickerView  = picker;
-        keymapPickerTitle = pickerTitle;
-        keymapPickerHsv   = hsv;
-        keymapPickerStrip = strip;
-        keymapHideView    = hideView;
-        keymapHideTitle   = hideTitle;
-        keymapHideScroll  = hideScroll;
-        keymapHideStrip   = hideStrip;
-    }
-
-    private void showKeymapOverlay() {
-        if (destroyed) return;
-        if (keymapOverlay == null) buildKeymapOverlay();
-        FrameLayout ko = keymapOverlay;
-        final android.widget.LinearLayout card = keymapCard;
-        if (ko == null || card == null) return;
-        // Warm hidden-app icons before any chip strip starts asking
-        // {@code iconCache.get(pkg)}. The chip-strip's bind path doesn't
-        // queue loads on miss — it only renders the cell GONE — so an
-        // unwarmed hidden-app bitmap stays missing until something else
-        // happens to load it. Idempotent, cheap on warm caches; only
-        // does real work on the rare path "package broadcast invalidated
-        // a hidden app's icon since the last overlay open". See
-        // {@link #preWarmChipIcons} for the cost analysis.
-        preWarmChipIcons();
-        // Hide the focus ring — it belongs to the shelf, which is now
-        // logically behind the overlay.
-        RingView rv = ringView; if (rv != null) rv.setVisibility(View.INVISIBLE);
-        // Shared dim backdrop. Idempotent when transitioning from the
-        // settings panel — already at full alpha so this is a no-op
-        // and the dim level stays constant.
-        ensureOverlayBackdropVisible();
-        // Always open in slot-list mode.
-        keymapMode        = KEYMAP_MODE_SLOTS;
-        keymapSelectedRow = 0;
-        if (keymapPickerView != null) keymapPickerView.setVisibility(View.GONE);
-        if (keymapHideView   != null) keymapHideView  .setVisibility(View.GONE);
-        if (keymapColumn     != null) keymapColumn    .setVisibility(View.VISIBLE);
-        refreshKeymapRows();
-
-        // Anchor the card just below the mapper toolbar button so it reads
-        // as a dropdown coming out of that icon. Right edge aligns with the
-        // mapper button's right edge, top edge sits 4 dp below it.
-        int topMargin   = dp(78);   // fallback if mapper button isn't laid out yet
-        int rightMargin = dp(20);
-        anchorCardUnderGear(card, topMargin, rightMargin);
-
-        ko.setVisibility(View.VISIBLE);
-        ko.bringToFront();
-        ko.requestFocus();
-
-        // Drop-down animation: scale-up from the top-right corner with a
-        // small downward translate so the card appears to "fall out" of the
-        // mapper button. Pivot must be set after measure(), which happens
-        // on the next layout pass — post() guarantees getWidth() is valid.
-        card.animate().cancel();
-        card.setAlpha(0f);
-        card.setScaleX(0.94f); card.setScaleY(0.86f);
-        card.setTranslationY(-dp(6));
-        card.post(() -> {
-            if (card != keymapCard) return;
-            card.setPivotX(card.getWidth());     // top-right corner
-            card.setPivotY(0f);
-            card.animate()
-                    .alpha(1f)
-                    .scaleX(1f).scaleY(1f)
-                    .translationY(0f)
-                    .setDuration(160)
-                    .setInterpolator(MENU_IN)
-                    .withLayer()
-                    .start();
-        });
-    }
-
-    private void hideKeymapOverlay() {
-        final FrameLayout ko = keymapOverlay;
-        final android.widget.LinearLayout card = keymapCard;
-        if (ko == null) return;
-        // Apply any pending hide toggles to the shelf — done exactly once
-        // per overlay session, so a long editing session of N toggles
-        // triggers exactly one shelf rebuild instead of N. Runs ahead of
-        // the snap-close branch below because both paths need the
-        // shelf re-filtered before the overlay disappears.
-        if (keymapHideDirty) {
-            keymapHideDirty = false;
-            applyShelfApps(shelf);
-        }
-
-        // ── Snap-close path: keymap → settings hand-off ──────────────────
-        // When the user drilled into the keymap card from the settings
-        // panel (keymapOpenedFromSettings == true), Back from the keymap
-        // card needs to land them back in the panel. The animated path
-        // below produced two visible artefacts when used for this case:
-        //
-        //   1. The reset-to-SLOTS code at the top of this method had to
-        //      run BEFORE the close animation so the next open started
-        //      clean. With the card still visible during the 110 ms
-        //      animate-out, that meant the user saw SLOTS mode behind
-        //      the fading-HIDE card — the "button shortcuts appears for
-        //      a second" bug reported on v1.3.1.
-        //   2. The 60 ms postDelayed re-open of the settings panel
-        //      overlapped the 110 ms close animation, so the settings
-        //      card and the keymap card were both partially visible
-        //      simultaneously for ~50 ms — visible cross-fade flicker.
-        //
-        // Snap-close eliminates both: hide the keymap card instantly
-        // (no animation, no SLOTS reset), then synchronously open the
-        // settings panel which runs its own 160 ms in-animation. The
-        // shared backdrop stays at full alpha throughout so there is
-        // no dim flicker. The user sees the HIDE chips disappear and
-        // the settings panel slide in immediately.
-        if (keymapOpenedFromSettings) {
-            keymapOpenedFromSettings = false;
-            if (card != null) {
-                card.animate().cancel();
-                card.setAlpha(1f);
-                card.setScaleX(1f); card.setScaleY(1f);
-                card.setTranslationY(0f);
-            }
-            // Order matters: show the settings panel BEFORE hiding the
-            // keymap overlay so {@link #showSettingsPanel}'s
-            // {@code ov.requestFocus()} grabs focus while ko is still
-            // hosting the previously-focused chip / slot row. After
-            // that requestFocus runs, ko has no focused descendant —
-            // it's safe to flip ko to GONE.
-            //
-            // The reverse order (the v1.4.x first cut, fixed in v1.4.x)
-            // produced a user-visible bug: opening hide-apps or
-            // button-shortcuts from the middle of the drawer, then
-            // pressing BACK once, would auto-shift the drawer left or
-            // right "toward an end". Mechanism:
-            //   1. ko.setVisibility(GONE) on a still-focused overlay
-            //      synchronously calls clearFocus on the focused
-            //      descendant and runs a focus search for the next
-            //      focusable view in the tree.
-            //   2. The shelf cells are the next focusable candidates;
-            //      the search picks whichever visible cell is closest
-            //      (geometrically) to the previously-focused chip.
-            //   3. The picked cell's onFocusChange listener fires
-            //      synchronously inside the search:
-            //        - {@code focusedIndex = boundIndex} overwrites the
-            //          shelf's actual saved index with the picked
-            //          cell's index;
-            //        - {@code ensureVisible(boundIndex)} scrolls the
-            //          shelf so the picked cell sits at its preferred
-            //          viewport position.
-            //   4. {@code showSettingsPanel()} ran AFTER, so by the
-            //      time it grabbed focus the shelf had already been
-            //      scrolled — the user saw the drift.
-            //
-            // Showing the panel first short-circuits step 1: ko's
-            // focused descendant relinquishes focus to ov via the
-            // explicit requestFocus, so there's no descendant left to
-            // clear when ko later goes GONE. No focus search, no
-            // accidental {@code focusedIndex} overwrite, no scroll.
-            //
-            // NOTE: deliberately do NOT touch keymapMode / sub-view
-            // visibilities here. The next showKeymapOverlay call resets
-            // them all to SLOTS as its first step, so any state we
-            // leave behind here is overwritten on the next open. This
-            // keeps the snap-close path zero-work beyond the visibility
-            // flip and the alpha reset.
-            showSettingsPanel();
-            ko.setVisibility(View.GONE);
-            return;
-        }
-
-        // ── Animated close path: user closing the keymap card directly ───
-        // Reset to slot-list mode so a future re-open is consistent
-        // (avoids the case where Back from slot-list closes the overlay
-        // while picker mode was still cached as the active sub-view).
-        // For the keymap → home path this happens BEFORE the close
-        // animation since the user won't see the slot column anyway —
-        // the next open will start in SLOTS regardless.
-        keymapMode = KEYMAP_MODE_SLOTS;
-        if (keymapPickerView != null) keymapPickerView.setVisibility(View.GONE);
-        if (keymapHideView   != null) keymapHideView  .setVisibility(View.GONE);
-        if (keymapColumn     != null) keymapColumn    .setVisibility(View.VISIBLE);
-        if (card != null) {
-            card.animate().cancel();
-            card.animate()
-                    .alpha(0f)
-                    .scaleX(0.96f).scaleY(0.9f)
-                    .translationY(-dp(4))
-                    .setDuration(110)
-                    .setInterpolator(MENU_OUT)
-                    .withLayer()
-                    .withEndAction(() -> {
-                        if (ko != keymapOverlay) return;
-                        // Cancellation race guard — see hideContextMenu.
-                        if (card.getAlpha() > 0.05f) return;
-                        ko.setVisibility(View.GONE);
-                        card.setAlpha(1f);
-                        card.setScaleX(1f); card.setScaleY(1f);
-                        card.setTranslationY(0f);
-                        dismissOverlayBackdropIfIdle();
-                    })
-                    .start();
-        } else {
-            ko.setVisibility(View.GONE);
-            dismissOverlayBackdropIfIdle();
-        }
-        // Restore focus to the gear button so the user lands back where
-        // they triggered the overlay (gear is the only entry point into
-        // the keymap card now that the wallpaper pill is gone).
-        View mb = mapperBtnView;
-        if (mb != null) mb.requestFocus();
-        else {
-            View nb = netBtn;
-            if (nb != null) nb.requestFocus();
-        }
-    }
-
-    /** Repaint every slot row to reflect the current keyMap state and
-     *  selection. Called on every navigation event in slot mode and on
-     *  every commit from picker mode. Cheap — each row is a tiny
-     *  LinearLayout with at most 4 children, all looked up by index.
-     *
-     *  Selection language: bright frosted-white pill + dark text, mirroring
-     *  the toolbar buttons' "idle dark / focused white-frosted" pattern.
-     *  This keeps a single visual vocabulary across the whole launcher.
-     *
-     *  The manage-hidden-apps row is treated as the (rows)th selectable
-     *  entry — it lives below the key rows and a hairline divider, and
-     *  shares the same selection pill/text-inversion treatment so the
-     *  highlight reads consistently across both categories. */
-    private void refreshKeymapRows() {
-        android.widget.LinearLayout col = keymapColumn;
-        if (col == null) return;
-        int rows = SHORTCUT_LABELS.length;
-        for (int i = 0; i < rows; i++) {
-            View child = col.getChildAt(i);
-            if (!(child instanceof android.widget.LinearLayout)) continue;
-            android.widget.LinearLayout row = (android.widget.LinearLayout) child;
-            boolean sel = (i == keymapSelectedRow);
-            int kc = SHORTCUT_KEYCODES[i];
-            String pkg = keyMap.get(kc);
-
-            // Children inside row: tag(0), name(1), icon(2), val(3)
-            TextView name  = (TextView)  row.getChildAt(1);
-            ImageView icon = (ImageView) row.getChildAt(2);
-            TextView val   = (TextView)  row.getChildAt(3);
-
-            if (pkg == null) {
-                val.setText(R.string.keymap_not_assigned);
-                // Truly unassigned: no icon column at all. GONE collapses
-                // the slot so the val text sits at the natural left
-                // position. (Different from the assigned-but-bitmap-not-
-                // loaded case below, which reserves the slot via
-                // INVISIBLE so the val never shifts when the bitmap
-                // eventually arrives.)
-                icon.setVisibility(View.GONE);
-                icon.setImageDrawable(null);
-            } else {
-                AppInfo a = findAppByPackage(pkg);
-                val.setText(a != null ? a.label : pkg);
-                Bitmap bmp = (iconCache != null) ? iconCache.get(pkg) : null;
-                if (bmp != null) {
-                    icon.setImageBitmap(bmp);
-                    icon.setVisibility(View.VISIBLE);
-                } else {
-                    // Bitmap not in iconCache yet — the icon is being
-                    // loaded asynchronously and {@link #onIconLoaded}
-                    // will fire {@link #refreshKeymapRows} when the
-                    // bitmap lands. Keep the icon slot at INVISIBLE
-                    // (reserves layout space, doesn't draw) so the val
-                    // text does NOT shift between "loading" and
-                    // "loaded" states. Without this, the val text
-                    // moved sideways every time an async icon arrived
-                    // — a visible jiggle inside the keymap card.
-                    icon.setImageDrawable(null);
-                    icon.setVisibility(View.INVISIBLE);
-                }
-            }
-
-            // Inverted highlight: selected row becomes a bright plate with
-            // dark text; idle rows are transparent with light text. The
-            // same colour ramp as the toolbar buttons (idle 0xCCFFFFFF,
-            // focused 0xFF111114).
-            if (sel) {
-                name.setTextColor(0xFF111114);
-                val .setTextColor(pkg == null ? 0xAA111114 : 0xFF111114);
-            } else {
-                name.setTextColor(0xCCFFFFFF);
-                val .setTextColor(pkg == null ? 0x66FFFFFF : 0xC0FFFFFF);
-            }
-
-            android.graphics.drawable.Drawable rbg = row.getBackground();
-            if (rbg instanceof android.graphics.drawable.GradientDrawable) {
-                ((android.graphics.drawable.GradientDrawable) rbg)
-                        .setColor(sel ? 0xFFEFEFEF : Color.TRANSPARENT);
-            }
-
-            // v1.3.3: indicator-glyph colour inversion. The hamburger and
-            // CC glyphs in particular need to flip from warm white to
-            // near-black when the row is selected so they stay visible
-            // against the bright frosted-white selection pill (the
-            // v1.3.2 "white selector blends, icon not visible" issue).
-            // The colour discs ignore the selected flag — they keep
-            // their saturated brand colour in both states. setSelectedState
-            // is a no-op when the state hasn't actually changed, so the
-            // call is safe to fire on every refresh.
-            View first = row.getChildAt(0);
-            if (first instanceof ShortcutTagView) {
-                ((ShortcutTagView) first).setSelectedState(sel);
-            }
-        }
-
-        // The manage-hidden-apps row that used to sit at index `rows` was
-        // removed in v1.3.0; it now lives in the unified settings panel.
-        // No special-case repaint needed here — the slot loop above
-        // covers every visible row.
-
-        // Equalise row widths to the widest row so the menu is exactly as
-        // wide as it needs to be (no dead space) AND the selection pill
-        // aligns across all rows. Only re-measure when bindings/labels
-        // might have changed — selection-only repaints (every UP/DOWN
-        // press) skip this entirely, saving 7 view-measure passes per
-        // navigation event.
-        if (keymapRowsNeedEqualize) {
-            equalizeKeymapRowWidths(col, rows);
-            keymapRowsNeedEqualize = false;
-        }
-    }
-
-    /** Measure every selectable row in the slot column and snap them all to
-     *  the widest measured width. Iterates every LinearLayout child (the
-     *  6 key rows). v1.3.0 dropped the divider + manage row from this
-     *  column — the {@code instanceof LinearLayout} check is kept as a
-     *  defensive guard against future structural drift. Called from
-     *  refreshKeymapRows() after every binding/text change so the menu
-     *  auto-fits the longest app label.
-     *
-     *  <p>v1.4.1 audit: dropped the per-row "restore prevW between
-     *  measure and final-set" pass. The intermediate width does not
-     *  affect the final result — every row is unconditionally re-snapped
-     *  to {@code max} below — so restoring it just to overwrite it on
-     *  the next pass was one wasted {@code setLayoutParams} call (and
-     *  the {@code requestLayout} cascade it triggers) per row. With
-     *  6 rows that's 6 cascades saved per re-equalize. Functional
-     *  output unchanged. */
-    private void equalizeKeymapRowWidths(android.widget.LinearLayout col, int rows) {
-        int spec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
-        int n = col.getChildCount();
-        int max = 0;
-        // Pass 1: force every row to WRAP_CONTENT (so {@code measure()}
-        // reports the natural intrinsic width, not the previous
-        // {@code max}-snapped width), then measure. We DO NOT restore
-        // here — pass 2 below sets every row to the new {@code max}
-        // unconditionally, so the WRAP_CONTENT state is transient by
-        // construction.
-        for (int i = 0; i < n; i++) {
-            View child = col.getChildAt(i);
-            if (!(child instanceof android.widget.LinearLayout)) continue;
-            ViewGroup.LayoutParams clp = child.getLayoutParams();
-            if (clp != null && clp.width != ViewGroup.LayoutParams.WRAP_CONTENT) {
-                clp.width = ViewGroup.LayoutParams.WRAP_CONTENT;
-                child.setLayoutParams(clp);
-            }
-            child.measure(spec, spec);
-            int w = child.getMeasuredWidth();
-            if (w > max) max = w;
-        }
-        if (max <= 0) return;
-        // Pass 2: snap every row whose width differs from the new max.
-        // Same as before; only the in-between restore pass was redundant.
-        for (int i = 0; i < n; i++) {
-            View child = col.getChildAt(i);
-            if (!(child instanceof android.widget.LinearLayout)) continue;
-            ViewGroup.LayoutParams clp = child.getLayoutParams();
-            if (clp == null || clp.width == max) continue;
-            clp.width = max;
-            child.setLayoutParams(clp);
-        }
-    }
-
-    // ── App picker mode ──────────────────────────────────────────
-
-    /** Enter picker mode for the slot at rowIdx. Hides the slot list,
-     *  rebuilds the chip strip from the current appList (only when its
-     *  size has changed since the last build — chips are cheap but
-     *  rebuilding ~50 of them on every reopen is needless GC pressure),
-     *  and selects the chip matching the current binding (or "None" if
-     *  unassigned). */
-    private void enterAppPicker(int rowIdx) {
-        if (keymapColumn == null || keymapPickerView == null) return;
-        keymapPickerSlotRow = rowIdx;
-        TextView pt = keymapPickerTitle;
-        if (pt != null) {
-            pt.setText(getString(R.string.keymap_pick_app_for, SHORTCUT_LABELS[rowIdx]));
-        }
-        if (keymapPickerBuiltSize != appList.size()) {
-            rebuildPickerChips();
-            keymapPickerBuiltSize = appList.size();
-        } else {
-            // Strip cached from a previous open — top up any chips whose
-            // bitmap was missing from iconCache at build time but has
-            // since been loaded. See refreshHideChipIcons for the same
-            // pattern in the hide-manager strip.
-            refreshPickerChipIcons();
-        }
-        // Pre-select the chip matching the current binding so left/right
-        // navigates from where the user is, not always from the start.
-        // Resolve against the picker's own sorted snapshot — never appList.
-        int kc = SHORTCUT_KEYCODES[rowIdx];
-        String pkg = keyMap.get(kc);
-        int idx = 0; // 0 = "None" sentinel
-        if (pkg != null) {
-            for (int i = 0; i < keymapPickerApps.size(); i++) {
-                if (keymapPickerApps.get(i).packageName.equals(pkg)) { idx = i + 1; break; }
-            }
-        }
-        keymapPickerIdx     = idx;
-        keymapPickerLastIdx = -1;   // force a full repaint on first refresh
-        keymapMode          = KEYMAP_MODE_PICKER;
-        keymapColumn.setVisibility(View.GONE);
-        keymapPickerView.setVisibility(View.VISIBLE);
-        refreshKeymapPicker();
-        // Initial scroll happens after layout — post() so getLeft() of the
-        // selected chip is non-zero.
-        final android.widget.HorizontalScrollView hsv = keymapPickerHsv;
-        if (hsv != null) hsv.post(this::scrollPickerToSelection);
-    }
-
-    /** Cancel the picker without writing anything — return to slot list. */
-    private void exitAppPicker() {
-        keymapMode = KEYMAP_MODE_SLOTS;
-        if (keymapPickerView != null) keymapPickerView.setVisibility(View.GONE);
-        if (keymapColumn     != null) keymapColumn    .setVisibility(View.VISIBLE);
-    }
-
-    /** Commit the highlighted chip as the binding for the current slot row,
-     *  save to SharedPreferences, refresh the slot-list display, and return
-     *  to slot mode. Idx 0 = "None" → delete the binding. */
-    private void commitAppPickerSelection() {
-        int kc = SHORTCUT_KEYCODES[keymapPickerSlotRow];
-        if (keymapPickerIdx <= 0) {
-            keyMap.delete(kc);
-        } else {
-            int appIdx = keymapPickerIdx - 1;
-            // Resolve through the picker's sorted snapshot — the chip the
-            // user highlighted ALWAYS maps to this exact app, regardless of
-            // any later home/drawer reorder.
-            if (appIdx >= 0 && appIdx < keymapPickerApps.size()) {
-                keyMap.put(kc, keymapPickerApps.get(appIdx).packageName);
-            }
-        }
-        saveKeyMap();
-        // Slot-row text just changed — schedule a re-measure on the next
-        // refresh so equalised widths reflect the new app label.
-        keymapRowsNeedEqualize = true;
-        refreshKeymapRows();
-        exitAppPicker();
-    }
-
-    /** Rebuild the chip strip from a stable, alphabetically-sorted snapshot
-     *  of {@link #appList}. Called when the app-list size changes since the
-     *  last build (see enterAppPicker) or when a package broadcast / reconcile
-     *  invalidates the cache — NOT on every reopen. The picker order is
-     *  intentionally INDEPENDENT of the home/drawer order: reordering apps on
-     *  the shelf or in the drawer never changes which chip maps to which
-     *  package, so a binding can't drift onto the wrong app. */
-    private void rebuildPickerChips() {
-        android.widget.LinearLayout strip = keymapPickerStrip;
-        if (strip == null) return;
-        strip.removeAllViews();
-        // Stable alphabetical snapshot — the single source of truth for the
-        // chip order AND for every package lookup the picker performs.
-        keymapPickerApps.clear();
-        keymapPickerApps.addAll(appList);
-        Collections.sort(keymapPickerApps,
-                (a, b) -> String.CASE_INSENSITIVE_ORDER.compare(a.label, b.label));
-        // First chip is the "Not assigned" sentinel — always present so the
-        // user can clear a binding from the picker without a separate gesture.
-        addPickerChip(strip, getString(R.string.keymap_not_assigned), null, true);
-        for (int i = 0; i < keymapPickerApps.size(); i++) {
-            AppInfo a = keymapPickerApps.get(i);
-            // TV inputs have no app icon in the cache — draw a small input
-            // glyph so the chip isn't blank. Apps use their cached round icon.
-            Bitmap b = (iconCache != null) ? iconCache.get(a.packageName) : null;
-            if (b == null && a.tvInputId != null) {
-                b = IconRenderer.generateInputGlyphIcon(dp(20), density);
-            }
-            addPickerChip(strip, a.label, b, false);
-        }
-    }
-
-    /** Mirror of {@link #refreshHideChipIcons} for the keymap picker strip.
-     *  The picker has a leading "Not assigned" sentinel chip with no
-     *  ImageView, so chip i in the strip corresponds to keymapPickerApps[i-1]. */
-    private void refreshPickerChipIcons() {
-        android.widget.LinearLayout strip = keymapPickerStrip;
-        if (strip == null || iconCache == null) return;
-        int n = Math.min(strip.getChildCount() - 1, keymapPickerApps.size());
-        for (int i = 0; i < n; i++) {
-            View chip = strip.getChildAt(i + 1); // +1 skips the sentinel
-            if (!(chip instanceof android.widget.LinearLayout)) continue;
-            android.widget.LinearLayout cl = (android.widget.LinearLayout) chip;
-            // Picker app-chip child layout: [icon (0), label (1)].
-            View v = cl.getChildAt(0);
-            if (!(v instanceof ImageView)) continue;
-            ImageView iv = (ImageView) v;
-            if (iv.getVisibility() == View.VISIBLE && iv.getDrawable() != null) continue;
-            Bitmap b = iconCache.get(keymapPickerApps.get(i).packageName);
-            if (b != null) {
-                iv.setImageBitmap(b);
-                iv.setVisibility(View.VISIBLE);
-            }
-        }
-    }
-
-    /** Live-update hook called from the icon-delivery callbacks in
-     *  {@link #preWarmIcon} / {@link #loadIconAsync}. If either chip strip
-     *  is currently visible, refresh the matching chip's ImageView so the
-     *  user sees the icon appear without having to close and reopen the
-     *  overlay. The keymap slot rows (which can also display a hidden
-     *  app's icon as a binding miniature) are repainted via the cheap
-     *  {@link #refreshKeymapRows} call when in slot mode. */
-    private void onIconLoaded(String pkg, Bitmap bmp) {
-        if (pkg == null || bmp == null) return;
-        // Cheap early-out: skip everything if the keymap overlay isn't on
-        // screen. hideKeymapOverlay leaves the inner sub-views (column /
-        // picker / hide) at their pre-close visibilities, so checking the
-        // top-level overlay is the only reliable "is the user looking at
-        // this right now?" signal.
-        FrameLayout ko = keymapOverlay;
-        if (ko == null || ko.getVisibility() != View.VISIBLE) return;
-        // Hide-manager strip: rows are indexed by hideListApps (the filtered
-        // subset of hidden apps), NOT by appList. Indexing the strip with the
-        // appList index painted the icon onto the wrong hidden row (icon/name
-        // mismatch). Match by package against hideListApps instead.
-        if (keymapMode == KEYMAP_MODE_HIDE) {
-            android.widget.LinearLayout hStrip = keymapHideStrip;
-            if (hStrip != null) {
-                int rows = Math.min(hStrip.getChildCount(), hideListApps.size());
-                for (int i = 0; i < rows; i++) {
-                    if (pkg.equals(hideListApps.get(i).packageName)) {
-                        setChipIcon(hStrip.getChildAt(i), 0, bmp);
-                        break;
-                    }
-                }
-            }
-        }
-        // Picker strip: match by package against the picker's sorted snapshot
-        // (the leading "Not assigned" sentinel offsets chip indices by 1).
-        if (keymapMode == KEYMAP_MODE_PICKER) {
-            android.widget.LinearLayout pStrip = keymapPickerStrip;
-            if (pStrip != null) {
-                for (int i = 0, n = keymapPickerApps.size(); i < n; i++) {
-                    if (pkg.equals(keymapPickerApps.get(i).packageName)) {
-                        if ((i + 1) < pStrip.getChildCount())
-                            setChipIcon(pStrip.getChildAt(i + 1), 0, bmp);
-                        break;
-                    }
-                }
-            }
-        }
-        // Slot rows: only when the slot list is the active sub-mode AND
-        // the just-loaded package is actually bound to a slot. Without
-        // the binding check the slot card is repainted on every icon
-        // delivery during the cold-start icon flood (~50 deliveries on
-        // a typical TV) — each repaint walks all 6 rows, re-checks the
-        // bitmap cache, and re-mutates colours / GradientDrawable
-        // backgrounds. Most of those repaints are pure noise because
-        // the package whose icon just landed isn't shown anywhere on
-        // the slot card. The size of keyMap is bounded by the
-        // SHORTCUT_KEYCODES.length (6) so the inner scan is constant
-        // work per delivery.
-        if (keymapMode == KEYMAP_MODE_SLOTS) {
-            boolean bound = false;
-            for (int i = 0, n = keyMap.size(); i < n; i++) {
-                if (pkg.equals(keyMap.valueAt(i))) { bound = true; break; }
-            }
-            if (bound) refreshKeymapRows();
-        }
-    }
-
-    /** Set the bitmap on an ImageView at a fixed child index inside a chip
-     *  LinearLayout. Used by {@link #onIconLoaded} to top up a single
-     *  chip's icon without touching its other state. */
-    private void setChipIcon(View chip, int childIdx, Bitmap bmp) {
-        if (!(chip instanceof android.widget.LinearLayout)) return;
-        android.widget.LinearLayout cl = (android.widget.LinearLayout) chip;
-        View v = cl.getChildAt(childIdx);
-        if (!(v instanceof ImageView)) return;
-        ImageView iv = (ImageView) v;
-        iv.setImageBitmap(bmp);
-        iv.setVisibility(View.VISIBLE);
-    }
-
-    private void addPickerChip(android.widget.LinearLayout strip,
-                               String label, Bitmap icon, boolean isNone) {
-        android.widget.LinearLayout chip = new android.widget.LinearLayout(this);
-        chip.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        chip.setGravity(Gravity.CENTER_VERTICAL);
-        chip.setPadding(dp(10), dp(7), dp(12), dp(7));
-        android.graphics.drawable.GradientDrawable bg =
-                new android.graphics.drawable.GradientDrawable();
-        bg.setColor(Color.TRANSPARENT);
-        bg.setCornerRadius(dp(10));
-        chip.setBackground(bg);
-
-        // Icon slot: present for app chips. Cache miss at build time
-        // uses INVISIBLE (reserves layout space, doesn't draw) so a
-        // later icon delivery via {@link #setChipIcon} flips visibility
-        // VISIBLE without changing the chip's measured width. See the
-        // {@link #addHideRow} javadoc for the visual rationale — the
-        // GONE → VISIBLE alternative made chips visibly resize on
-        // every async icon load and shifted neighbours along the strip.
-        if (!isNone) {
-            ImageView iv = new ImageView(this);
-            if (icon != null) { iv.setImageBitmap(icon); iv.setVisibility(View.VISIBLE); }
-            else              { iv.setVisibility(View.INVISIBLE); }
-            clipCircular(iv);   // round small icon
-            android.widget.LinearLayout.LayoutParams ivLp =
-                    new android.widget.LinearLayout.LayoutParams(dp(20), dp(20));
-            ivLp.setMarginEnd(dp(7));
-            chip.addView(iv, ivLp);
-        }
-
-        TextView tv = new TextView(this);
-        tv.setText(label);
-        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12);
-        tv.setTypeface(Typeface.create(isNone ? "sans-serif" : "sans-serif-medium",
-                Typeface.NORMAL));
-        tv.setTextColor(0x99FFFFFF);
-        tv.setSingleLine(true);
-        tv.setEllipsize(TextUtils.TruncateAt.END);
-        tv.setMaxWidth(dp(150));
-        chip.addView(tv);
-
-        android.widget.LinearLayout.LayoutParams clp =
-                new android.widget.LinearLayout.LayoutParams(WRAP, WRAP);
-        clp.setMarginEnd(dp(7));
-        strip.addView(chip, clp);
-    }
-
-    /** Repaint chip styles to reflect the current selection and scroll the
-     *  selected chip into the viewport.
-     *
-     *  Two paint modes:
-     *    • prev < 0 → first paint after entering picker mode. We must do a
-     *      FULL sweep here, instantly resetting every chip's pill colour /
-     *      text colour / scale to the idle state and then highlighting only
-     *      the current one. This is the fix for the "2 or 3 selectors at
-     *      once" bug: previous picker sessions left their selected chip
-     *      scaled-up + bright-pilled, and the cheap two-chip diff path
-     *      below could not undo those stale highlights.
-     *    • prev ≥ 0 → in-session navigation. Only the two chips that
-     *      changed are touched (animated), keeping per-keypress work O(1). */
-    private void refreshKeymapPicker() {
-        android.widget.LinearLayout strip = keymapPickerStrip;
-        if (strip == null) return;
-        int n = strip.getChildCount();
-        if (n == 0) return;
-        int prev = keymapPickerLastIdx;
-        int curr = keymapPickerIdx;
-        if (prev < 0) {
-            // Full reset — instant (no animation) so we don't trigger N
-            // simultaneous spring animations across the whole strip.
-            for (int i = 0; i < n; i++) {
-                if (i == curr) continue;
-                paintPickerChip(strip.getChildAt(i), false, false);
-            }
-            if (curr >= 0 && curr < n) {
-                // Animate just the new selection in for a subtle pop.
-                paintPickerChip(strip.getChildAt(curr), true, true);
-            }
-        } else if (prev != curr) {
-            if (prev < n) paintPickerChip(strip.getChildAt(prev), false, true);
-            if (curr >= 0 && curr < n) paintPickerChip(strip.getChildAt(curr), true, true);
-        }
-        // prev == curr (and ≥ 0): nothing visual changed — skip work.
-        keymapPickerLastIdx = curr;
-        scrollPickerToSelection();
-    }
-
-    private void paintPickerChip(View chip, boolean sel, boolean animate) {
-        if (chip == null) return;
-        // Inverted pill: selected chip is bright frosted-white with
-        // dark text; idle chips are transparent with light text. Same
-        // language as the slot rows and the toolbar buttons.
-        android.graphics.drawable.Drawable bgd = chip.getBackground();
-        if (bgd instanceof android.graphics.drawable.GradientDrawable) {
-            ((android.graphics.drawable.GradientDrawable) bgd)
-                    .setColor(sel ? 0xFFEFEFEF : Color.TRANSPARENT);
-        }
-        if (chip instanceof android.widget.LinearLayout) {
-            android.widget.LinearLayout cl = (android.widget.LinearLayout) chip;
-            View last = cl.getChildAt(cl.getChildCount() - 1);
-            if (last instanceof TextView) {
-                ((TextView) last).setTextColor(sel ? 0xFF111114 : 0x99FFFFFF);
-            }
-        }
-        chip.animate().cancel();
-        float targetScale = sel ? 1.05f : 1f;
-        if (animate) {
-            chip.animate()
-                    .scaleX(targetScale).scaleY(targetScale)
-                    .setDuration(140)
-                    .setInterpolator(FOCUS_EASE)
-                    .start();
-        } else {
-            chip.setScaleX(targetScale);
-            chip.setScaleY(targetScale);
-        }
-    }
-
-    /** Auto-scroll the horizontal strip so the selected chip is visible
-     *  with a small margin. Smooth-scroll keeps the focus motion premium. */
-    private void scrollPickerToSelection() {
-        android.widget.HorizontalScrollView hsv = keymapPickerHsv;
-        android.widget.LinearLayout strip = keymapPickerStrip;
-        if (hsv == null || strip == null) return;
-        if (keymapPickerIdx < 0 || keymapPickerIdx >= strip.getChildCount()) return;
-        View chip = strip.getChildAt(keymapPickerIdx);
-        if (chip == null) return;
-        if (chip.getWidth() == 0) {
-            // Layout hasn't run yet — try again next frame.
-            hsv.post(this::scrollPickerToSelection);
-            return;
-        }
-        int chipLeft  = chip.getLeft();
-        int chipRight = chip.getRight();
-        int viewLeft  = hsv.getScrollX();
-        int viewRight = viewLeft + hsv.getWidth();
-        int margin    = dp(40);
-        if (chipLeft < viewLeft + margin) {
-            hsv.smoothScrollTo(Math.max(0, chipLeft - margin), 0);
-        } else if (chipRight > viewRight - margin) {
-            hsv.smoothScrollTo(chipRight - hsv.getWidth() + margin, 0);
-        }
-    }
-
-    /** D-pad navigation inside the overlay. Routes by current mode:
-     *
-     *  SLOT mode:
-     *    UP/DOWN — move slot selection
-     *    OK      — enter picker for the selected slot
-     *    BACK    — close the overlay
-     *
-     *  PICKER mode:
-     *    LEFT/RIGHT — move chip selection (auto-scrolls)
-     *    OK         — commit the chip and return to slot mode
-     *    BACK       — cancel and return to slot mode
-     *
-     *  All other keys are swallowed so unmapped remote buttons don't
-     *  bleed through and trigger their (potentially mapped) shortcut
-     *  while the user is configuring shortcuts. */
-    private boolean handleKeymapOverlayKey(KeyEvent ev) {
-        if (ev.getAction() != KeyEvent.ACTION_DOWN) {
-            // Eat KEY_UP only for keys we actually consume on KEY_DOWN. Volume,
-            // power, and the system keys below stay routed to the platform so
-            // the user can still control the device while configuring shortcuts.
-            return !isLetThroughKey(ev.getKeyCode());
-        }
-        int kc = ev.getKeyCode();
-        // Volume / mute / power / system keys must keep working even while
-        // the overlay is open — the overlay is a launcher-level dropdown,
-        // not a hardware-blocking modal. Returning false here lets
-        // dispatchKeyEvent fall through to super so the platform delivers
-        // the key to its global handler (AudioService, PowerManager, etc.).
-        if (isLetThroughKey(kc)) return false;
-        if (keymapMode == KEYMAP_MODE_PICKER) return handleKeymapPickerKey(kc);
-        if (keymapMode == KEYMAP_MODE_HIDE)   return handleKeymapHideKey(kc);
-        return handleKeymapSlotsKey(kc);
-    }
-
-    /** Keys the keymap overlay must NOT swallow. Volume / mute / power are
+    /** Keys an open overlay must NOT swallow. Volume / mute / power are
      *  device-control concerns the launcher has no business eating; HOME
      *  already delivers via the platform's HOME route (we are HOME) so
      *  letting it through is harmless and consistent. */
@@ -9602,337 +7917,6 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    private boolean handleKeymapSlotsKey(int kc) {
-        // 6 key bindings only — the v1.2.x "manage hidden apps" 7th row
-        // moved to the unified settings panel in v1.3.0.
-        int rows = SHORTCUT_LABELS.length;
-        switch (kc) {
-            case KeyEvent.KEYCODE_DPAD_UP:
-                keymapSelectedRow = (keymapSelectedRow - 1 + rows) % rows;
-                refreshKeymapRows(); return true;
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                keymapSelectedRow = (keymapSelectedRow + 1) % rows;
-                refreshKeymapRows(); return true;
-            case KeyEvent.KEYCODE_DPAD_CENTER:
-            case KeyEvent.KEYCODE_ENTER:
-            case KeyEvent.KEYCODE_BUTTON_A:
-                enterAppPicker(keymapSelectedRow);
-                return true;
-            case KeyEvent.KEYCODE_BACK:
-            case KeyEvent.KEYCODE_ESCAPE:
-                hideKeymapOverlay(); return true;
-        }
-        // Swallow everything else — see method javadoc.
-        return true;
-    }
-
-    private boolean handleKeymapPickerKey(int kc) {
-        android.widget.LinearLayout strip = keymapPickerStrip;
-        int n = strip == null ? 0 : strip.getChildCount();
-        switch (kc) {
-            case KeyEvent.KEYCODE_DPAD_LEFT:
-                if (n > 0) keymapPickerIdx = Math.max(0, keymapPickerIdx - 1);
-                refreshKeymapPicker(); return true;
-            case KeyEvent.KEYCODE_DPAD_RIGHT:
-                if (n > 0) keymapPickerIdx = Math.min(n - 1, keymapPickerIdx + 1);
-                refreshKeymapPicker(); return true;
-            case KeyEvent.KEYCODE_DPAD_CENTER:
-            case KeyEvent.KEYCODE_ENTER:
-            case KeyEvent.KEYCODE_BUTTON_A:
-                commitAppPickerSelection(); return true;
-            case KeyEvent.KEYCODE_BACK:
-            case KeyEvent.KEYCODE_ESCAPE:
-                exitAppPicker(); return true;
-        }
-        // Swallow everything else — see handleKeymapOverlayKey javadoc.
-        return true;
-    }
-
-    // ── Hide-manager mode ────────────────────────────────────────────────
-    //
-    // Vertical, OK-toggleable list of every installed app inside the same
-    // card that hosts the slot list and picker. Rows are built once per
-    // appList-size change (see keymapHideBuiltSize) and reused across
-    // opens. Toggling repaints only the check mark of the affected row;
-    // the shelf is re-filtered exactly once when the overlay is closed
-    // (see hideKeymapOverlay) so a heavy session of multiple toggles
-    // doesn't trigger N shelf rebuilds.
-
-    /** Enter hide mode — swap the slot list for the hide chip strip,
-     *  rebuild chips on first open / after a package change, and pre-select
-     *  the first chip. Mirrors enterAppPicker exactly so the UX feels
-     *  identical between the two card sub-modes. */
-    private void enterHideManager() {
-        if (keymapColumn == null || keymapHideView == null) return;
-        // The hidden-apps list depends on the hiddenApps SET (not appList
-        // size), and it's small, so just rebuild it on every open — cheap and
-        // always correct after a hide/unhide or package change.
-        buildHideChips();
-        int n = hideListApps.size();
-        keymapHideIdx     = n > 0 ? 0 : -1;
-        keymapHideLastIdx = -1;       // force a full repaint on first refresh
-        keymapMode        = KEYMAP_MODE_HIDE;
-        keymapColumn   .setVisibility(View.GONE);
-        if (keymapPickerView != null) keymapPickerView.setVisibility(View.GONE);
-        keymapHideView .setVisibility(View.VISIBLE);
-        refreshHideStrip();
-        // Initial scroll happens after layout — post() so getTop() of the
-        // selected row is valid.
-        final android.widget.ScrollView sv = keymapHideScroll;
-        if (sv != null) sv.post(this::scrollHideToSelection);
-    }
-
-    /** Cancel the hide manager and return to slot mode. The shelf is
-     *  re-filtered only on overlay close (see hideKeymapOverlay) so
-     *  exiting hide mode without closing the overlay leaves the shelf
-     *  alone — cheap, and avoids a flicker behind the dim.
-     *
-     *  <p>v1.3.0: when the user entered HIDE directly from the settings
-     *  panel (the "Manage hidden apps" row), Back from HIDE should NOT
-     *  drop the user into the SLOTS list (which the user never opened
-     *  and doesn't expect to see). The
-     *  {@link #hideManagerSkipSlotsOnExit} flag — set in
-     *  {@link #activateSettingsRow} alongside
-     *  {@link #keymapOpenedFromSettings} — short-circuits the SLOTS
-     *  return path and dismisses the keymap card directly, which then
-     *  re-opens the settings panel via the existing keymap → settings
-     *  hand-off (so the user lands at "settings panel, Manage hidden
-     *  apps row selected"). */
-    private void exitHideManager() {
-        if (hideManagerSkipSlotsOnExit) {
-            hideManagerSkipSlotsOnExit = false;
-            hideKeymapOverlay();
-            return;
-        }
-        keymapMode = KEYMAP_MODE_SLOTS;
-        if (keymapHideView != null) keymapHideView.setVisibility(View.GONE);
-        if (keymapColumn   != null) keymapColumn  .setVisibility(View.VISIBLE);
-        // Land focus back on the row the user came from. Pre-v1.3.0 this
-        // was SHORTCUT_LABELS.length (the manage-hidden-apps 7th row),
-        // but that row is now in the settings panel — fall back to the
-        // first slot row when re-entering SLOTS from HIDE within the
-        // keymap card itself.
-        keymapSelectedRow = 0;
-        refreshKeymapRows();
-    }
-
-    /** Build the hide-manager chip strip from the current appList. Called
-     *  only when the app list size has changed since the last build, or
-     *  when a package broadcast invalidates the cache. Each chip is the
-     *  same horizontal LinearLayout shape used by the keymap picker:
-     *  [icon (20dp)] [label]. The hidden flag is encoded entirely as a
-     *  paint flag on the label TextView (Paint.STRIKE_THRU_TEXT_FLAG),
-     *  so toggling state is a single setPaintFlags() call — no view
-     *  insert/remove churn, no visibility flip, no allocation. */
-    private void buildHideChips() {
-        android.widget.LinearLayout strip = keymapHideStrip;
-        if (strip == null) return;
-        strip.removeAllViews();
-        hideListApps.clear();
-        // Only hidden apps appear here, in stable ALPHABETICAL order — row
-        // i ↔ hideListApps.get(i). The order is independent of the
-        // home/drawer order so it never shifts under a reorder, and every
-        // consumer (toggle, icon top-up, live icon delivery) resolves
-        // through this same list by package.
-        for (int i = 0; i < appList.size(); i++) {
-            AppInfo a = appList.get(i);
-            if (hiddenApps.contains(a.packageName)) hideListApps.add(a);
-        }
-        Collections.sort(hideListApps,
-                (a, b) -> String.CASE_INSENSITIVE_ORDER.compare(a.label, b.label));
-        for (int i = 0; i < hideListApps.size(); i++) {
-            AppInfo a = hideListApps.get(i);
-            // TV inputs have no cached app icon — use a small input glyph.
-            Bitmap b = (iconCache != null) ? iconCache.get(a.packageName) : null;
-            if (b == null && a.tvInputId != null) {
-                b = IconRenderer.generateInputGlyphIcon(dp(22), density);
-            }
-            addHideRow(strip, a.label, b);
-        }
-        if (hideListApps.isEmpty()) {
-            // Non-selectable placeholder so the card never collapses to a
-            // bare header. keymapHideIdx stays -1 (set by the caller) so the
-            // nav/toggle handlers treat the list as empty.
-            addHidePlaceholderRow(strip, getString(R.string.keymap_hide_empty));
-        }
-        keymapHideBuiltSize = appList.size();
-    }
-
-    /** A single non-interactive row used as the hidden-apps empty state. */
-    private void addHidePlaceholderRow(android.widget.LinearLayout list, String text) {
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-        tv.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        tv.setTextColor(0x80FFFFFF);
-        tv.setSingleLine(true);
-        tv.setPadding(dp(10), dp(7), dp(12), dp(7));
-        android.widget.LinearLayout.LayoutParams lp =
-                new android.widget.LinearLayout.LayoutParams(WRAP, dp(HIDE_ROW_H_DP));
-        list.addView(tv, lp);
-    }
-
-    /** Walk the existing hide-manager chip strip and update any chip whose
-     *  ImageView is hidden (icon was null at build time) with the bitmap
-     *  now in iconCache. The strip is built once per app-list-size change
-     *  to avoid view churn on every reopen, but the underlying iconCache
-     *  populates asynchronously and lazily — so a chip built before the
-     *  icon was loaded would otherwise stay icon-less for the launcher's
-     *  lifetime. The fix is allocation-free: each chip already has the
-     *  ImageView slot reserved (kept GONE for layout consistency); we just
-     *  toggle visibility and set the bitmap. */
-    private void refreshHideChipIcons() {
-        android.widget.LinearLayout strip = keymapHideStrip;
-        if (strip == null || iconCache == null) return;
-        int n = Math.min(strip.getChildCount(), hideListApps.size());
-        for (int i = 0; i < n; i++) {
-            View chip = strip.getChildAt(i);
-            if (!(chip instanceof android.widget.LinearLayout)) continue;
-            android.widget.LinearLayout cl = (android.widget.LinearLayout) chip;
-            // Hide chip child layout: [icon (0), label (1)].
-            View v = cl.getChildAt(0);
-            if (!(v instanceof ImageView)) continue;
-            ImageView iv = (ImageView) v;
-            if (iv.getVisibility() == View.VISIBLE && iv.getDrawable() != null) continue;
-            Bitmap b = iconCache.get(hideListApps.get(i).packageName);
-            if (b != null) {
-                iv.setImageBitmap(b);
-                iv.setVisibility(View.VISIBLE);
-            }
-        }
-    }
-
-    /** Build one hide-manager <em>row</em> (v1.5.0 vertical list): a round
-     *  app icon + label, full row width so the selection pill spans it. The
-     *  hidden flag is applied later by {@link #paintHideRow} as a
-     *  strike-through on the label. Mirrors the button-shortcut slot rows. */
-    private void addHideRow(android.widget.LinearLayout list,
-                            String label, Bitmap icon) {
-        android.widget.LinearLayout row = new android.widget.LinearLayout(this);
-        row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(7), dp(12), dp(7));
-        android.graphics.drawable.GradientDrawable bg =
-                new android.graphics.drawable.GradientDrawable();
-        bg.setColor(Color.TRANSPARENT);
-        bg.setCornerRadius(dp(9));
-        row.setBackground(bg);
-
-        // Round app icon. The slot is always present (INVISIBLE on a cache
-        // miss) so the label never shifts when the bitmap lands.
-        ImageView iv = new ImageView(this);
-        if (icon != null) { iv.setImageBitmap(icon); iv.setVisibility(View.VISIBLE); }
-        else              { iv.setVisibility(View.INVISIBLE); }
-        clipCircular(iv);
-        android.widget.LinearLayout.LayoutParams ivLp =
-                new android.widget.LinearLayout.LayoutParams(dp(22), dp(22));
-        ivLp.setMarginEnd(dp(10));
-        row.addView(iv, ivLp);
-
-        TextView tv = new TextView(this);
-        tv.setText(label);
-        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-        tv.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        tv.setTextColor(0x99FFFFFF);
-        tv.setSingleLine(true);
-        tv.setEllipsize(TextUtils.TruncateAt.END);
-        // WRAP + maxWidth: short names keep the row (and the whole panel)
-        // compact; long names ellipsize at the cap so no name can blow the
-        // card out or add variable dead space.
-        tv.setMaxWidth(dp(HIDE_LABEL_MAX_W_DP));
-        android.widget.LinearLayout.LayoutParams tvLp =
-                new android.widget.LinearLayout.LayoutParams(WRAP, WRAP);
-        row.addView(tv, tvLp);
-
-        android.widget.LinearLayout.LayoutParams rlp =
-                new android.widget.LinearLayout.LayoutParams(MATCH, dp(HIDE_ROW_H_DP));
-        rlp.bottomMargin = dp(2);
-        list.addView(row, rlp);
-    }
-
-    /** Repaint chip styles to reflect current selection AND hidden state.
-     *  Two paint modes (same dispatch pattern as refreshKeymapPicker):
-     *    • prev < 0 → first paint after entering hide mode. Full sweep:
-     *      every chip's pill colour / text colour / strike-through / scale.
-     *    • prev ≥ 0 → in-session navigation. Only the two chips that
-     *      changed selection are repainted. The toggled chip's strike-
-     *      through is updated separately by {@link #toggleSelectedHide}. */
-    private void refreshHideStrip() {
-        android.widget.LinearLayout strip = keymapHideStrip;
-        if (strip == null) return;
-        int n = strip.getChildCount();
-        if (n == 0) return;
-        int prev = keymapHideLastIdx;
-        int curr = keymapHideIdx;
-        // Every row in this list is a hidden app, so there is no per-row
-        // "hidden" distinction to encode — pass hidden=false (no strike).
-        if (prev < 0) {
-            // Full sweep — paint every row's idle state, then highlight the
-            // current one.
-            for (int i = 0; i < n; i++) {
-                paintHideRow(strip.getChildAt(i), i == curr, false, false);
-            }
-        } else if (prev != curr) {
-            if (prev >= 0 && prev < n) paintHideRow(strip.getChildAt(prev), false, false, true);
-            if (curr >= 0 && curr < n) paintHideRow(strip.getChildAt(curr), true,  false, true);
-        }
-        keymapHideLastIdx = curr;
-        scrollHideToSelection();
-    }
-
-    /** Single source of truth for a hide-<em>row</em>'s visual state. Matches
-     *  the slot-row paint: selected → dark text on a bright pill; idle →
-     *  light text on transparent. Hidden adds a strike-through on the label
-     *  so the flag is legible in both states. (No scale — rows aren't chips.) */
-    private void paintHideRow(View row, boolean sel, boolean hidden, boolean animate) {
-        if (row == null) return;
-        android.graphics.drawable.Drawable bgd = row.getBackground();
-        if (bgd instanceof android.graphics.drawable.GradientDrawable) {
-            ((android.graphics.drawable.GradientDrawable) bgd)
-                    .setColor(sel ? 0xFFEFEFEF : Color.TRANSPARENT);
-        }
-        if (row instanceof android.widget.LinearLayout) {
-            android.widget.LinearLayout cl = (android.widget.LinearLayout) row;
-            View last = cl.getChildAt(cl.getChildCount() - 1);
-            if (last instanceof TextView) {
-                TextView tv = (TextView) last;
-                if (sel) tv.setTextColor(0xFF111114);
-                else     tv.setTextColor(hidden ? 0x66FFFFFF : 0x99FFFFFF);
-                int flags = tv.getPaintFlags();
-                if (hidden) flags |=  Paint.STRIKE_THRU_TEXT_FLAG;
-                else        flags &= ~Paint.STRIKE_THRU_TEXT_FLAG;
-                tv.setPaintFlags(flags);
-            }
-        }
-    }
-
-    /** OK on a row in the hidden-apps manager UNHIDES that app (every row in
-     *  this list is a hidden app). Persists the change, re-filters the shelf
-     *  on overlay close (keymapHideDirty), and rebuilds the list so the now-
-     *  visible app drops out — keeping the manager strictly "hidden apps only".
-     *  Hiding is done from the long-press context menu, not here. */
-    private void toggleSelectedHide() {
-        int idx = keymapHideIdx;
-        if (idx < 0 || idx >= hideListApps.size()) return;
-        String pkg = hideListApps.get(idx).packageName;
-        AppInfo unhidden = hideListApps.get(idx);
-        hiddenApps.remove(pkg);
-        saveHiddenApps();
-        // Land the returning app at the FRONT of the drawer rather than letting
-        // it reclaim its old home-row slot (which would bump a current favourite
-        // down into the drawer). Keeps the user's visible home row exactly as it
-        // is and treats unhide as "bring it back into the drawer".
-        repositionUnhiddenIntoDrawer(unhidden);
-        keymapHideDirty = true;
-        // Rebuild the "hidden only" list (the unhidden app is now gone) and
-        // clamp the cursor to the new, shorter list.
-        buildHideChips();
-        int n = hideListApps.size();
-        keymapHideIdx     = n > 0 ? Math.min(idx, n - 1) : -1;
-        keymapHideLastIdx = -1;   // force a full repaint
-        refreshHideStrip();
-    }
-
     /** Re-place a just-unhidden app at the FIRST drawer slot (immediately past
      *  the home segment) instead of leaving it at its old index — which, if
      *  that index fell inside the home row, would push a current favourite out
@@ -9945,8 +7929,8 @@ public class LauncherActivity extends Activity {
      *  {@code hc}, so its new visible rank is exactly the first drawer slot.
      *  When there aren't enough visible apps to fill the home row it simply
      *  lands at the end (still in the home row — unavoidable, and correct).
-     *  The new order is persisted; the shelf/drawer rebuild on the hide-manager
-     *  close (keymapHideDirty) renders it. */
+     *  The new order is persisted; the shelf/drawer rebuild when the
+     *  Hidden apps page closes renders it. */
     private void repositionUnhiddenIntoDrawer(AppInfo app) {
         if (app == null) return;
         int hc = effectiveHomeCount(countVisible(appList));   // app is already un-hidden here
@@ -9960,52 +7944,6 @@ public class LauncherActivity extends Activity {
         }
         appList.add(insertAt, app);
         saveOrder();
-    }
-
-    /** Auto-scroll the vertical list so the selected row stays in view with
-     *  a small margin (v1.5.0 — was a horizontal strip scroll). */
-    private void scrollHideToSelection() {
-        android.widget.ScrollView sv = keymapHideScroll;
-        android.widget.LinearLayout strip = keymapHideStrip;
-        if (sv == null || strip == null) return;
-        if (keymapHideIdx < 0 || keymapHideIdx >= strip.getChildCount()) return;
-        View row = strip.getChildAt(keymapHideIdx);
-        if (row == null) return;
-        if (row.getHeight() == 0) {
-            sv.post(this::scrollHideToSelection);
-            return;
-        }
-        int top    = row.getTop();
-        int bottom = row.getBottom();
-        int viewTop    = sv.getScrollY();
-        int viewBottom = viewTop + sv.getHeight();
-        int margin     = dp(6);
-        if (top < viewTop + margin) {
-            sv.smoothScrollTo(0, Math.max(0, top - margin));
-        } else if (bottom > viewBottom - margin) {
-            sv.smoothScrollTo(0, bottom - sv.getHeight() + margin);
-        }
-    }
-
-    private boolean handleKeymapHideKey(int kc) {
-        int n = hideListApps.size();
-        switch (kc) {
-            case KeyEvent.KEYCODE_DPAD_UP:
-                if (n > 0) keymapHideIdx = Math.max(0, keymapHideIdx - 1);
-                refreshHideStrip(); return true;
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                if (n > 0) keymapHideIdx = Math.min(n - 1, keymapHideIdx + 1);
-                refreshHideStrip(); return true;
-            case KeyEvent.KEYCODE_DPAD_CENTER:
-            case KeyEvent.KEYCODE_ENTER:
-            case KeyEvent.KEYCODE_BUTTON_A:
-                toggleSelectedHide(); return true;
-            case KeyEvent.KEYCODE_BACK:
-            case KeyEvent.KEYCODE_ESCAPE:
-                exitHideManager(); return true;
-        }
-        // Swallow everything else — see handleKeymapOverlayKey javadoc.
-        return true;
     }
 
     private long customIconSourceVersion(String packageName) {
@@ -10552,11 +8490,6 @@ public class LauncherActivity extends Activity {
         if (currentShelf != null) currentShelf.refreshBanner(identity);
         AppDrawer currentDrawer = drawer;
         if (currentDrawer != null) currentDrawer.refreshBanner(identity);
-        // Compact chip rows can hold the old custom image. Rebuild them on
-        // their next open; if one is currently visible, onIconLoaded replaces
-        // its matching bitmap after the fresh icon decode completes.
-        keymapPickerBuiltSize = -1;
-        keymapHideBuiltSize = -1;
         preWarmIcon(app);
     }
 
@@ -10676,14 +8609,7 @@ public class LauncherActivity extends Activity {
             // The fallback TV-input tile draws its label inside the bitmap,
             // so a rename must rebuild that tile as well as the text below it.
             if (app.tvInputId != null) refreshAppArtwork(app);
-            keymapPickerBuiltSize = -1;
-            keymapHideBuiltSize = -1;
-            keymapRowsNeedEqualize = true;
-            rebuildOpenChipStripsAfterReconcile();
-            FrameLayout overlay = keymapOverlay;
-            if (overlay != null && overlay.getVisibility() == View.VISIBLE) {
-                refreshKeymapRows();
-            }
+            refreshSettingsRows();
         }
         showToast(getString(name == null
                 ? R.string.toast_name_reset : R.string.toast_name_set,
@@ -10956,9 +8882,6 @@ public class LauncherActivity extends Activity {
         loadHiddenApps();
         loadCustomNames();
         applyCustomNames(appList);
-        keymapPickerBuiltSize = -1;
-        keymapHideBuiltSize = -1;
-        keymapRowsNeedEqualize = true;
         for (int i = 0, n = appList.size(); i < n; i++) {
             AppInfo app = appList.get(i);
             if (app.tvInputId == null) continue;
@@ -11014,9 +8937,7 @@ public class LauncherActivity extends Activity {
             prefs.edit().putLong(KEY_SLIDESHOW_SEED, slideshowSeed).apply();
         }
         // Sanitise an out-of-range stored duration to Off.
-        boolean legal = false;
-        for (int s : SLIDESHOW_STEPS_SEC) if (s == slideshowDurationSec) { legal = true; break; }
-        if (!legal) slideshowDurationSec = 0;
+        if (!WallpaperModes.isValidInterval(slideshowDurationSec)) slideshowDurationSec = 0;
         // Idle-hide timeout.
         idleHideSec = prefs.getInt(KEY_IDLE_HIDE, 0);
         boolean legalIdle = false;
@@ -11028,25 +8949,6 @@ public class LauncherActivity extends Activity {
      *  and at least one rotation trigger (timer or each-restart) is on. */
     private boolean slideshowActive() {
         return slideshowFolderUri != null && (slideshowDurationSec > 0 || slideshowRestart);
-    }
-
-    /** Human label for the current duration setting. */
-    private String slideshowDurationLabel() {
-        int s = slideshowDurationSec;
-        if (s <= 0)   return "Off";
-        if (s < 60)   return "< " + s + "s >";
-        if (s == 90)  return "< 1.5 min >";
-        if (s % 60 == 0) return "< " + (s / 60) + " min >";
-        return "< " + s + "s >";
-    }
-
-    /** Human label for the idle-hide timeout setting. */
-    private String idleHideLabel() {
-        int s = idleHideSec;
-        if (s <= 0)  return "Off";
-        if (s < 60)  return "< " + s + "s >";
-        if (s % 60 == 0) return "< " + (s / 60) + " min >";
-        return "< " + s + "s >";
     }
 
     /** Whether the media-read permission needed to browse image folders is
@@ -11083,8 +8985,22 @@ public class LauncherActivity extends Activity {
         new Thread(() -> {
             indexSharedStorage();
             final java.util.List<String[]> folders = scanImageFolders();
-            uiHandler.post(() -> { if (!destroyed) showFolderPicker(folders); });
+            uiHandler.post(() -> { if (!destroyed) showSlideshowFolders(folders); });
         }, "wp-folder-scan").start();
+    }
+
+    /** Open the folder list in the settings sheet with the scanned folders. */
+    private void showSlideshowFolders(java.util.List<String[]> folders) {
+        if (folders == null || folders.isEmpty()) {
+            showToast(getString(R.string.toast_slideshow_no_folders));
+            return;
+        }
+        folderPickerData.clear();
+        folderPickerData.addAll(folders);
+        SettingsSheet sheet = settingsSheet;
+        if (sheet == null || !sheet.isShowing()) return;
+        if ("folders".equals(sheet.pageId())) sheet.refresh();
+        else sheet.push(settingsFoldersPage());
     }
 
     /** Ask the media scanner to index shared storage and wait for it, capped
@@ -11121,56 +9037,6 @@ public class LauncherActivity extends Activity {
             refreshBtState();
             showBtPanel();
         }
-    }
-
-    /** Step the duration through {@link #SLIDESHOW_STEPS_SEC}. Persists,
-     *  repaints the indicator, and (re)arms the timer. Turning ON from Off
-     *  shows an image immediately; stepping between intervals only re-arms the
-     *  timer (no flickery re-decode on every press). */
-    private void stepSlideshowDuration(int dir) {
-        int idx = 0;
-        for (int i = 0; i < SLIDESHOW_STEPS_SEC.length; i++) {
-            if (SLIDESHOW_STEPS_SEC[i] == slideshowDurationSec) { idx = i; break; }
-        }
-        int prev = slideshowDurationSec;
-        idx = (idx + dir + SLIDESHOW_STEPS_SEC.length) % SLIDESHOW_STEPS_SEC.length;
-        slideshowDurationSec = SLIDESHOW_STEPS_SEC[idx];
-        prefs.edit().putInt(KEY_SLIDESHOW_DURATION, slideshowDurationSec).apply();
-        // Mutual exclusion: enabling the interval timer turns off "change each restart".
-        if (prev == 0 && slideshowDurationSec != 0 && slideshowRestart) {
-            slideshowRestart = false;
-            prefs.edit().putBoolean(KEY_SLIDESHOW_RESTART, false).apply();
-        }
-        refreshSettingsRows();
-        if (slideshowDurationSec != 0 && slideshowFolderUri == null) {
-            showToast(getString(R.string.toast_slideshow_pick_folder));
-        }
-        if (prev == 0 && slideshowDurationSec != 0) kickSlideshowNow();
-        restartSlideshowTimer();
-    }
-
-    /** Toggle "change on each restart". Persists and repaints; when turned on
-     *  it also shows an image straight away so the user sees it take effect. */
-    private void toggleSlideshowRestart() {
-        slideshowRestart = !slideshowRestart;
-        prefs.edit().putBoolean(KEY_SLIDESHOW_RESTART, slideshowRestart).apply();
-        // Mutual exclusion: enabling "change each restart" turns off the interval timer.
-        if (slideshowRestart && slideshowDurationSec != 0) {
-            slideshowDurationSec = 0;
-            prefs.edit().putInt(KEY_SLIDESHOW_DURATION, 0).apply();
-            restartSlideshowTimer();   // cancels the in-flight postDelayed
-        }
-        refreshSettingsRows();
-        if (slideshowRestart && slideshowFolderUri == null) {
-            showToast(getString(R.string.toast_slideshow_pick_folder));
-        }
-        // Surface an image immediately when turning ON (duration is already 0 here,
-        // either it was always 0 or we just zeroed it above).
-        if (slideshowRestart) kickSlideshowNow();
-    }
-
-    private void toggleSystemWallpaper() {
-        setSystemWallpaper(!systemWallpaper, true);
     }
 
     /** Switch between the system wallpaper, which Android draws behind a
@@ -11589,244 +9455,6 @@ public class LauncherActivity extends Activity {
         // (wallpaper + clock, nothing else).
     }
 
-    // ── Slideshow folder picker overlay ──────────────────────────────────
-
-    /** Show the custom folder picker for the scanned {@code folders}. */
-    private void showFolderPicker(java.util.List<String[]> folders) {
-        if (folders == null || folders.isEmpty()) {
-            showToast(getString(R.string.toast_slideshow_no_folders));
-            return;
-        }
-        folderPickerData.clear();
-        folderPickerData.addAll(folders);
-        if (folderPickerOverlay == null) buildFolderPickerOverlay();
-        if (folderPickerOverlay == null) return;
-        final android.widget.LinearLayout card = folderPickerCard;
-        populateFolderPicker();
-        // Land on the currently-chosen folder if it's still present.
-        folderPickerSel = 0;
-        if (slideshowFolderUri != null) {
-            for (int i = 0; i < folderPickerData.size(); i++) {
-                if (slideshowFolderUri.equals(folderPickerData.get(i)[0])) { folderPickerSel = i; break; }
-            }
-        }
-        refreshFolderPickerRows();
-        ensureOverlayBackdropVisible();
-        folderPickerOverlay.setVisibility(View.VISIBLE);
-        folderPickerOverlay.bringToFront();
-        folderPickerOverlay.requestFocus();
-        scrollFolderPickerToSelection();
-
-        // Anchor below the gear button — same math as the keymap card.
-        if (card != null) anchorCardUnderGear(card, dp(78), dp(20));
-
-        // Drop-down animation: same as keymap / settings card.
-        if (card != null) {
-            card.animate().cancel();
-            card.setAlpha(0f);
-            card.setScaleX(0.94f); card.setScaleY(0.86f);
-            card.setTranslationY(-dp(6));
-            card.post(() -> {
-                if (card != folderPickerCard) return;
-                card.setPivotX(card.getWidth());
-                card.setPivotY(0f);
-                card.animate()
-                        .alpha(1f)
-                        .scaleX(1f).scaleY(1f)
-                        .translationY(0f)
-                        .setDuration(160)
-                        .setInterpolator(MENU_IN)
-                        .withLayer()
-                        .start();
-            });
-        }
-    }
-
-    private void buildFolderPickerOverlay() {
-        FrameLayout r = root; if (r == null) return;
-        FrameLayout ov = new FrameLayout(this) {
-            @Override public boolean onTouchEvent(MotionEvent ev) {
-                if (ev.getAction() == MotionEvent.ACTION_DOWN) {
-                    android.widget.LinearLayout c = folderPickerCard;
-                    if (c != null) {
-                        float x = ev.getX(), y = ev.getY();
-                        float l = c.getX(), t = c.getY();
-                        float rt = l + c.getWidth(), b = t + c.getHeight();
-                        if (x < l || x > rt || y < t || y > b) {
-                            hideFolderPicker(); return true;
-                        }
-                    }
-                }
-                return true;
-            }
-        };
-        ov.setLayoutParams(new FrameLayout.LayoutParams(MATCH, MATCH));
-        ov.setVisibility(View.GONE);
-        ov.setClickable(true);
-        ov.setFocusable(true);
-        ov.setFocusableInTouchMode(true);
-
-        // Match the keymap card exactly: deep slate, 14 dp corners, 1 px rim,
-        // dp(8) padding, dp(10) elevation, dp(8) inner padding.
-        android.widget.LinearLayout card = new android.widget.LinearLayout(this);
-        card.setOrientation(android.widget.LinearLayout.VERTICAL);
-        android.graphics.drawable.GradientDrawable cardBg =
-                new android.graphics.drawable.GradientDrawable();
-        cardBg.setColor(0xF21A1A1F);
-        cardBg.setCornerRadius(dp(14));
-        cardBg.setStroke(1, 0x1AFFFFFF);
-        card.setBackground(cardBg);
-        card.setPadding(dp(8), dp(8), dp(8), dp(8));
-        card.setElevation(dp(10));
-
-        // Title — same style as keymap / hide-manager title.
-        TextView title = new TextView(this);
-        title.setText(R.string.folder_picker_title);
-        title.setTextColor(0xFFEFEFEF);
-        title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setLetterSpacing(0.04f);
-        title.setPadding(dp(4), dp(2), dp(4), dp(8));
-        card.addView(title);
-
-        // Capped ScrollView: wraps short lists, scrolls long ones.
-        final int maxH = Math.max(dp(120), Math.min(dp(368), screenH - dp(140)));
-        android.widget.ScrollView sv = new android.widget.ScrollView(this) {
-            @Override protected void onMeasure(int wSpec, int hSpec) {
-                super.onMeasure(wSpec,
-                        View.MeasureSpec.makeMeasureSpec(maxH, View.MeasureSpec.AT_MOST));
-            }
-        };
-        sv.setVerticalScrollBarEnabled(false);
-        sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        android.widget.LinearLayout colL = new android.widget.LinearLayout(this);
-        colL.setOrientation(android.widget.LinearLayout.VERTICAL);
-        sv.addView(colL, new android.widget.FrameLayout.LayoutParams(MATCH, WRAP));
-        // Fixed card content width: wide enough for a decent folder name +
-        // count, narrow enough to stay compact. Name uses weight=1 to fill
-        // this budget; count sits at the right edge.
-        card.addView(sv, new android.widget.LinearLayout.LayoutParams(dp(220), WRAP));
-
-        // Anchor top-right (same as keymap / settings card).
-        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(WRAP, WRAP);
-        cardLp.gravity = Gravity.TOP | Gravity.END;
-        card.setLayoutParams(cardLp);
-        ov.addView(card);
-        r.addView(ov);
-        folderPickerOverlay = ov;
-        folderPickerCard    = card;
-        folderPickerScroll  = sv;
-        folderPickerCol     = colL;
-    }
-
-    private void populateFolderPicker() {
-        android.widget.LinearLayout col = folderPickerCol;
-        if (col == null) return;
-        col.removeAllViews();
-        for (int i = 0; i < folderPickerData.size(); i++) {
-            String[] f = folderPickerData.get(i);
-            android.widget.LinearLayout row = new android.widget.LinearLayout(this);
-            row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(10), dp(7), dp(10), dp(7));
-            android.graphics.drawable.GradientDrawable rb =
-                    new android.graphics.drawable.GradientDrawable();
-            rb.setCornerRadius(dp(9));
-            rb.setColor(Color.TRANSPARENT);
-            row.setBackground(rb);
-
-            // Name: weight=1 so it fills the space between left edge and
-            // count badge — gives a full-width selector pill. Capped at
-            // dp(160) via maxWidth so a very long folder name never widens
-            // the card; it ellipsises instead.
-            TextView name = new TextView(this);
-            name.setText(f[1]);
-            name.setTextColor(0xCCFFFFFF);
-            name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-            name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            name.setSingleLine(true);
-            name.setEllipsize(TextUtils.TruncateAt.END);
-            android.widget.LinearLayout.LayoutParams nameLp =
-                    new android.widget.LinearLayout.LayoutParams(0, WRAP, 1f);
-            nameLp.setMarginEnd(dp(8));
-            row.addView(name, nameLp);
-
-            // Count: right-aligned, dim, no extra padding needed.
-            TextView count = new TextView(this);
-            count.setText(f[2]);
-            count.setTextColor(0x66FFFFFF);
-            count.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11);
-            count.setSingleLine(true);
-            row.addView(count, new android.widget.LinearLayout.LayoutParams(WRAP, WRAP));
-
-            final int idx = i;
-            row.setClickable(true);
-            row.setOnClickListener(v -> {
-                v.playSoundEffect(SoundEffectConstants.CLICK);
-                folderPickerSel = idx;
-                refreshFolderPickerRows();
-                selectFolder(idx);
-            });
-            android.widget.LinearLayout.LayoutParams rowLp =
-                    new android.widget.LinearLayout.LayoutParams(MATCH, WRAP);
-            rowLp.bottomMargin = dp(2);
-            col.addView(row, rowLp);
-        }
-    }
-
-    private void refreshFolderPickerRows() {
-        android.widget.LinearLayout col = folderPickerCol;
-        if (col == null) return;
-        for (int i = 0; i < col.getChildCount(); i++) {
-            View child = col.getChildAt(i);
-            if (!(child instanceof android.widget.LinearLayout)) continue;
-            boolean sel = (i == folderPickerSel);
-            android.graphics.drawable.Drawable d = child.getBackground();
-            if (d instanceof android.graphics.drawable.GradientDrawable)
-                ((android.graphics.drawable.GradientDrawable) d).setColor(sel ? 0xFFEFEFEF : Color.TRANSPARENT);
-            android.widget.LinearLayout row = (android.widget.LinearLayout) child;
-            View nm = row.getChildAt(0), ct = row.getChildAt(1);
-            if (nm instanceof TextView) ((TextView) nm).setTextColor(sel ? 0xFF111114 : 0xCCFFFFFF);
-            if (ct instanceof TextView) ((TextView) ct).setTextColor(sel ? 0x99111114 : 0x66FFFFFF);
-        }
-    }
-
-    private void scrollFolderPickerToSelection() {
-        final android.widget.ScrollView sv = folderPickerScroll;
-        final android.widget.LinearLayout col = folderPickerCol;
-        if (sv == null || col == null) return;
-        if (folderPickerSel < 0 || folderPickerSel >= col.getChildCount()) return;
-        final View row = col.getChildAt(folderPickerSel);
-        sv.post(() -> {
-            if (row.getHeight() == 0) return;
-            int top = row.getTop(), bottom = row.getBottom();
-            int vt = sv.getScrollY(), vb = vt + sv.getHeight();
-            if (top < vt)        sv.smoothScrollTo(0, top);
-            else if (bottom > vb) sv.smoothScrollTo(0, bottom - sv.getHeight());
-        });
-    }
-
-    private boolean handleFolderPickerKey(int kc) {
-        int n = folderPickerData.size();
-        switch (kc) {
-            case KeyEvent.KEYCODE_DPAD_UP:
-                if (n > 0) folderPickerSel = (folderPickerSel - 1 + n) % n;
-                refreshFolderPickerRows(); scrollFolderPickerToSelection(); return true;
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                if (n > 0) folderPickerSel = (folderPickerSel + 1) % n;
-                refreshFolderPickerRows(); scrollFolderPickerToSelection(); return true;
-            case KeyEvent.KEYCODE_DPAD_CENTER:
-            case KeyEvent.KEYCODE_ENTER:
-            case KeyEvent.KEYCODE_BUTTON_A:
-                selectFolder(folderPickerSel); return true;
-            case KeyEvent.KEYCODE_BACK:
-            case KeyEvent.KEYCODE_ESCAPE:
-                hideFolderPicker(); return true;
-        }
-        if (isLetThroughKey(kc)) return false;
-        return true;
-    }
-
     /** Commit the chosen folder: store its bucket id, start the slideshow.
      *  If the slideshow was completely off (no interval, no each-restart),
      *  auto-enable a sensible default interval so picking a folder visibly
@@ -11843,11 +9471,16 @@ public class LauncherActivity extends Activity {
         slideshowImages    = null;
         android.content.SharedPreferences.Editor ed = prefs.edit()
                 .putString(KEY_SLIDESHOW_FOLDER, bucketId)
+                .putString(KEY_SLIDESHOW_FOLDER_NAME, folderPickerData.get(index)[1])
                 .putInt(KEY_SLIDESHOW_INDEX, 0)
                 .putLong(KEY_SLIDESHOW_SEED, slideshowSeed);
         if (slideshowDurationSec == 0 && !slideshowRestart) {
-            slideshowDurationSec = SLIDESHOW_DEFAULT_SEC;
-            ed.putInt(KEY_SLIDESHOW_DURATION, slideshowDurationSec);
+            int change = rememberedSlideshowChange;
+            slideshowRestart = change == WallpaperModes.EACH_RESTART;
+            slideshowDurationSec = slideshowRestart ? 0
+                    : change > 0 && WallpaperModes.isValidInterval(change) ? change : SLIDESHOW_DEFAULT_SEC;
+            ed.putInt(KEY_SLIDESHOW_DURATION, slideshowDurationSec)
+                    .putBoolean(KEY_SLIDESHOW_RESTART, slideshowRestart);
         }
         if (idleHideSec == 0) {
             idleHideSec = IDLE_HIDE_DEFAULT_SEC;
@@ -11855,27 +9488,13 @@ public class LauncherActivity extends Activity {
         }
         ed.apply();
         setSystemWallpaper(false, false);
-        hideFolderPicker();
+        SettingsSheet sheet = settingsSheet;
+        if (sheet != null && "folders".equals(sheet.pageId())) sheet.back();
         refreshSettingsRows();   // reflect a duration we may have just auto-set
         // Show the first image now and arm the interval timer.
         enumerateSlideshowAsync(this::applyCurrentSlideshowImage);
         restartSlideshowTimer();
         scheduleIdleHide();      // arm idle-hide timer if it was just enabled
-        showToast(getString(R.string.toast_slideshow_folder_set));
-    }
-
-    private void hideFolderPicker() {
-        FrameLayout ov = folderPickerOverlay;
-        if (ov == null) return;
-        ov.setVisibility(View.GONE);
-        dismissOverlayBackdropIfIdle();
-        // Return focus to the home shelf.
-        RecyclingShelfView s = shelf;
-        if (s != null && s.getVisibility() == View.VISIBLE && !appList.isEmpty()) {
-            s.requestFocusOnIndex(Math.max(0, Math.min(s.focusedIndex, s.lastIndex())));
-        } else {
-            View nb = netBtn; if (nb != null) nb.requestFocus();
-        }
     }
 
 
@@ -11911,13 +9530,11 @@ public class LauncherActivity extends Activity {
                 // Picking a single wallpaper means "I want exactly this" — turn
                 // the slideshow off so it can't override the chosen image. The
                 // folder selection is kept so it's easy to re-enable.
-                slideshowDurationSec = 0;
-                slideshowRestart     = false;
-                prefs.edit()
-                        .putInt(KEY_SLIDESHOW_DURATION, 0)
-                        .putBoolean(KEY_SLIDESHOW_RESTART, false)
-                        .apply();
-                uiHandler.removeCallbacks(slideshowTick);
+                if (slideshowActive()) {
+                    rememberedSlideshowChange =
+                            WallpaperModes.changeValue(slideshowDurationSec, slideshowRestart);
+                }
+                stopSlideshowRotation();
                 setSystemWallpaper(false, false);
                 if (wallpaperCtl != null) {
                     wallpaperCtl.resetUserLoadingGuard();
@@ -12210,53 +9827,6 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    /** Compute and apply drop-down anchor margins on a card so it sits
-     *  immediately below the gear toolbar pill, right-edges aligned. The
-     *  settings panel and the keymap card both anchor the same way; this
-     *  helper used to be inlined twice with identical logic, audited
-     *  out in v1.3.3.
-     *
-     *  <p>Falls back to a sensible top/right pair when the gear pill
-     *  hasn't been laid out yet (cold start, configuration change). The
-     *  fallback positions the card at roughly the same place the gear
-     *  would normally sit, so a card that's shown before measure passes
-     *  finish (rare but possible) doesn't land off-screen.
-     *
-     *  <p>Allocations: zero. The two scratch arrays needed for
-     *  {@code getLocationOnScreen} are held as instance fields
-     *  ({@link #anchorMbLoc} / {@link #anchorRootLoc}) and reused
-     *  across every invocation. Called only on the main thread (one
-     *  call per overlay open).
-     *
-     *  @param card                  the card whose LayoutParams will be mutated
-     *  @param defaultTopMarginPx    fallback top margin in px
-     *  @param defaultRightMarginPx  fallback right margin in px */
-    private void anchorCardUnderGear(View card,
-                                     int defaultTopMarginPx,
-                                     int defaultRightMarginPx) {
-        int topMargin   = defaultTopMarginPx;
-        int rightMargin = defaultRightMarginPx;
-        View mb = mapperBtnView;
-        FrameLayout r = root;
-        if (mb != null && r != null && mb.getWidth() > 0) {
-            int[] mbLoc = anchorMbLoc;
-            int[] rLoc  = anchorRootLoc;
-            mb.getLocationOnScreen(mbLoc);
-            r .getLocationOnScreen(rLoc);
-            int mbBottomInRoot = mbLoc[1] - rLoc[1] + mb.getHeight();
-            int mbRightInRoot  = mbLoc[0] - rLoc[0] + mb.getWidth();
-            int rW = r.getWidth() > 0 ? r.getWidth() : screenW;
-            topMargin   = mbBottomInRoot + dp(4);
-            rightMargin = rW - mbRightInRoot;
-            if (rightMargin < dp(8)) rightMargin = dp(8);
-        }
-        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) card.getLayoutParams();
-        lp.gravity     = Gravity.TOP | Gravity.END;
-        lp.topMargin   = topMargin;
-        lp.rightMargin = rightMargin;
-        card.setLayoutParams(lp);
-    }
-
     private int dp(int v) { return Math.round(v * density); }
 
     private void loadLayoutOptions() {
@@ -12295,36 +9865,17 @@ public class LauncherActivity extends Activity {
         cellHpx      = bannerHpx + dp(28);
     }
 
-    /** Clip a small list/chip {@link ImageView} to a circle so the shared
-     *  (rounded-square) cached icon bitmap renders ROUND in the keymap slot
-     *  rows, the app picker, and the hide-apps list — without touching the
-     *  shared {@link #iconCache} (a pure view-level clip, no extra bitmap).
-     *  Used so the chip icons stay the familiar small round app icons while
-     *  the home / drawer tiles use their own larger artwork. */
-    private static void clipCircular(View v) {
-        v.setOutlineProvider(new ViewOutlineProvider() {
-            @Override public void getOutline(View view, Outline outline) {
-                int w = view.getWidth(), h = view.getHeight();
-                int d = Math.min(w, h);
-                int l = (w - d) / 2, t = (h - d) / 2;
-                outline.setOval(l, t, l + d, t + d);
-            }
-        });
-        v.setClipToOutline(true);
-    }
-
-    /** Per-row indicator view for the keymap card slot list. Renders one
+    /** Per-row indicator view for the Button shortcuts page. Renders one
      *  of three glyphs ({@link #GLYPH_DOT} colour disc, {@link
      *  #GLYPH_HAMBURGER} 3-line menu glyph, {@link #GLYPH_CC} closed-
      *  captions badge) at a tiny dp(11) container size, centred via
-     *  cached {@link Rect} bounds for the text variant. The {@code
-     *  selectedState} field flips the hamburger / CC colour from warm
-     *  white to near-black when the row is selected so the glyphs stay
-     *  visible against the bright frosted-white selection pill — the
-     *  v1.3.2 issue where they invisibly blended into the white pill.
+     *  cached {@link Rect} bounds for the text variant. Selection (set by
+     *  the settings sheet through {@link #setSelected}) flips the
+     *  hamburger / CC colour from warm white to near-black so the glyphs
+     *  stay visible against the bright frosted-white selection pill.
      *  Colour discs (the four colour-key rows) keep their saturated
      *  colour in both states because red / green / yellow / blue are
-     *  visible on white anyway. v1.3.3 introduction. */
+     *  visible on white anyway. */
     private final class ShortcutTagView extends View {
         final int kind;
         final int color;
@@ -12340,14 +9891,17 @@ public class LauncherActivity extends Activity {
 
         /** Update the selection state and request a redraw if it
          *  actually changed. Cheap no-op when the row's selection state
-         *  hasn't moved (refreshKeymapRows fires on every UP/DOWN press
-         *  but the state delta is one row in / one row out — most rows
-         *  are stable). */
+         *  hasn't moved. */
         void setSelectedState(boolean s) {
             if (s != selectedState) {
                 selectedState = s;
                 invalidate();
             }
+        }
+
+        @Override public void setSelected(boolean selected) {
+            super.setSelected(selected);
+            setSelectedState(selected);
         }
 
         @Override protected void onDraw(Canvas c) {
@@ -12383,7 +9937,7 @@ public class LauncherActivity extends Activity {
     // GLYPH_CC branch — Typeface.create(String, int) is not guaranteed
     // to be a cache hit on every Android version, so re-resolving it on
     // every redraw of the CC row (every UP/DOWN that crosses it while
-    // the keymap overlay is open) was a small avoidable allocation on
+    // the Button shortcuts page is open) was a small avoidable allocation on
     // an otherwise zero-alloc draw path.
     private static final Typeface CC_GLYPH_TYPEFACE =
             Typeface.create("sans-serif-condensed", Typeface.BOLD);

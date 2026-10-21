@@ -3,6 +3,7 @@ package tv.glass.launcher;
 import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentation;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -176,87 +177,64 @@ public class LauncherCustomizationTest {
     }
 
     @Test
-    public void settingsCategoryHub_groupsExistingActionsAndTitlesPages() {
+    public void settingsSheet_navigatesPagesAndBackReturnsToTheOpeningRow() {
         try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
             scenario.onActivity(activity -> {
                 invoke(activity, "showSettingsPanel");
-                assertSettingsPage(activity, R.string.settings_title_main,
-                        R.string.settings_row_appearance_menu,
-                        R.string.settings_row_wallpaper_menu,
-                        R.string.settings_row_apps_menu,
-                        R.string.settings_row_device_menu,
-                        R.string.settings_row_system_settings);
+                SettingsSheet sheet = sheet(activity);
+                assertSheetPage(activity, "home", "appearance", "wallpaper", "apps", "device", "system");
                 assertEquals(activity.getString(R.string.settings_hint_open),
-                        ((android.widget.TextView) field(activity, "settingsHintView"))
-                                .getText().toString());
+                        sheet.hintText().toString());
+                assertTrue(sheet.titleText().toString().contains("SETTINGS"));
+                assertTrue(sheet.footerText().toString().startsWith("Glass Launcher "));
 
-                invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
-                        staticField(LauncherActivity.class, "SR_APPS_MENU"));
-                assertSettingsPage(activity, R.string.settings_title_apps,
-                        R.string.settings_row_manage_hidden,
-                        R.string.settings_row_button_shortcuts);
-                invoke(activity, "handleSettingsKey", new Class<?>[] {int.class},
-                        KeyEvent.KEYCODE_BACK);
-                assertSettingsPage(activity, R.string.settings_title_main,
-                        R.string.settings_row_appearance_menu,
-                        R.string.settings_row_wallpaper_menu,
-                        R.string.settings_row_apps_menu,
-                        R.string.settings_row_device_menu,
-                        R.string.settings_row_system_settings);
-                assertEquals(2, ((Integer) field(activity, "settingsSelectedRow")).intValue());
+                assertTrue(sheet.activateKey("apps"));
+                assertSheetPage(activity, "apps", "hidden", "shortcuts");
+                assertTrue(sheet.titleText().toString().contains("APPS & SHORTCUTS"));
+                assertTrue(sheet.handleKey(KeyEvent.KEYCODE_BACK));
+                assertSheetPage(activity, "home", "appearance", "wallpaper", "apps", "device", "system");
+                assertEquals("apps", sheet.selectedKey());
 
-                invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
-                        staticField(LauncherActivity.class, "SR_DEVICE_MENU"));
-                assertSettingsPage(activity, R.string.settings_title_device,
-                        R.string.settings_row_launcher_setup_menu,
-                        R.string.settings_row_backup_menu);
-                invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
-                        staticField(LauncherActivity.class, "SR_LAUNCHER_SETUP_MENU"));
-                assertSettingsPage(activity, R.string.settings_title_launcher_setup,
-                        R.string.settings_row_launcher_activate,
-                        R.string.settings_row_launcher_restore);
-                invoke(activity, "handleSettingsKey", new Class<?>[] {int.class},
-                        KeyEvent.KEYCODE_BACK);
-                assertSettingsPage(activity, R.string.settings_title_device,
-                        R.string.settings_row_launcher_setup_menu,
-                        R.string.settings_row_backup_menu);
-                invoke(activity, "handleSettingsKey", new Class<?>[] {int.class},
-                        KeyEvent.KEYCODE_BACK);
-                assertEquals(3, ((Integer) field(activity, "settingsSelectedRow")).intValue());
+                assertTrue(sheet.activateKey("device"));
+                assertSheetPage(activity, "device", "launcher_setup", "backup", "restore");
+                assertTrue(sheet.activateKey("launcher_setup"));
+                assertSheetPage(activity, "launcher_setup", "launcher_activate", "launcher_restore");
+                sheet.handleKey(KeyEvent.KEYCODE_BACK);
+                assertEquals("device", sheet.pageId());
+                assertEquals("launcher_setup", sheet.selectedKey());
+                sheet.handleKey(KeyEvent.KEYCODE_BACK);
+                assertEquals("home", sheet.pageId());
+                assertEquals("device", sheet.selectedKey());
+
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                assertEquals("system", sheet.selectedKey());
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                assertEquals("appearance", sheet.selectedKey());
+                sheet.handleKey(KeyEvent.KEYCODE_BACK);
+                assertFalse(sheet.isShowing());
             });
         }
     }
 
-    private static void assertSettingsPage(
-            LauncherActivity activity, int titleRes, int... rowLabelResources) {
-        android.widget.TextView title = (android.widget.TextView)
-                field(activity, "settingsTitleView");
-        android.widget.LinearLayout column = (android.widget.LinearLayout)
-                field(activity, "settingsColumn");
-        assertEquals(activity.getString(titleRes), title.getText().toString());
-        assertEquals(rowLabelResources.length, column.getChildCount());
-        for (int i = 0; i < rowLabelResources.length; i++) {
-            ViewGroup row = (ViewGroup) column.getChildAt(i);
-            android.widget.TextView label = (android.widget.TextView) row.getChildAt(0);
-            String text = label.getText().toString();
-            assertEquals(activity.getString(rowLabelResources[i]), text.split("\\n", 2)[0]);
-            android.widget.LinearLayout.LayoutParams labelParams =
-                    (android.widget.LinearLayout.LayoutParams) label.getLayoutParams();
-            assertEquals(0, labelParams.width);
-            assertEquals(1f, labelParams.weight, 0f);
-            int expectedMargin = row.getChildCount() > 1
-                    ? Math.round(10 * activity.getResources().getDisplayMetrics().density) : 0;
-            assertEquals(expectedMargin, labelParams.getMarginEnd());
-            assertEquals(Math.round(250 * activity.getResources()
-                    .getDisplayMetrics().density), row.getMinimumWidth());
-            if (row.getChildCount() > 1) {
-                android.widget.TextView indicator =
-                        (android.widget.TextView) row.getChildAt(1);
-                assertEquals(android.view.Gravity.END,
-                        indicator.getGravity()
-                                & android.view.Gravity.RELATIVE_HORIZONTAL_GRAVITY_MASK);
-            }
-        }
+    private static SettingsSheet sheet(LauncherActivity activity) {
+        return (SettingsSheet) field(activity, "settingsSheet");
+    }
+
+    private static void assertSheetPage(LauncherActivity activity, String pageId, String... keys) {
+        SettingsSheet sheet = sheet(activity);
+        assertTrue("settings sheet is open", sheet.isShowing());
+        assertEquals(pageId, sheet.pageId());
+        java.util.List<String> actual = new ArrayList<>();
+        for (int i = 0; i < sheet.rowCount(); i++) actual.add(sheet.rowKey(i));
+        assertEquals(java.util.Arrays.asList(keys), actual);
+    }
+
+    private static String sheetValue(LauncherActivity activity, String key) {
+        SettingsSheet sheet = sheet(activity);
+        int index = sheet.indexOfKey(key);
+        assertTrue("row " + key + " on page " + sheet.pageId(), index >= 0);
+        CharSequence value = sheet.rowValue(index);
+        return value != null ? value.toString() : null;
     }
 
     @Test
@@ -287,69 +265,47 @@ public class LauncherCustomizationTest {
 
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
-            scenario.onActivity(activity -> invoke(activity, "showSettingsPanel"));
-            awaitVisibleViewField(scenario, "settingsOverlay");
-
-            scenario.onActivity(activity -> invoke(activity, "activateSettingsRowId",
-                    new Class<?>[] {int.class},
-                    staticField(LauncherActivity.class, "SR_APPEARANCE_MENU")));
-            awaitValue(scenario, "Appearance settings rows", activity -> {
-                android.widget.LinearLayout column = (android.widget.LinearLayout)
-                        field(activity, "settingsColumn");
-                return column != null && column.getChildCount() == 6 ? column : null;
-            });
-
             scenario.onActivity(activity -> {
-                invoke(activity, "stepLayoutColumns", new Class<?>[] {int.class}, -1);
-                invoke(activity, "stepCardCorner", new Class<?>[] {int.class}, -1);
-                invoke(activity, "toggleFocusBorder");
-                invoke(activity, "stepFocusColor", new Class<?>[] {int.class}, 1);
-            });
-            android.widget.LinearLayout column = awaitValue(
-                    scenario, "updated Layout settings", activity -> {
-                        android.widget.LinearLayout current = (android.widget.LinearLayout)
-                                field(activity, "settingsColumn");
-                        if (current == null || current.getChildCount() != 6) return null;
-                        String columnsText = ((android.widget.TextView)
-                                ((ViewGroup) current.getChildAt(0)).getChildAt(1))
-                                .getText().toString();
-                        String cornerText = ((android.widget.TextView)
-                                ((ViewGroup) current.getChildAt(1)).getChildAt(1))
-                                .getText().toString();
-                        return "< 5 >".equals(columnsText)
-                                && "< 18% >".equals(cornerText)
-                                && preferences.getInt(columnsKey, -1) == 5
-                                && preferences.getInt(cornerKey, -1) == 18
-                                && (Boolean) field(activity, "layoutApplyPending")
-                                ? current : null;
-                    });
-
-            scenario.onActivity(activity -> {
-                assertSame(column, field(activity, "settingsColumn"));
-                assertEquals(activity.getString(R.string.settings_title_appearance),
-                        ((android.widget.TextView) field(activity, "settingsTitleView"))
-                                .getText().toString());
+                invoke(activity, "showSettingsPanel");
+                SettingsSheet sheet = sheet(activity);
+                assertTrue(sheet.activateKey("appearance"));
+                assertSheetPage(activity, "appearance", "columns", "corner", "focus_border",
+                        "focus_color", "favorites_background", "clock");
                 assertEquals(activity.getString(R.string.settings_hint_adjust),
-                        ((android.widget.TextView) field(activity, "settingsHintView"))
-                                .getText().toString());
-                assertEquals(6, column.getChildCount());
+                        sheet.hintText().toString());
                 assertEquals(activity.getString(R.string.settings_row_layout_columns),
-                        ((android.widget.TextView) ((ViewGroup) column.getChildAt(0))
-                                .getChildAt(0)).getText().toString());
-                assertEquals("< 5 >", ((android.widget.TextView)
-                        ((ViewGroup) column.getChildAt(0)).getChildAt(1)).getText().toString());
-                assertEquals("< 18% >", ((android.widget.TextView)
-                        ((ViewGroup) column.getChildAt(1)).getChildAt(1)).getText().toString());
-                assertEquals("Off", ((android.widget.TextView)
-                        ((ViewGroup) column.getChildAt(2)).getChildAt(1)).getText().toString());
-                assertEquals("< Cyan >", ((android.widget.TextView)
-                        ((ViewGroup) column.getChildAt(3)).getChildAt(1)).getText().toString());
+                        sheet.rowLabel(0).toString());
+                assertEquals("< 6 >", sheetValue(activity, "columns"));
+                assertEquals(null, sheet.footerText());
+
+                assertEquals("columns", sheet.selectedKey());
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_LEFT);
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_LEFT);
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_LEFT);
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_RIGHT);
+
+                assertEquals("< 5 >", sheetValue(activity, "columns"));
+                assertEquals("< 18% >", sheetValue(activity, "corner"));
+                assertEquals("< Off >", sheetValue(activity, "focus_border"));
+                assertEquals("< Cyan >", sheetValue(activity, "focus_color"));
                 assertEquals(5, preferences.getInt(columnsKey, -1));
                 assertEquals(18, preferences.getInt(cornerKey, -1));
                 assertEquals(false, preferences.getBoolean(borderKey, true));
                 assertEquals(0xFF00E5FF, preferences.getInt(colorKey, 0));
                 assertTrue((Boolean) field(activity, "layoutApplyPending"));
+                assertEquals(activity.getString(R.string.settings_footer_apply_on_close),
+                        sheet.footerText().toString());
+
+                // Back with pending layout changes closes the sheet to apply them.
+                sheet.handleKey(KeyEvent.KEYCODE_BACK);
+                assertFalse(sheet.isShowing());
             });
+            awaitValue(scenario, "launcher rebuilt with 5 columns", activity ->
+                    ((Integer) field(activity, "layoutColumns")) == 5
+                            && field(activity, "settingsSheet") == null ? activity : null);
         } finally {
             SharedPreferences.Editor restore = preferences.edit();
             if (hadColumns) restore.putInt(columnsKey, oldColumns);
@@ -737,24 +693,15 @@ public class LauncherCustomizationTest {
                          launchSettledLauncher()) {
                 scenario.onActivity(activity -> assertFavoritesBackground(activity, true));
 
-                scenario.onActivity(activity -> invoke(activity, "showSettingsPanel"));
-                awaitVisibleViewField(scenario, "settingsOverlay");
-                scenario.onActivity(activity -> invoke(activity, "activateSettingsRowId",
-                        new Class<?>[] {int.class},
-                        staticField(LauncherActivity.class, "SR_APPEARANCE_MENU")));
-                awaitValue(scenario, "Appearance settings rows", activity -> {
-                    android.widget.LinearLayout column = (android.widget.LinearLayout)
-                            field(activity, "settingsColumn");
-                    return column != null && column.getChildCount() == 6 ? column : null;
-                });
-
                 scenario.onActivity(activity -> {
+                    invoke(activity, "showSettingsPanel");
+                    SettingsSheet sheet = sheet(activity);
+                    assertTrue(sheet.activateKey("appearance"));
                     assertEquals(activity.getString(R.string.settings_row_favorites_background),
-                            favoritesBackgroundRowText(activity, 0));
-                    assertEquals("On", favoritesBackgroundRowText(activity, 1));
-                    invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
-                            staticField(LauncherActivity.class, "SR_FAVORITES_BACKGROUND"));
-                    assertEquals("Off", favoritesBackgroundRowText(activity, 1));
+                            sheet.rowLabel(sheet.indexOfKey("favorites_background")).toString());
+                    assertEquals("< On >", sheetValue(activity, "favorites_background"));
+                    assertTrue(sheet.activateKey("favorites_background"));
+                    assertEquals("< Off >", sheetValue(activity, "favorites_background"));
                     assertEquals(false, launcherPrefs().getBoolean(key, true));
                     assertTrue((Boolean) field(activity, "layoutApplyPending"));
                 });
@@ -764,6 +711,101 @@ public class LauncherCustomizationTest {
             }
         } finally {
             restoreLauncherPrefs(saved, "KEY_FAVORITES_BACKGROUND");
+        }
+    }
+
+    @Test
+    public void wallpaperSource_stepsBetweenSlideshowSystemAndPicture() {
+        java.util.Map<String, ?> saved = launcherPrefs().getAll();
+        try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
+            scenario.onActivity(activity -> {
+                @SuppressWarnings("unchecked")
+                java.util.List<String[]> folders =
+                        (java.util.List<String[]>) field(activity, "folderPickerData");
+                folders.clear();
+                folders.add(new String[] {"glass-test-bucket", "Test photos", "3"});
+                invoke(activity, "selectFolder", new Class<?>[] {int.class}, 0);
+                invoke(activity, "showSettingsPanel");
+                SettingsSheet sheet = sheet(activity);
+                assertTrue(sheet.activateKey("wallpaper"));
+                assertSheetPage(activity, "wallpaper", "source", "folder", "change", "idle");
+                assertEquals("< Slideshow >", sheetValue(activity, "source"));
+                assertEquals(activity.getString(R.string.settings_value_open, "Test photos"),
+                        sheetValue(activity, "folder"));
+                assertEquals("< Every 30 sec >", sheetValue(activity, "change"));
+
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                assertEquals("change", sheet.selectedKey());
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_RIGHT);
+                assertEquals("< Every 45 sec >", sheetValue(activity, "change"));
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_UP);
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_UP);
+                assertEquals("source", sheet.selectedKey());
+
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_RIGHT);
+                assertSheetPage(activity, "wallpaper", "source", "idle");
+                assertEquals("< System >", sheetValue(activity, "source"));
+                assertSystemWallpaper(activity, true);
+
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_RIGHT);
+                assertSheetPage(activity, "wallpaper", "source", "picture", "idle");
+                assertEquals("< Picture >", sheetValue(activity, "source"));
+                assertSystemWallpaper(activity, false);
+                assertEquals(0, ((Integer) field(activity, "slideshowDurationSec")).intValue());
+
+                sheet.handleKey(KeyEvent.KEYCODE_DPAD_RIGHT);
+                assertSheetPage(activity, "wallpaper", "source", "folder", "change", "idle");
+                assertEquals("< Every 45 sec >", sheetValue(activity, "change"));
+                assertEquals("source", sheet.selectedKey());
+            });
+        } finally {
+            restoreLauncherPrefs(saved, "KEY_SYSTEM_WALLPAPER", "KEY_SLIDESHOW_FOLDER",
+                    "KEY_SLIDESHOW_FOLDER_NAME", "KEY_SLIDESHOW_INDEX", "KEY_SLIDESHOW_SEED",
+                    "KEY_SLIDESHOW_DURATION", "KEY_SLIDESHOW_RESTART", "KEY_IDLE_HIDE");
+        }
+    }
+
+    @Test
+    public void settingsSheet_unhidesAppsAndAssignsButtonShortcuts() {
+        java.util.Map<String, ?> saved = launcherPrefs().getAll();
+        try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
+            AppInfo app = awaitValue(scenario, "a loaded app", LauncherCustomizationTest::firstApp);
+            scenario.onActivity(activity -> {
+                @SuppressWarnings("unchecked")
+                java.util.Set<String> hidden = (java.util.Set<String>) field(activity, "hiddenApps");
+                hidden.add(app.packageName);
+                invoke(activity, "saveHiddenApps");
+                invoke(activity, "showSettingsPanel");
+                SettingsSheet sheet = sheet(activity);
+                assertTrue(sheet.activateKey("apps"));
+                assertEquals(activity.getString(R.string.settings_value_open, "1"),
+                        sheetValue(activity, "hidden"));
+                assertTrue(sheet.activateKey("hidden"));
+                assertEquals("hidden", sheet.pageId());
+                assertTrue(sheet.activateKey("app:" + app.packageName));
+                assertFalse(hidden.contains(app.packageName));
+                assertEquals(-1, sheet.indexOfKey("app:" + app.packageName));
+                sheet.handleKey(KeyEvent.KEYCODE_BACK);
+                assertEquals("apps", sheet.pageId());
+                assertFalse((Boolean) field(activity, "hiddenAppsChanged"));
+
+                String slot = "slot:" + KeyEvent.KEYCODE_PROG_RED;
+                assertTrue(sheet.activateKey("shortcuts"));
+                assertEquals(6, sheet.rowCount());
+                assertTrue(sheet.activateKey(slot));
+                assertEquals("shortcut_app", sheet.pageId());
+                assertEquals("none", sheet.selectedKey());
+                assertTrue(sheet.activateKey("app:" + app.packageName));
+                assertEquals("shortcuts", sheet.pageId());
+                assertEquals(slot, sheet.selectedKey());
+                assertEquals(app.packageName,
+                        ((SparseArray<?>) field(activity, "keyMap")).get(KeyEvent.KEYCODE_PROG_RED));
+                assertEquals(activity.getString(R.string.settings_value_open, app.label),
+                        sheetValue(activity, slot));
+            });
+        } finally {
+            restoreLauncherPrefs(saved, "KEY_HIDDEN", "KEY_KEYMAP", "KEY_APP_ORDER");
         }
     }
 
@@ -1315,14 +1357,6 @@ public class LauncherCustomizationTest {
             SystemClock.sleep(50);
         } while (SystemClock.uptimeMillis() < deadline);
         fail("Timed out waiting for a backup holding " + identity);
-    }
-
-    /** Text of the Favorites background row: child 0 is the label, 1 the value. */
-    private static String favoritesBackgroundRowText(LauncherActivity activity, int child) {
-        android.widget.LinearLayout column = (android.widget.LinearLayout)
-                field(activity, "settingsColumn");
-        ViewGroup row = (ViewGroup) column.getChildAt(4);
-        return ((android.widget.TextView) row.getChildAt(child)).getText().toString();
     }
 
     private static void assertFavoritesBackground(LauncherActivity activity, boolean on) {
