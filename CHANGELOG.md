@@ -20,6 +20,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   plate behind the favorites row, on the home screen and in the app drawer.
   It is on by default and is included in backups.
 
+### Changed
+
+- **Backups include custom icons.** Back up settings now saves a .zip file
+  with the settings and every custom app and input icon, and restoring it
+  brings the icons back. Older .txt backups still restore.
+
 ### Fixed
 
 - **UP from the home row lands on Settings.** Pressing UP from an app on the

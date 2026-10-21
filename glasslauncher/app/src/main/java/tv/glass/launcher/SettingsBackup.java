@@ -6,7 +6,9 @@ import java.util.Map;
 /**
  * Pure-Java serialize / parse for the launcher's settings backup file.
  *
- * <p>The backup is a tiny, human-readable, line-based text file:
+ * <p>The settings part of a backup is a tiny, human-readable, line-based text:
+ * {@code settings.txt} inside the {@link BackupArchive} zip, or the whole file in
+ * a backup made before custom icons were included:
  * <pre>
  *   GLBK\t2
  *   app_order\tcom.a,com.b,com.c
@@ -36,8 +38,8 @@ import java.util.Map;
  *       URL-safe custom-name map never contain a TAB or newline;
  *       {@link #serialize} defensively strips any anyway so the line format
  *       cannot be corrupted.</li>
- *   <li><b>Android-free:</b> exercised by fast JVM unit tests; the activity
- *       only does the SAF file I/O around it.</li>
+ *   <li><b>Android-free:</b> exercised by fast JVM unit tests; {@link BackupArchive}
+ *       packs it with the icons and the activity does the SAF file I/O.</li>
  * </ul>
  */
 final class SettingsBackup {

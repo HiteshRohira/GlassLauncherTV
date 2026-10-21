@@ -92,31 +92,59 @@ final class CustomIconStore {
      * temporary filename. Selection is rare, so serializing writes has no
      * measurable runtime cost and keeps the atomic-publish contract simple.
      */
-    @SuppressWarnings("deprecation")
     synchronized boolean save(ContentResolver resolver, Uri uri, String packageName) {
+        if (resolver == null || uri == null) return false;
+        return saveDecoded(packageName, options -> {
+            try (InputStream in = resolver.openInputStream(uri)) {
+                return in == null ? null : BitmapFactory.decodeStream(in, null, options);
+            }
+        });
+    }
+
+    /** Store an icon read from a backup. The bytes are decoded and normalized
+     *  like a picked image, never written to disk as they are. */
+    synchronized boolean save(byte[] data, String identity) {
+        if (data == null || data.length == 0) return false;
+        return saveDecoded(identity, options ->
+                BitmapFactory.decodeByteArray(data, 0, data.length, options));
+    }
+
+    /** The committed WebP bytes, for a backup, or {@code null} when there is no icon. */
+    byte[] readEncoded(String identity) {
+        File file = fileFor(identity, EXT);
+        if (file == null || !file.isFile()) return null;
+        long length = file.length();
+        if (length <= 0 || length > BackupArchive.MAX_ICON_BYTES) return null;
+        try {
+            return java.nio.file.Files.readAllBytes(file.toPath());
+        } catch (IOException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private interface Decoder {
+        Bitmap decode(BitmapFactory.Options options) throws IOException;
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean saveDecoded(String packageName, Decoder decoder) {
         File dest = fileFor(packageName, EXT);
         File tmp = fileFor(packageName, TMP_EXT);
-        if (resolver == null || uri == null || dest == null || tmp == null) return false;
+        if (dest == null || tmp == null) return false;
 
         Bitmap decoded = null;
         Bitmap normalized = null;
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
-            try (InputStream in = resolver.openInputStream(uri)) {
-                if (in == null) return false;
-                BitmapFactory.decodeStream(in, null, bounds);
-            }
+            decoder.decode(bounds);
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false;
 
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inSampleSize = computeSampleSize(
                     bounds.outWidth, bounds.outHeight, MAX_SOURCE_PX);
             options.inPreferredConfig = Bitmap.Config.ARGB_8888;
-            try (InputStream in = resolver.openInputStream(uri)) {
-                if (in == null) return false;
-                decoded = BitmapFactory.decodeStream(in, null, options);
-            }
+            decoded = decoder.decode(options);
             if (decoded == null || decoded.getWidth() <= 0 || decoded.getHeight() <= 0) {
                 return false;
             }

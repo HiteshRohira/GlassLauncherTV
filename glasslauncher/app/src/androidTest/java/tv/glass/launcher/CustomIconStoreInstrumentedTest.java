@@ -10,6 +10,7 @@ import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -21,6 +22,7 @@ import androidx.test.filters.SmallTest;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 
@@ -182,6 +184,42 @@ public class CustomIconStoreInstrumentedTest {
             source.recycle();
             //noinspection ResultOfMethodCallIgnored
             sourceFile.delete();
+        }
+    }
+
+    @Test
+    public void backupBytes_saveReencodesAndKeepsPreviousIconOnBadData() throws Exception {
+        Context context = getInstrumentation().getTargetContext();
+        String identity = "com.example.backup.icon";
+        CustomIconStore store = new CustomIconStore(context);
+        Bitmap source = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888);
+        source.eraseColor(Color.MAGENTA);
+        try {
+            ByteArrayOutputStream png = new ByteArrayOutputStream();
+            assertTrue(source.compress(Bitmap.CompressFormat.PNG, 100, png));
+            store.delete(identity);
+
+            assertFalse(store.save(new byte[] {1, 2, 3}, identity));
+            assertFalse(store.has(identity));
+            assertNull(store.readEncoded(identity));
+
+            assertTrue(store.save(png.toByteArray(), identity));
+            byte[] encoded = store.readEncoded(identity);
+            assertNotNull(encoded);
+            Bitmap stored = BitmapFactory.decodeByteArray(encoded, 0, encoded.length);
+            try {
+                assertNotNull(stored);
+                assertColorNear(Color.MAGENTA, stored.getPixel(0, 0));
+            } finally {
+                if (stored != null && !stored.isRecycled()) stored.recycle();
+            }
+
+            assertFalse(store.save(new byte[] {1, 2, 3}, identity));
+            assertTrue(store.has(identity));
+            assertNull(store.readEncoded("not/a package"));
+        } finally {
+            store.delete(identity);
+            source.recycle();
         }
     }
 
