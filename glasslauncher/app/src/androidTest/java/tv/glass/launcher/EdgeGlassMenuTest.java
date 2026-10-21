@@ -110,23 +110,37 @@ public class EdgeGlassMenuTest {
     }
 
     @Test
-    public void settingsCard_usesSameSharedEdgeGlassPanel_andOpensReachable() {
+    public void settingsSheet_usesSharedEdgeGlassPanel_andFillsTheRightEdge() {
         try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
             scenario.onActivity(a -> invoke(a, "showSettingsPanel"));
-            awaitVisibleViewField(scenario, "settingsOverlay");
+            View panel = awaitValue(scenario, "settled settings sheet", a -> {
+                SettingsSheet sheet = (SettingsSheet) field(a, "settingsSheet");
+                View v = sheet != null && sheet.isShowing() ? sheet.sheetView() : null;
+                return v != null && v.isShown() && v.getWidth() > 0
+                        && v.getTranslationX() == 0f ? v : null;
+            });
 
             scenario.onActivity(a -> {
-                View card = (View) field(a, "settingsCard");
-                assertNotNull("settings card present", card);
-                Drawable bg = card.getBackground();
-                assertNotNull("settings card has a panel background", bg);
-                assertEquals("settings card uses the same shared EdgeGlassStyle panel",
+                Drawable bg = panel.getBackground();
+                assertNotNull("settings sheet has a panel background", bg);
+                assertEquals("settings sheet uses the same shared EdgeGlassStyle panel",
                         "PanelDrawable", bg.getClass().getSimpleName());
 
-                // Reachability: the row column has rows on the main page.
-                LinearLayout col = (LinearLayout) field(a, "settingsColumn");
-                assertNotNull("settings column present", col);
-                assertTrue("settings has rows", col.getChildCount() > 0);
+                View content = a.findViewById(android.R.id.content);
+                int[] p = new int[2];
+                int[] c = new int[2];
+                panel.getLocationOnScreen(p);
+                content.getLocationOnScreen(c);
+                assertTrue("sheet reaches the top", p[1] <= c[1]);
+                assertTrue("sheet reaches the bottom",
+                        p[1] + panel.getHeight() >= c[1] + content.getHeight());
+                assertTrue("sheet reaches the right edge",
+                        p[0] + panel.getWidth() >= c[0] + content.getWidth());
+                assertTrue("sheet keeps the left part of the screen visible",
+                        p[0] > c[0] + content.getWidth() / 2);
+
+                SettingsSheet sheet = (SettingsSheet) field(a, "settingsSheet");
+                assertTrue("settings has rows", sheet.rowCount() > 0);
             });
         }
     }
