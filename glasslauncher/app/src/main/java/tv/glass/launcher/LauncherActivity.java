@@ -121,6 +121,8 @@ public class LauncherActivity extends Activity {
     private static final String KEY_SYSTEM_WALLPAPER = "system_wallpaper";
     private static final String KEY_SCROLL_IDX = "scroll_idx";
     private static final String KEY_APP_ORDER  = "app_order";
+    /** Set once {@link #applyStoredOrder} has applied R.array.initial_app_order. */
+    private static final String KEY_INITIAL_ORDER_APPLIED = "initial_order_applied_v1";
     /** v1.5.0: number of leading apps (in the visible / non-hidden order)
      *  that form the bottom "home favourites" row and, equivalently, the
      *  centred first row of the pull-down app drawer. Range [0, COLS]. Absent on
@@ -1350,6 +1352,15 @@ public class LauncherActivity extends Activity {
 
     private void applyStoredOrder(List<AppInfo> apps) {
         String raw = prefs.getString(KEY_APP_ORDER, null);
+        // One-time migration to this TV's previous Google TV app order: the
+        // bundled list goes first, any existing saved order follows (parse
+        // keeps the first occurrence). Later reorders are never overridden.
+        if (!prefs.getBoolean(KEY_INITIAL_ORDER_APPLIED, false)) {
+            String init = String.join(",", getResources().getStringArray(R.array.initial_app_order));
+            raw = (raw == null || raw.isEmpty()) ? init : init + "," + raw;
+            prefs.edit().putString(KEY_APP_ORDER, raw)
+                    .putBoolean(KEY_INITIAL_ORDER_APPLIED, true).apply();
+        }
         Map<String, Integer> rank = AppOrder.parse(raw);
         if (rank.isEmpty()) return;
         Collections.sort(apps, (a, b) -> {
@@ -2174,7 +2185,7 @@ public class LauncherActivity extends Activity {
         refreshBtState();            // pick up any change while we were away
         registerAirReceiver();       // live AirPlay state for the airBtn dot
         refreshAirState();
-        AirPlayMonitorService.start(this, true);
+        AirPlayMonitorService.start(this, AirPlayMonitorService.ACTION_IN_USE);
         // Wallpaper slideshow: resume the foreground rotation timer, and (once
         // per process) roll to a new image in "each restart" mode. Both are
         // no-ops when slideshow is off / no folder is set. Done after the
@@ -2782,9 +2793,10 @@ public class LauncherActivity extends Activity {
         // pill, then 38 sp). 44 sp in a light weight reads as a clean, modern
         // time; the day/date line below renders at 0.40x via ClockFormatter.
         clockView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 44);
-        // sans-serif-light: a thinner, more modern face than medium, which
-        // suits the larger plate-less digits.
-        clockView.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
+        // sans-serif-medium for a bolder HH:mm that stays legible over light
+        // wallpapers. AM/PM (thin) and the date line (regular) set their own
+        // faces via ClockFormatter spans, so only the digits change.
+        clockView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         clockView.setLetterSpacing(0.01f);
         // If the user has the clock off, hide it before the first paint so
         // cold start never flashes a visible-then-hidden clock. {@link
@@ -3163,6 +3175,18 @@ public class LauncherActivity extends Activity {
             if (h != null) h.onMenuMove();
         });
 
+        // Vector icon before each left-aligned label (replacing the Unicode
+        // glyphs the labels used to carry). The icon is tinted with the row's
+        // text colour so it inverts with the selection pill (see
+        // updateMenuHighlight).
+        decorateMenuItem(menuHide,       R.drawable.ic_menu_hide);
+        decorateMenuItem(menuChangeIcon, R.drawable.ic_menu_change_icon);
+        decorateMenuItem(menuResetIcon,  R.drawable.ic_menu_reset_icon);
+        decorateMenuItem(menuRename,     R.drawable.ic_menu_rename);
+        decorateMenuItem(menuUninstall,  R.drawable.ic_menu_uninstall);
+        decorateMenuItem(menuAppInfo,    R.drawable.ic_menu_app_info);
+        decorateMenuItem(menuMove,       R.drawable.ic_menu_move);
+
         // Dividers removed — the rounded-pill selection state is enough to
         // separate items visually, and removing them gives a cleaner
         // menu with no horizontal noise.
@@ -3394,6 +3418,28 @@ public class LauncherActivity extends Activity {
         menuUninstall .setTextColor(sel == RecyclingShelfView.MENU_UNINSTALL   ? EdgeGlassStyle.DESTRUCTIVE_SEL : EdgeGlassStyle.DESTRUCTIVE_IDLE);
         menuAppInfo   .setTextColor(sel == RecyclingShelfView.MENU_APP_INFO    ? EdgeGlassStyle.SELECTED_TEXT : 0xCCFFFFFF);
         menuMove      .setTextColor(sel == RecyclingShelfView.MENU_MOVE        ? EdgeGlassStyle.SELECTED_TEXT : 0xCCFFFFFF);
+        tintMenuIcon(menuHide); tintMenuIcon(menuChangeIcon); tintMenuIcon(menuResetIcon);
+        tintMenuIcon(menuRename); tintMenuIcon(menuUninstall); tintMenuIcon(menuAppInfo);
+        tintMenuIcon(menuMove);
+    }
+
+    /** Give a context-menu row its leading icon and left-aligned label. */
+    private void decorateMenuItem(TextView tv, int iconRes) {
+        tv.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        android.graphics.drawable.Drawable d = loadPillIcon(iconRes);
+        if (d != null) {
+            int sz = dp(16);
+            d.setBounds(0, 0, sz, sz);
+            tv.setCompoundDrawablesRelative(d, null, null, null);
+            tv.setCompoundDrawablePadding(dp(12));
+        }
+        tintMenuIcon(tv);
+    }
+
+    /** Match a row's icon to its current text colour. */
+    private static void tintMenuIcon(TextView tv) {
+        tv.setCompoundDrawableTintList(
+                android.content.res.ColorStateList.valueOf(tv.getCurrentTextColor()));
     }
 
     /** Updates the colour of an item's existing rounded GradientDrawable
@@ -3624,7 +3670,7 @@ public class LauncherActivity extends Activity {
             showToast(getString(airState == AirPlayStatus.State.READY ? R.string.toast_airplay_ready
                     : airState == AirPlayStatus.State.FAILED ? R.string.cd_airplay_failed
                     : R.string.toast_airplay_starting));
-            AirPlayMonitorService.start(this, true);
+            AirPlayMonitorService.start(this, AirPlayMonitorService.ACTION_IN_USE);
             return true;
         });
         v.setAlpha(0.6f);   // dimmed when idle; brightens to full on focus

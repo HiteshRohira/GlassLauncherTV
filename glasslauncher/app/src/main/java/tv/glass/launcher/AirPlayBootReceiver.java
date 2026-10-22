@@ -11,7 +11,7 @@ public final class AirPlayBootReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context ctx, Intent intent) {
         String a = intent.getAction();
         if (Intent.ACTION_BOOT_COMPLETED.equals(a) || Intent.ACTION_MY_PACKAGE_REPLACED.equals(a)) {
-            AirPlayMonitorService.start(ctx, false);
+            AirPlayMonitorService.start(ctx, AirPlayMonitorService.ACTION_BOOT);
         }
     }
 }

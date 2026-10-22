@@ -63,7 +63,7 @@ public class AirPlayStatusTest {
         assertEquals(AirPlayStatus.State.FAILED, s.state());
     }
 
-    @Test public void wake_startsFreshGraceAndEpisode() {
+    @Test public void wake_withUnresolvedFailure_doesNotAlertAgain() {
         AirPlayStatus s = awakeAt(0);
         s.onCheck(GRACE + 1, true, false);
         assertTrue(s.onCheck(GRACE + 2, true, false));
@@ -72,6 +72,19 @@ public class AirPlayStatusTest {
         s.onInUse(wake, GRACE);
         assertEquals(AirPlayStatus.State.STARTING, s.state());
         assertFalse(s.onCheck(wake + 1, true, false));
+        s.onCheck(wake + GRACE + 1, true, false);
+        assertFalse(s.onCheck(wake + GRACE + 2, true, false));
+        assertEquals(AirPlayStatus.State.FAILED, s.state());
+    }
+
+    @Test public void wake_afterRecovery_alertsOnNextFailure() {
+        AirPlayStatus s = awakeAt(0);
+        s.onCheck(GRACE + 1, true, false);
+        assertTrue(s.onCheck(GRACE + 2, true, false));
+        s.onCheck(GRACE + 3, true, true);
+        s.onNotInUse();
+        long wake = 10 * GRACE;
+        s.onInUse(wake, GRACE);
         s.onCheck(wake + GRACE + 1, true, false);
         assertTrue(s.onCheck(wake + GRACE + 2, true, false));
     }

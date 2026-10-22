@@ -35,13 +35,13 @@
 
     <!-- Context menu items shown over a focused shelf icon. The leading
          glyph is a Unicode symbol drawn inline with the visible label. -->
-    <string name="menu_uninstall">\u2715  Uninstall</string>
-    <string name="menu_app_info">\u24D8  App Info</string>
-    <string name="menu_move">\u21D4  Move</string>
-    <string name="menu_hide">\u2298  Hide</string>
-    <string name="menu_change_icon">\u25A3  Change icon</string>
-    <string name="menu_reset_icon">\u21B6  Reset icon</string>
-    <string name="menu_rename">\u270E  Rename</string>
+    <string name="menu_uninstall">Uninstall</string>
+    <string name="menu_app_info">App Info</string>
+    <string name="menu_move">Move</string>
+    <string name="menu_hide">Hide</string>
+    <string name="menu_change_icon">Change icon</string>
+    <string name="menu_reset_icon">Reset icon</string>
+    <string name="menu_rename">Rename</string>
     <string name="rename_title">Rename %1$s</string>
     <string name="rename_hint">New name</string>
     <string name="rename_save">Save</string>

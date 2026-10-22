@@ -7,6 +7,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -21,6 +22,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.Process;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
@@ -39,6 +41,7 @@ import java.net.NetworkInterface;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
@@ -50,29 +53,45 @@ import java.util.Set;
  * <p>"Ready" means this TV's own {@code _airplay._tcp} service is visible on
  * the local network — the same advertisement an iPhone's Screen Mirroring
  * list reads — confirmed by resolving it to one of this device's addresses.
- * The probe never connects to the receiver, so it cannot start a session or
- * pop the receiver's UI.
+ * The probe never opens a connection to the receiver: any TCP connection
+ * counts as an AirPlay client for it and brings its player to the front.
  *
  * <p>Runs in its own small {@code :airplay} process as a minimum-priority
  * foreground service so it survives while other apps are open without
  * pinning the launcher's wallpaper / icon memory. Probes pause while the
  * screen is off or the screensaver runs; nothing is checked or shown then.
  *
- * <p>Checks are scheduled with AlarmManager re-starting this service rather
- * than an in-process timer: TCL firmware freezes idle third-party processes
- * (foreground services included) about 200 s after their last service start,
- * and a frozen process's timers never fire. Each alarm-driven start thaws the
- * process and renews that window; the READY interval stays inside it.
+ * <p>TCL firmware freezes idle third-party processes (foreground services
+ * included) about 200 s after their last service start. Two consequences:
+ * <ul>
+ *   <li>Checks are scheduled with AlarmManager re-starting this service rather
+ *       than an in-process timer, because a frozen process's timers never
+ *       fire. Each alarm-driven start thaws the process and renews that
+ *       window; the READY interval stays inside it.</li>
+ *   <li>A frozen receiver stops answering connections even though Android's
+ *       mDNS daemon keeps advertising it. Every check therefore first sends
+ *       the receiver's own exported boot receiver an (unprotected)
+ *       {@code QUICKBOOT_POWERON}; it asks the receiver to start its server —
+ *       a no-op when already running, a restart when it died — and counts as
+ *       a service start, keeping it thawed while the TV is in use.</li>
+ * </ul>
  *
- * <p>State reaches the launcher UI through a private file plus a
+ * <p>State reaches the launcher UI through a private, timestamped file plus a
  * package-scoped "changed" ping; the UI re-reads the file rather than
- * trusting broadcast extras.
+ * trusting broadcast extras, and treats a stale file as unknown.
  */
 public final class AirPlayMonitorService extends Service {
 
     static final String RECEIVER_PKG = "io.github.jqssun.airplay";
     static final String ACTION_CHANGED = "tv.glass.launcher.AIRPLAY_STATUS_CHANGED";
+    /** Alarm tick: run a check if the screen is in use. */
     static final String ACTION_CHECK = "tv.glass.launcher.AIRPLAY_CHECK";
+    /** The launcher is visible, so the screen is definitely in use. */
+    static final String ACTION_IN_USE = "tv.glass.launcher.AIRPLAY_IN_USE";
+    /** Started from BOOT_COMPLETED: in use, with the longer boot grace. */
+    static final String ACTION_BOOT = "tv.glass.launcher.AIRPLAY_BOOT";
+    private static final String RECEIVER_BOOT_COMPONENT = ".BootReceiver";
+    private static final String QUICKBOOT = "android.intent.action.QUICKBOOT_POWERON";
     private static final String STATUS_FILE = "airplay_status";
     private static final String CHANNEL = "airplay_monitor";
     private static final String TAG = "GlassAirPlay";
@@ -83,9 +102,16 @@ public final class AirPlayMonitorService extends Service {
     private static final long READY_INTERVAL_MS = 150_000L;
     private static final long PENDING_INTERVAL_MS = 30_000L;
     private static final long FAILED_INTERVAL_MS = 60_000L;
+    private static final long KEEPALIVE_SETTLE_MS = 3_000L;
     private static final long DISCOVER_MS = 5_000L;
     private static final long RESOLVE_TIMEOUT_MS = 4_000L;
-    private static final int MAX_RESOLVES = 6;
+    private static final int MAX_RESOLVES = 10;
+    /** Consecutive lost resolve callbacks before recycling the process, which
+     *  releases any NSD requests the firmware never answered. */
+    private static final int MAX_LOST_RESOLVES = 8;
+    private static final long RECYCLE_RESTART_MS = 3_000L;
+    /** Status older than this is shown as unknown (amber) by the launcher. */
+    static final long STALE_MS = 10 * 60_000L;
     private static final long BANNER_MS = 8_000L;
     private static final String SERVICE_TYPE = "_airplay._tcp";
 
@@ -93,9 +119,11 @@ public final class AirPlayMonitorService extends Service {
     private final AirPlayStatus status = new AirPlayStatus();
     private NsdManager nsd;
     private BroadcastReceiver screenReceiver;
+    private boolean initialized;
     private boolean dreaming;
     private boolean probing;
     private int probeGen;
+    private int lostResolves;
     private AirPlayStatus.State published;
     private View banner;
 
@@ -103,11 +131,11 @@ public final class AirPlayMonitorService extends Service {
 
     // ── Entry points used by the launcher ─────────────────────────────────
 
-    /** Start (or nudge) the monitor when the receiver app is present. */
-    static void start(Context ctx, boolean checkNow) {
+    /** Start (or nudge) the monitor with {@code action} when the receiver app
+     *  is present. */
+    static void start(Context ctx, String action) {
         if (!receiverInstalled(ctx)) return;
-        Intent i = new Intent(ctx, AirPlayMonitorService.class);
-        if (checkNow) i.setAction(ACTION_CHECK);
+        Intent i = new Intent(ctx, AirPlayMonitorService.class).setAction(action);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i);
             else ctx.startService(i);
@@ -125,12 +153,17 @@ public final class AirPlayMonitorService extends Service {
         }
     }
 
-    /** Last published state; OFF when the receiver is absent. */
+    /** Last published state; OFF when the receiver is absent, STARTING when
+     *  the record is missing or older than {@link #STALE_MS}. */
     static AirPlayStatus.State readState(Context ctx) {
         if (!receiverInstalled(ctx)) return AirPlayStatus.State.OFF;
         File f = new File(ctx.getFilesDir(), STATUS_FILE);
         try {
-            return AirPlayStatus.parse(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
+            String[] parts = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8)
+                    .split("\n");
+            long at = parts.length > 1 ? Long.parseLong(parts[1].trim()) : 0L;
+            if (Math.abs(System.currentTimeMillis() - at) > STALE_MS) return AirPlayStatus.State.STARTING;
+            return AirPlayStatus.parse(parts[0]);
         } catch (Exception e) {
             return AirPlayStatus.State.STARTING;
         }
@@ -143,23 +176,43 @@ public final class AirPlayMonitorService extends Service {
         nsd = (NsdManager) getSystemService(Context.NSD_SERVICE);
         goForeground();
         registerScreenReceiver();
-        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        if (pm != null && !pm.isInteractive()) {
-            status.onNotInUse();
-        } else {
-            boolean booting = SystemClock.elapsedRealtime() < 5 * 60_000L;
-            status.onInUse(SystemClock.elapsedRealtime(), booting ? BOOT_GRACE_MS : WAKE_GRACE_MS);
-        }
-        publish();
-        schedule(0);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         goForeground();
-        if (intent != null && ACTION_CHECK.equals(intent.getAction()) && status.inUse()) {
-            schedule(0);
+        String action = intent != null ? intent.getAction() : null;
+        long now = SystemClock.elapsedRealtime();
+        if (ACTION_BOOT.equals(action)) {
+            initialized = true;
+            if (isInteractive()) startInUse(now, BOOT_GRACE_MS);
+            else status.onNotInUse();
+        } else if (ACTION_IN_USE.equals(action)) {
+            initialized = true;
+            if (!status.inUse()) startInUse(now, WAKE_GRACE_MS);
+            else schedule(0);
+        } else if (ACTION_CHECK.equals(action)) {
+            // Alarms are armed only while in use, so a tick into a fresh
+            // process (killed or recycled while in use) resumes monitoring.
+            if (!initialized) {
+                initialized = true;
+                if (isInteractive()) startInUse(now, WAKE_GRACE_MS);
+                else status.onNotInUse();
+            } else if (status.inUse()) {
+                schedule(0);
+            }
+        } else if (!initialized) {
+            // Sticky restart: the screen may be in a screensaver, which has no
+            // public query, so stay paused until a screen event or the launcher
+            // says the TV is in use.
+            initialized = true;
+            status.onNotInUse();
         }
         return START_STICKY;
+    }
+
+    private boolean isInteractive() {
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        return pm == null || pm.isInteractive();
     }
 
     private PendingIntent checkIntent() {
@@ -211,6 +264,7 @@ public final class AirPlayMonitorService extends Service {
             @Override public void onReceive(Context c, Intent it) {
                 String a = it.getAction();
                 if (a == null) return;
+                initialized = true;
                 switch (a) {
                     case Intent.ACTION_SCREEN_OFF:
                         dreaming = false;
@@ -222,10 +276,12 @@ public final class AirPlayMonitorService extends Service {
                         break;
                     case Intent.ACTION_DREAMING_STOPPED:
                         dreaming = false;
-                        resumeChecks();
+                        // Also sent on the way into standby; resume only if
+                        // the screen is actually on.
+                        if (isInteractive()) startInUse(SystemClock.elapsedRealtime(), WAKE_GRACE_MS);
                         break;
                     case Intent.ACTION_SCREEN_ON:
-                        if (!dreaming) resumeChecks();
+                        if (!dreaming) startInUse(SystemClock.elapsedRealtime(), WAKE_GRACE_MS);
                         break;
                     default:
                         break;
@@ -252,8 +308,8 @@ public final class AirPlayMonitorService extends Service {
         hideBanner();
     }
 
-    private void resumeChecks() {
-        status.onInUse(SystemClock.elapsedRealtime(), WAKE_GRACE_MS);
+    private void startInUse(long now, long graceMs) {
+        status.onInUse(now, graceMs);
         publish();
         schedule(0);
     }
@@ -285,7 +341,30 @@ public final class AirPlayMonitorService extends Service {
             return;
         }
         probing = true;
-        new Probe(++probeGen).start();
+        final int gen = ++probeGen;
+        keepReceiverAwake();
+        handler.postDelayed(() -> { if (gen == probeGen) new Probe(gen).start(); }, KEEPALIVE_SETTLE_MS);
+    }
+
+    /** Thaw the receiver (and restart its server if it died) via its exported
+     *  boot receiver. Harmless when it is already running. */
+    private void keepReceiverAwake() {
+        Intent i = new Intent(QUICKBOOT).setComponent(
+                new ComponentName(RECEIVER_PKG, RECEIVER_PKG + RECEIVER_BOOT_COMPONENT));
+        try {
+            sendBroadcast(i);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "receiver keep-alive refused", e);
+        }
+    }
+
+    /** Record a completed check. A probe that could not run (discovery itself
+     *  failed) is inconclusive: it neither confirms nor counts as a miss. */
+    private void finishInconclusive() {
+        probing = false;
+        if (!status.inUse()) return;
+        refreshTimestamp();
+        schedule(PENDING_INTERVAL_MS);
     }
 
     private void finishCheck(boolean installed, boolean advertised) {
@@ -309,6 +388,20 @@ public final class AirPlayMonitorService extends Service {
         else
             next = PENDING_INTERVAL_MS;
         schedule(next);
+    }
+
+    /** NSD on this firmware sometimes never answers a resolve. Those requests
+     *  stay open inside the system service; after a run of them, restart this
+     *  small process (an alarm brings it straight back) so they are released. */
+    private void onResolveLost() {
+        if (++lostResolves < MAX_LOST_RESOLVES) return;
+        Log.w(TAG, "recycling monitor after " + lostResolves + " lost resolves");
+        AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        am.set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + RECYCLE_RESTART_MS,
+                checkIntent());
+        hideBanner();
+        Process.killProcess(Process.myPid());
     }
 
     /** One discover-then-resolve pass. Every callback is re-posted to the
@@ -340,7 +433,7 @@ public final class AirPlayMonitorService extends Service {
                     handler.post(() -> {
                         Log.w(TAG, "discovery failed: " + code);
                         listener = null;
-                        complete(false);
+                        inconclusive();
                     });
                 }
                 @Override public void onStopDiscoveryFailed(String t, int code) { }
@@ -350,13 +443,12 @@ public final class AirPlayMonitorService extends Service {
             } catch (RuntimeException e) {
                 Log.w(TAG, "discovery threw", e);
                 listener = null;
-                complete(false);
+                inconclusive();
                 return;
             }
             handler.postDelayed(() -> {
-                if (stale()) { stopDiscovery(); return; }
                 stopDiscovery();
-                resolveNext();
+                if (!stale()) resolveNext();
             }, DISCOVER_MS);
         }
 
@@ -376,6 +468,7 @@ public final class AirPlayMonitorService extends Service {
             final Runnable timeout = () -> {
                 if (answered[0] || stale()) return;
                 answered[0] = true;
+                onResolveLost();
                 resolveNext();
             };
             try {
@@ -392,6 +485,7 @@ public final class AirPlayMonitorService extends Service {
                         handler.post(() -> {
                             if (answered[0] || stale()) return;
                             answered[0] = true;
+                            lostResolves = 0;
                             handler.removeCallbacks(timeout);
                             if (isLocal(i.getHost())) complete(true);
                             else resolveNext();
@@ -412,15 +506,26 @@ public final class AirPlayMonitorService extends Service {
             stopDiscovery();
             finishCheck(true, advertised);
         }
+
+        private void inconclusive() {
+            if (stale()) return;
+            done = true;
+            stopDiscovery();
+            finishInconclusive();
+        }
     }
 
+    /** True when {@code host} is one of this device's addresses. Compares raw
+     *  address bytes so an IPv6 scope id cannot make our own address look
+     *  foreign. */
     private static boolean isLocal(InetAddress host) {
         if (host == null) return false;
         if (host.isLoopbackAddress()) return true;
+        byte[] want = host.getAddress();
         try {
             for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
                 for (InetAddress a : Collections.list(ni.getInetAddresses())) {
-                    if (a.equals(host)) return true;
+                    if (Arrays.equals(a.getAddress(), want)) return true;
                 }
             }
         } catch (Exception ignored) { }
@@ -429,22 +534,37 @@ public final class AirPlayMonitorService extends Service {
 
     // ── Publishing ────────────────────────────────────────────────────────
 
+    /** Persist the state with a timestamp; ping the launcher on a change. Only
+     *  while in use, so a restart during standby cannot clobber the record. */
     private void publish() {
+        if (!status.inUse()) return;
         AirPlayStatus.State s = status.state();
+        if (!writeStatus(s)) return;
         if (s == published) return;
         published = s;
         Log.i(TAG, "state " + s);
+        sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName()));
+    }
+
+    private void refreshTimestamp() {
+        if (published != null) writeStatus(published);
+    }
+
+    private boolean writeStatus(AirPlayStatus.State s) {
         File dst = new File(getFilesDir(), STATUS_FILE);
         File tmp = new File(getFilesDir(), STATUS_FILE + ".tmp");
         try (FileOutputStream out = new FileOutputStream(tmp)) {
-            out.write(s.name().getBytes(StandardCharsets.UTF_8));
+            out.write((s.name() + "\n" + System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
             out.getFD().sync();
         } catch (Exception e) {
             Log.w(TAG, "status write failed", e);
-            return;
+            return false;
         }
-        if (!tmp.renameTo(dst)) Log.w(TAG, "status rename failed");
-        sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName()));
+        if (!tmp.renameTo(dst)) {
+            Log.w(TAG, "status rename failed");
+            return false;
+        }
+        return true;
     }
 
     // ── Failure banner ────────────────────────────────────────────────────

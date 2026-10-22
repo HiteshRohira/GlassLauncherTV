@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Applied once (LauncherActivity.applyStoredOrder) ahead of any saved
+     order. Mirrors this TV's previous Google TV "Your apps" row; other apps
+     keep their existing relative order after these. -->
+<resources>
+    <string-array name="initial_app_order" translatable="false">
+        <item>com.stremio.one</item>
+        <item>com.edde746.plezy</item>
+        <item>com.google.android.youtube.tv</item>
+        <item>in.startv.hotstar</item>
+        <item>com.netflix.ninja</item>
+        <item>com.apple.atve.androidtv.appletv</item>
+        <item>com.amazon.amazonvideo.livingroom</item>
+        <item>com.jio.media.jiotvplus</item>
+        <item>tv.airtel.xstream.tvapp</item>
+        <item>com.sonyliv</item>
+        <item>org.videolan.vlc</item>
+    </string-array>
+</resources>

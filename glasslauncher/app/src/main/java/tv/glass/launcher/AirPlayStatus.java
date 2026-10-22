@@ -19,7 +19,9 @@ package tv.glass.launcher;
  *       mean FAILED. A single miss from READY is tolerated (mDNS can drop one
  *       answer).</li>
  *   <li>The banner fires once per failure episode and only while the screen
- *       is in use; finding the service again ends the episode.</li>
+ *       is in use. Only finding the service again (or the receiver being
+ *       removed) ends the episode, so a receiver that stays broken across
+ *       wakes is shown by the red pill without re-alerting every wake.</li>
  * </ul>
  *
  * <p>Android-free so the rules run as JVM unit tests.
@@ -41,13 +43,12 @@ final class AirPlayStatus {
     boolean inUse() { return inUse; }
 
     /** The screen became usable (boot, wake, screensaver dismissed). Starts a
-     *  fresh grace window and failure episode. A READY receiver stays READY
-     *  until a check says otherwise. */
+     *  fresh grace window; an unresolved failure episode carries over. A
+     *  READY receiver stays READY until a check says otherwise. */
     void onInUse(long now, long graceMs) {
         inUse = true;
         graceUntil = now + graceMs;
         misses = 0;
-        alerted = false;
         if (state != State.READY && state != State.OFF) state = State.STARTING;
     }
 
