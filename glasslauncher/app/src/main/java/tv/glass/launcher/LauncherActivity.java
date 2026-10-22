@@ -336,6 +336,14 @@ public class LauncherActivity extends Activity {
     /** ACL + adapter-state receiver that repaints the BT pill live. Null until
      *  registered in {@link #onResume}; unregistered in {@link #onDestroy}. */
     private BroadcastReceiver  btReceiver = null;
+    /** AirPlay status pill — leftmost toolbar pill, built only when the
+     *  AirPlay receiver app ({@link AirPlayMonitorService#RECEIVER_PKG}) is
+     *  installed. Null otherwise. */
+    private View               airBtn = null;
+    /** Last state read from {@link AirPlayMonitorService}; UI-thread only. */
+    private AirPlayStatus.State airState = AirPlayStatus.State.STARTING;
+    /** Package-scoped "status changed" ping from the monitor process. */
+    private BroadcastReceiver  airReceiver = null;
     private FavoritesBlurView   favoritesBlurLayer;
     /** Temporary full-screen blur overlay. Legacy TVs keep the cached bitmap
      *  here while the drawer is open; modern TVs use it only during the
@@ -1667,6 +1675,7 @@ public class LauncherActivity extends Activity {
         // Toolbar pills fade in to their dim idle alpha (0.6 — the rest value
         // their own focus listeners use), so an unfocused pill lands correctly
         // and the corner cluster no longer pops while the centre cross-fades.
+        fadeViewIn(airBtn, 0.6f);
         fadeViewIn(btBtn, 0.6f);
         fadeViewIn(netBtn, 0.6f);
         fadeViewIn(mapperBtnView, 0.6f);
@@ -1695,6 +1704,7 @@ public class LauncherActivity extends Activity {
         RecyclingShelfView s = shelf; if (s != null) { s.animate().cancel(); s.setAlpha(1f); }
         TextView cv = clockView;      if (cv != null) { cv.animate().cancel(); cv.setAlpha(1f); }
         RingView rv = ringView;       if (rv != null) { rv.animate().cancel(); rv.setAlpha(1f); }
+        View ab = airBtn;             if (ab != null) { ab.animate().cancel(); ab.setAlpha(0.6f); }
         View bb = btBtn;              if (bb != null) { bb.animate().cancel(); bb.setAlpha(0.6f); }
         View nb = netBtn;             if (nb != null) { nb.animate().cancel(); nb.setAlpha(0.6f); }
         View mb = mapperBtnView;      if (mb != null) { mb.animate().cancel(); mb.setAlpha(0.6f); }
@@ -1930,6 +1940,7 @@ public class LauncherActivity extends Activity {
      *  sharp toolbar/clock behind it would ghost through the frost. The home
      *  shelf is hidden separately (it owns focus-restore logic). */
     private void setHomeChromeVisible(boolean visible) {
+        View ab = airBtn;        if (ab != null) ab.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         View bb = btBtn;         if (bb != null) bb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         View nb = netBtn;        if (nb != null) nb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         View mb = mapperBtnView; if (mb != null) mb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
@@ -2161,6 +2172,9 @@ public class LauncherActivity extends Activity {
         refreshNetState();           // pick up any change while we were away
         registerBtReceiver();        // live BT-state for the btBtn glyph
         refreshBtState();            // pick up any change while we were away
+        registerAirReceiver();       // live AirPlay state for the airBtn dot
+        refreshAirState();
+        AirPlayMonitorService.start(this, true);
         // Wallpaper slideshow: resume the foreground rotation timer, and (once
         // per process) roll to a new image in "each restart" mode. Both are
         // no-ops when slideshow is off / no folder is set. Done after the
@@ -2325,6 +2339,7 @@ public class LauncherActivity extends Activity {
         unregisterTimeReceiver();
         unregisterNetworkCallback();
         unregisterBtReceiver();
+        unregisterAirReceiver();
         // Cancel any in-flight toast. Toast.makeText(this, ...) holds a
         // strong reference to the activity through its TN binder on older
         // ROMs; without an explicit cancel a 3.5 s "long" toast in flight
@@ -2422,6 +2437,7 @@ public class LauncherActivity extends Activity {
         if (btPanel != null) btPanel.destroy();
         btPanel = null;
         btBtn = null; btAdapter = null;
+        airBtn = null;
         mapperBtnView = null;
         settingsOverlay = null; settingsCard = null; settingsTitleView = null;
         settingsColumn = null; settingsHintView = null;
@@ -2878,6 +2894,21 @@ public class LauncherActivity extends Activity {
             btBtn.setClipBounds(null);
             btBtn.setContentDescription(getString(R.string.cd_bluetooth_settings));
             root.addView(btBtn);
+        }
+
+        // AirPlay status pill — leftmost: [ airplay ] [ bt ] [ wifi ] [ gear ].
+        // Only when the background AirPlay receiver is installed; otherwise the
+        // cluster and its d-pad chain are exactly as before.
+        if (AirPlayMonitorService.receiverInstalled(this)) {
+            airBtn = buildAirBtn(BTN_SZ);
+            FrameLayout.LayoutParams airLp = new FrameLayout.LayoutParams(BTN_VIEW_SZ, BTN_VIEW_SZ);
+            airLp.gravity = Gravity.TOP | Gravity.END;
+            airLp.topMargin = MARG_T;
+            airLp.setMarginEnd(MARG_E + (btBtn != null ? 3 : 2) * (BTN_VIEW_SZ + BTN_GAP));
+            airBtn.setLayoutParams(airLp);
+            airBtn.setClipBounds(null);
+            root.addView(airBtn);
+            refreshAirState();
         }
 
         View mpLocal = buildMapperBtn(BTN_SZ);
@@ -3454,7 +3485,7 @@ public class LauncherActivity extends Activity {
                     // land on it. Without it (BT-less box) WiFi is the
                     // leftmost pill and LEFT wraps to the last shelf cell —
                     // symmetric with the gear's RIGHT-wraps-to-first behaviour.
-                    View btLeft = btBtn;
+                    View btLeft = btBtn != null ? btBtn : airBtn;
                     if (btLeft != null) { btLeft.requestFocus(); return true; }
                     RecyclingShelfView sl = shelf;
                     if (sl != null) sl.requestFocusOnIndex(sl.lastIndex());
@@ -3527,8 +3558,11 @@ public class LauncherActivity extends Activity {
                     if (sd != null) sd.requestFocusOnIndex(0);
                     return true;
                 case KeyEvent.KEYCODE_DPAD_LEFT:
-                    // Leftmost in the cluster — wrap to the last shelf cell,
-                    // the role the WiFi pill held before BT was inserted.
+                    // AirPlay pill, when present, is BT's left neighbour.
+                    View ap = airBtn;
+                    if (ap != null) { ap.requestFocus(); return true; }
+                    // Otherwise leftmost in the cluster — wrap to the last
+                    // shelf cell, the role the WiFi pill held before BT.
                     RecyclingShelfView sl = shelf;
                     if (sl != null) sl.requestFocusOnIndex(sl.lastIndex());
                     return true;
@@ -3542,6 +3576,147 @@ public class LauncherActivity extends Activity {
             }
         });
         return v;
+    }
+
+    /** AirPlay status pill — leftmost toolbar pill while the AirPlay receiver
+     *  app is installed. Same glass look and focus behaviour as the BT pill;
+     *  a small status dot sits at its lower right: green = ready, amber =
+     *  starting, red = not available. Short-press opens the receiver app,
+     *  which (re)starts its server — the "Retry" path. Long-press reports the
+     *  current status. */
+    private View buildAirBtn(int sz) {
+        View v = new View(this) {
+            private final Paint bgFocus = makeBgFocusPaint();
+            private final Paint rim     = makeRimPaint();
+            private final Paint dot     = new Paint(Paint.ANTI_ALIAS_FLAG);
+            private final Paint dotRim  = new Paint(Paint.ANTI_ALIAS_FLAG);
+            private final android.graphics.drawable.Drawable icAir = loadPillIcon(R.drawable.ic_airplay);
+            @Override protected void onDraw(Canvas c) {
+                int w = getWidth(), h = getHeight();
+                if (w <= 0 || h <= 0) return;
+                boolean focused = isFocused();
+                float scale = focused ? 1f : 0.86f;
+                float cx = w / 2f, cy = h / 2f;
+                float r = Math.min(cx, cy) * scale;
+                if (focused) {
+                    c.drawCircle(cx, cy, r, bgFocus);
+                    c.drawCircle(cx, cy, r - rim.getStrokeWidth() / 2f, rim);
+                }
+                drawPillIcon(c, icAir, cx, cy, r, focused);
+                int color = airDotColor(airState);
+                if (color != 0) {
+                    float dr = r * 0.2f;
+                    float dx = cx + r * 0.52f, dy = cy + r * 0.48f;
+                    dotRim.setColor(focused ? bgFocus.getColor() : 0x59000000);
+                    c.drawCircle(dx, dy, dr + Math.max(1f, density), dotRim);
+                    dot.setColor(color);
+                    c.drawCircle(dx, dy, dr, dot);
+                }
+            }
+        };
+        applyPillStyle(v);
+        v.setOnClickListener(view -> {
+            view.playSoundEffect(SoundEffectConstants.CLICK);
+            openAirPlayReceiver();
+        });
+        v.setOnLongClickListener(view -> {
+            view.playSoundEffect(SoundEffectConstants.CLICK);
+            showToast(getString(airState == AirPlayStatus.State.READY ? R.string.toast_airplay_ready
+                    : airState == AirPlayStatus.State.FAILED ? R.string.cd_airplay_failed
+                    : R.string.toast_airplay_starting));
+            AirPlayMonitorService.start(this, true);
+            return true;
+        });
+        v.setAlpha(0.6f);   // dimmed when idle; brightens to full on focus
+        v.setOnFocusChangeListener((view, f) -> {
+            view.animate().cancel();
+            view.animate().scaleX(f ? BTN_FOCUS_SCALE : 1f).scaleY(f ? BTN_FOCUS_SCALE : 1f)
+                    .alpha(f ? 1f : 0.6f)
+                    .setDuration(100).setInterpolator(FOCUS_EASE).start();
+            view.invalidate();
+        });
+        v.setOnKeyListener((view, kc, ev) -> {
+            if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
+            switch (kc) {
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    // Leftmost pill → first shelf cell, like the BT pill.
+                    RecyclingShelfView sd = shelf;
+                    if (sd != null) sd.requestFocusOnIndex(0);
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                    // Leftmost in the cluster — wrap to the last shelf cell.
+                    RecyclingShelfView sl = shelf;
+                    if (sl != null) sl.requestFocusOnIndex(sl.lastIndex());
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    View nb = btBtn != null ? btBtn : netBtn;
+                    if (nb != null) { nb.requestFocus(); return true; }
+                    RecyclingShelfView sr = shelf;
+                    if (sr != null) sr.requestFocusOnIndex(0);
+                    return true;
+                default: return false;
+            }
+        });
+        return v;
+    }
+
+    private static int airDotColor(AirPlayStatus.State s) {
+        switch (s) {
+            case READY:    return 0xFF34C759;
+            case STARTING: return 0xFFFFCC00;
+            case FAILED:   return 0xFFFF453A;
+            default:       return 0;
+        }
+    }
+
+    /** Open the receiver app; its auto-start brings the server back up. */
+    private void openAirPlayReceiver() {
+        PackageManager pm = getPackageManager();
+        Intent i = pm.getLeanbackLaunchIntentForPackage(AirPlayMonitorService.RECEIVER_PKG);
+        if (i == null) i = pm.getLaunchIntentForPackage(AirPlayMonitorService.RECEIVER_PKG);
+        if (i == null) { showToast(getString(R.string.toast_airplay_open_failed)); return; }
+        if (airState == AirPlayStatus.State.FAILED) showToast(getString(R.string.toast_airplay_failed));
+        try {
+            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            showToast(getString(R.string.toast_airplay_open_failed));
+        }
+    }
+
+    private void registerAirReceiver() {
+        if (airBtn == null || airReceiver != null) return;
+        airReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context ctx, Intent it) {
+                uiHandler.post(LauncherActivity.this::refreshAirState);
+            }
+        };
+        IntentFilter f = new IntentFilter(AirPlayMonitorService.ACTION_CHANGED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            registerReceiver(airReceiver, f, Context.RECEIVER_NOT_EXPORTED);
+        else
+            registerReceiver(airReceiver, f);
+    }
+
+    private void unregisterAirReceiver() {
+        if (airReceiver != null) {
+            try { unregisterReceiver(airReceiver); } catch (Exception ignored) { }
+        }
+        airReceiver = null;
+    }
+
+    /** Re-read the monitor's persisted state; repaint only on a change. The
+     *  broadcast is just a ping — the state always comes from our own file. */
+    private void refreshAirState() {
+        View b = airBtn;
+        if (b == null) return;
+        AirPlayStatus.State s = AirPlayMonitorService.readState(this);
+        b.setContentDescription(getString(s == AirPlayStatus.State.READY ? R.string.cd_airplay_ready
+                : s == AirPlayStatus.State.FAILED ? R.string.cd_airplay_failed
+                : R.string.cd_airplay_starting));
+        if (s != airState) {
+            airState = s;
+            b.invalidate();
+        }
     }
 
     /** Third toolbar pill — opens the unified settings panel (which
@@ -11567,7 +11742,7 @@ public class LauncherActivity extends Activity {
     }
 
     /** Fade home UI in (active=false) or out (active=true).
-     *  Views hidden: shelf and its blur layer, btBtn, netBtn, mapperBtnView, ringView.
+     *  Views hidden: shelf and its blur layer, airBtn, btBtn, netBtn, mapperBtnView, ringView.
      *  Views kept visible: wallpaper (always), clockView (always).
      *  Duration: 500 ms out, 250 ms in — smooth but snappy. */
     private void applyIdleHide(boolean hide) {
@@ -11577,10 +11752,11 @@ public class LauncherActivity extends Activity {
         long dur     = hide ? 500L : 250L;
         RecyclingShelfView s = shelf;
         FavoritesBlurView blur = favoritesBlurLayer;
-        View bb = btBtn, nb = netBtn, mb = mapperBtnView;
+        View ab = airBtn, bb = btBtn, nb = netBtn, mb = mapperBtnView;
         RingView rv = ringView;
         if (s    != null) s   .animate().alpha(target).setDuration(dur).start();
         if (blur != null) blur.animate().alpha(target).setDuration(dur).start();
+        if (ab   != null) ab  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
         if (bb   != null) bb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
         if (nb   != null) nb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
         if (mb   != null) mb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();

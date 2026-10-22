@@ -8,6 +8,16 @@
     <string name="cd_clock">Current time</string>
     <string name="cd_network_settings">Network settings</string>
     <string name="cd_bluetooth_settings">Bluetooth settings</string>
+    <string name="cd_airplay_ready">AirPlay ready</string>
+    <string name="cd_airplay_starting">AirPlay starting</string>
+    <string name="cd_airplay_failed">AirPlay not available. Select to restart.</string>
+    <string name="airplay_channel">AirPlay monitor</string>
+    <string name="airplay_banner_title">AirPlay isn\'t available</string>
+    <string name="airplay_banner_body">Press Home, then select the AirPlay button to restart it.</string>
+    <string name="toast_airplay_ready">AirPlay is ready</string>
+    <string name="toast_airplay_starting">AirPlay is starting…</string>
+    <string name="toast_airplay_failed">AirPlay isn\'t available. Opening the receiver to restart it…</string>
+    <string name="toast_airplay_open_failed">Couldn\'t open the AirPlay receiver</string>
     <!-- Gear toolbar pill (v1.3.0). Short-press opens the unified
          settings panel; long-press opens system Settings directly.
          Replaced the v1.2.x wallpaper pill and standalone remap-remote
