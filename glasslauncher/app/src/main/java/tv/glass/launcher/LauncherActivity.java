@@ -109,6 +109,7 @@ public class LauncherActivity extends Activity {
     // finer would be 59 wakeups per minute of pure waste.
     private static final String PREFS          = "glass_launcher";
     private static final String KEY_WP_URI     = "wp_uri";
+    private static final String KEY_AMBIENT_BACKGROUND = "ambient_background";
     /** Slideshow: picked folder (SAF tree URI string), the rotation setting
      *  ({@code 0}=off, {@code 1}=each restart, {@code 5..60}=minutes), and the
      *  current sequential position. */
@@ -187,7 +188,7 @@ public class LauncherActivity extends Activity {
     // No vertical lift (saves a frame of layout work and removes a class of
     // visual jitter on slow TV ROMs). Scale is small enough to read as
     // "selected" without dominating the shelf.
-    private static final float  FOCUS_SCALE    = 1.10f;
+    private static final float  FOCUS_SCALE    = 1.075f;
     // Focused app tiles rise above the wallpaper with a soft platform shadow.
     // translationZ is animated with the existing scale tween, then reset to
     // zero on blur and recycler reuse so only the selected tile casts it.
@@ -313,6 +314,18 @@ public class LauncherActivity extends Activity {
     private ImageView          wallpaperBack;
     private WallpaperController wallpaperCtl;
     private TextView           clockView;
+    private TextView selectedAppName;
+    private AmbientBackgroundView ambientBackground;
+    private boolean ambientBackgroundEnabled = true;
+    private View toolbarCapsule;
+    private ControlCenterPanel controlCenter;
+    private boolean resumeControlsAfterBluetooth;
+    private String controlsBluetoothKey = "bluetooth";
+    private boolean openBluetoothPairing;
+    private String drawerReturnPackage;
+    private int drawerReturnIndex;
+    private int toolbarHomeIndex;
+    private boolean toolbarVisitActive;
     private View               netBtn;
     /** Live network-type state driving the netBtn glyph. One of
      *  {@link #NET_NONE}, {@link #NET_WIFI}, {@link #NET_ETHERNET}. Updated by
@@ -338,6 +351,85 @@ public class LauncherActivity extends Activity {
     /** ACL + adapter-state receiver that repaints the BT pill live. Null until
      *  registered in {@link #onResume}; unregistered in {@link #onDestroy}. */
     private BroadcastReceiver  btReceiver = null;
+    private View nativeControl(int resource, String label, Runnable action) {
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(resource);
+        icon.setImageTintList(android.content.res.ColorStateList.valueOf(0xFFF2F3F7));
+        icon.setPadding(NativeTheme.px(this,11),NativeTheme.px(this,9),NativeTheme.px(this,11),NativeTheme.px(this,9));
+        icon.setFocusable(true);icon.setClickable(true);icon.setContentDescription(label);
+        icon.setOnClickListener(v -> {if(shelf!=null && shelf.hasFocus())toolbarHomeIndex=shelf.focusedIndex;toolbarVisitActive=true;action.run();});
+        icon.setOnFocusChangeListener((v,f) -> {
+            android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();
+            bg.setColor(f?0x36FFFFFF:Color.TRANSPARENT);bg.setCornerRadius(NativeTheme.px(this,20));icon.setBackground(bg);
+        });
+        return icon;
+    }
+
+    private void updateSelectedApp(AppInfo app, Bitmap bitmap) {
+        if(app==null)return;
+        if(selectedAppName!=null)selectedAppName.setText(app.label);
+        if(ambientBackground!=null)ambientBackground.select(bitmap);
+    }
+
+    private void restoreToolbarHomeSelection() {
+        if(shelf==null || toolbarHomeIndex<0 || toolbarHomeIndex>=shelf.displayed.size())return;
+        shelf.focusedIndex=toolbarHomeIndex;
+        RecyclingShelfView.CellView cell=shelf.attached.get(toolbarHomeIndex);
+        updateSelectedApp(shelf.displayed.get(toolbarHomeIndex),cell==null?null:cell.iconBitmap);
+    }
+
+    private void showControlCenter(View anchor,String key) {
+        if(controlCenter==null) {
+            controlCenter=new ControlCenterPanel(this,new ControlCenterPanel.Host() {
+                public String deviceName() { return "This TV"; }
+                public String networkName() { return netState==NET_WIFI?"Wi-Fi":netState==NET_ETHERNET?"Ethernet":"Network"; }
+                public String networkStatus() {return netState==NET_NONE?"Not connected":"Connected";}
+                public String airStatus() {return !AirPlayMonitorService.receiverInstalled(LauncherActivity.this)?"Unavailable":airState==AirPlayStatus.State.READY?"Ready":airState==AirPlayStatus.State.STARTING?"Starting":"Unavailable";}
+                public String airSummary() {return !AirPlayMonitorService.receiverInstalled(LauncherActivity.this)?"Receiver not installed":airState==AirPlayStatus.State.FAILED?"Open receiver to retry":"Screen mirroring receiver";}
+                public String bluetoothSummary() {return btAdapter()==null?"Not available on this device":isBtOn()?"Open paired devices":"Bluetooth is off";}
+                public List<ControlCenterPanel.Device> devices() {return pairedControlsDevices();}
+                public void network() {openNetSettings();}
+                public void inputs() {
+                    controlCenter.hide();
+                    Intent input=new Intent("android.settings.TV_INPUT_SETTINGS");
+                    try {startActivity(input);} catch(RuntimeException e){openDrawer();}
+                }
+                public void airplay() {openAirPlayReceiver();}
+                public void bluetooth() {controlsBluetoothKey="bluetooth";resumeControlsAfterBluetooth=true;onBtPillPressed();}
+                public void pair() {controlsBluetoothKey="pair";resumeControlsAfterBluetooth=true;openBluetoothPairing=true;onBtPillPressed();}
+                public void settings() {showSettingsPanel();}
+                public void shown(boolean visible) {
+                    restoreToolbarHomeSelection();
+                    if(shelf!=null)shelf.animate().alpha(visible?.66f:1f).setDuration(150).start();
+                    if(selectedAppName!=null)selectedAppName.animate().alpha(visible?.66f:1f).setDuration(150).start();
+                    if(ringView!=null)ringView.setVisibility(View.INVISIBLE);
+                }
+            });
+            root.addView(controlCenter);
+        }
+        controlCenter.show(anchor,key);
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private List<ControlCenterPanel.Device> pairedControlsDevices() {
+        List<ControlCenterPanel.Device> result=new ArrayList<>();
+        android.bluetooth.BluetoothAdapter adapter=btAdapter();
+        if(adapter==null)return result;
+        try {
+            for(android.bluetooth.BluetoothDevice device:adapter.getBondedDevices()) {
+                String name=device.getName();if(name==null||name.isEmpty())name="Bluetooth device";
+                String key="device:"+device.getAddress();
+                final String selection=key;
+                result.add(new ControlCenterPanel.Device(key,name,"Paired",BluetoothPanel.iconFor(device),()->{
+                    controlsBluetoothKey=selection;resumeControlsAfterBluetooth=true;
+                    showBtPanel();btPanel.showDeviceDetails(device);
+                }));
+                if(result.size()==3)break;
+            }
+        }catch(SecurityException ignored) { }
+        return result;
+    }
+
     /** AirPlay status pill — leftmost toolbar pill, built only when the
      *  AirPlay receiver app ({@link AirPlayMonitorService#RECEIVER_PKG}) is
      *  installed. Null otherwise. */
@@ -428,7 +520,7 @@ public class LauncherActivity extends Activity {
      *  the background. */
     private final Runnable slideshowTick = new Runnable() {
         @Override public void run() {
-            if (destroyed || systemWallpaper) return;
+            if (destroyed || systemWallpaper || ambientBackgroundEnabled) return;
             advanceSlideshow();
             if (slideshowDurationSec > 0 && !uiPaused) {
                 uiHandler.postDelayed(this, slideshowDurationSec * 1000L);
@@ -950,6 +1042,7 @@ public class LauncherActivity extends Activity {
     private static final int SR_DEVICE_MENU          = 23; // → SPAGE_DEVICE
     private static final int SR_SYSTEM_WALLPAPER     = 24;
     private static final int SR_FAVORITES_BACKGROUND = 25;
+    private static final int SR_AMBIENT_BACKGROUND = 26;
 
     private static final int[] SROWS_MAIN = {
             SR_APPEARANCE_MENU, SR_WALLPAPER_MENU, SR_APPS_MENU,
@@ -958,7 +1051,7 @@ public class LauncherActivity extends Activity {
             SR_LAYOUT_COLUMNS, SR_CARD_CORNER, SR_FOCUS_BORDER,
             SR_FOCUS_COLOR, SR_FAVORITES_BACKGROUND, SR_CLOCK };
     private static final int[] SROWS_WALLPAPER = {
-            SR_SYSTEM_WALLPAPER, SR_SET_WALLPAPER, SR_SLIDESHOW_FOLDER,
+            SR_AMBIENT_BACKGROUND, SR_SYSTEM_WALLPAPER, SR_SET_WALLPAPER, SR_SLIDESHOW_FOLDER,
             SR_SLIDESHOW_DURATION, SR_SLIDESHOW_RESTART, SR_IDLE_HIDE };
     private static final int[] SROWS_APPS = {
             SR_HIDE_APPS, SR_KEYMAP };
@@ -1018,6 +1111,7 @@ public class LauncherActivity extends Activity {
             case SR_CLOCK:              return R.string.settings_row_show_clock;
             case SR_BACKUP_MENU:        return R.string.settings_row_backup_menu;
             case SR_SYSTEM:             return R.string.settings_row_system_settings;
+            case SR_AMBIENT_BACKGROUND: return R.string.settings_row_ambient_background;
             case SR_SYSTEM_WALLPAPER:   return R.string.settings_row_system_wallpaper;
             case SR_SET_WALLPAPER:      return R.string.settings_row_set_wallpaper;
             case SR_SLIDESHOW_FOLDER:   return R.string.settings_row_slideshow_folder;
@@ -1117,7 +1211,7 @@ public class LauncherActivity extends Activity {
                     layoutColumns, layoutColumns, clockSummaryLabel());
         }
         if (rowId == SR_WALLPAPER_MENU) {
-            String slideshow = systemWallpaper
+            String slideshow = ambientBackgroundEnabled ? getString(R.string.settings_row_ambient_background) : systemWallpaper
                     ? getString(R.string.settings_summary_system_wallpaper)
                     : slideshowFolderUri == null
                     ? getString(R.string.settings_summary_no_folder)
@@ -1194,6 +1288,12 @@ public class LauncherActivity extends Activity {
             (oldFocus, newFocus) -> {
                 if (destroyed) return;
                 if (newFocus == null) return; // transient — let the next focus event decide
+                if ((newFocus==airBtn || newFocus==btBtn || newFocus==mapperBtnView)
+                        && oldFocus instanceof RecyclingShelfView.CellView && !toolbarVisitActive && !anyOverlayLogicallyOpen()
+                        && !(controlCenter!=null && controlCenter.isVisible())) {
+                    toolbarHomeIndex=((RecyclingShelfView.CellView)oldFocus).boundIndex;
+                    toolbarVisitActive=true;
+                }
                 if (!(newFocus instanceof RecyclingShelfView.CellView)
                         && !(newFocus instanceof AppDrawer.DrawerCell)) {
                     RingView rv = ringView;
@@ -1555,6 +1655,8 @@ public class LauncherActivity extends Activity {
         resetHomeAlpha();   // clear any leftover alpha from an interrupted close-fade
         resolveHomeCount(visible.size());
         int hc = effectiveHomeCount(visible.size());
+        drawerReturnIndex = Math.min(Math.max(0,s.focusedIndex),Math.max(0,hc-1));
+        drawerReturnPackage = visible.get(drawerReturnIndex).packageName;
         d.setApps(visible, hc);
         // The drawer's row 0 IS the home favourites row, so the focused home
         // cell maps 1:1 to a drawer index. Pressing DOWN drops the selector
@@ -1565,7 +1667,7 @@ public class LauncherActivity extends Activity {
         int homeIdx = Math.min(Math.max(0, s.focusedIndex), Math.max(0, hc - 1));
         int focus = focusIdx >= 0
                 ? Math.min(focusIdx, visible.size() - 1)
-                : HomeDrawerModel.navDown(layoutColumns, homeIdx, visible.size(), hc);
+                : homeIdx;
         final float homeRowCenterY = homeRowCenterYInRoot(s);
         // Hide the home shelf while the drawer covers the screen so we never
         // draw both grids at once (the drawer's row 0 already mirrors the home
@@ -1629,20 +1731,21 @@ public class LauncherActivity extends Activity {
         if (hc <= 0 || visibleSnapshot.isEmpty()) {
             d.close(Float.NaN, () -> {
                 if (destroyed) return;
-                View nb = netBtn;
+                View nb = netBtn != null ? netBtn : mapperBtnView;
                 if (nb != null) nb.requestFocus();
                 if (afterClose != null) afterClose.run();
             });
             pushHomeRow(s2, visibleSnapshot, hc);   // clears the shelf
             RingView rv = ringView; if (rv != null) rv.setVisibility(View.INVISIBLE);
-            View nb = netBtn; if (nb != null) nb.requestFocus();
+            View nb = netBtn != null ? netBtn : mapperBtnView; if (nb != null) nb.requestFocus();
             return;
         }
         // Land focus on the drawer's app when it is a home app, else the
         // nearest home app. Seed focusedIndex so the shelf's setApps posts
         // its focus request onto the right cell.
-        final int homeIdx = (drawerFocus >= 0 && drawerFocus < hc)
-                ? drawerFocus : Math.max(0, hc - 1);
+        int restoreIndex=Math.min(drawerReturnIndex,hc-1);
+        for(int i=0;i<hc;i++)if(visibleSnapshot.get(i).packageName.equals(drawerReturnPackage)) {restoreIndex=i;break;}
+        final int homeIdx=Math.max(0,restoreIndex);
         final float homeRowCenterY = homeRowCenterYInRoot(s2);
         d.close(homeRowCenterY, () -> {
             if (!destroyed && shelf == s2) {
@@ -1686,10 +1789,10 @@ public class LauncherActivity extends Activity {
         // Toolbar pills fade in to their dim idle alpha (0.6 — the rest value
         // their own focus listeners use), so an unfocused pill lands correctly
         // and the corner cluster no longer pops while the centre cross-fades.
-        fadeViewIn(airBtn, 0.6f);
-        fadeViewIn(btBtn, 0.6f);
+        fadeViewIn(airBtn, 1f);
+        fadeViewIn(btBtn, 1f);
         fadeViewIn(netBtn, 0.6f);
-        fadeViewIn(mapperBtnView, 0.6f);
+        fadeViewIn(mapperBtnView, 1f);
     }
 
     private void fadeViewIn(View v) {
@@ -1715,10 +1818,10 @@ public class LauncherActivity extends Activity {
         RecyclingShelfView s = shelf; if (s != null) { s.animate().cancel(); s.setAlpha(1f); }
         TextView cv = clockView;      if (cv != null) { cv.animate().cancel(); cv.setAlpha(1f); }
         RingView rv = ringView;       if (rv != null) { rv.animate().cancel(); rv.setAlpha(1f); }
-        View ab = airBtn;             if (ab != null) { ab.animate().cancel(); ab.setAlpha(0.6f); }
-        View bb = btBtn;              if (bb != null) { bb.animate().cancel(); bb.setAlpha(0.6f); }
-        View nb = netBtn;             if (nb != null) { nb.animate().cancel(); nb.setAlpha(0.6f); }
-        View mb = mapperBtnView;      if (mb != null) { mb.animate().cancel(); mb.setAlpha(0.6f); }
+        View ab = airBtn;             if (ab != null) { ab.animate().cancel(); ab.setAlpha(1f); }
+        View bb = btBtn;              if (bb != null) { bb.animate().cancel(); bb.setAlpha(1f); }
+        View nb = netBtn != null ? netBtn : mapperBtnView;             if (nb != null) { nb.animate().cancel(); nb.setAlpha(0.6f); }
+        View mb = mapperBtnView;      if (mb != null) { mb.animate().cancel(); mb.setAlpha(1f); }
     }
 
     /** Duplicate only drawable state; Bitmap pixels remain shared in GPU memory. */
@@ -1951,14 +2054,10 @@ public class LauncherActivity extends Activity {
      *  sharp toolbar/clock behind it would ghost through the frost. The home
      *  shelf is hidden separately (it owns focus-restore logic). */
     private void setHomeChromeVisible(boolean visible) {
-        View ab = airBtn;        if (ab != null) ab.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
-        View bb = btBtn;         if (bb != null) bb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
-        View nb = netBtn;        if (nb != null) nb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
-        View mb = mapperBtnView; if (mb != null) mb.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+        if (selectedAppName != null) selectedAppName.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         FavoritesBlurView blur = favoritesBlurLayer;
         if (blur != null) blur.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
-        TextView cv = clockView;
-        if (cv != null) cv.setVisibility(visible ? (showClock ? View.VISIBLE : View.GONE) : View.INVISIBLE);
+        if (clockView != null) clockView.setVisibility(showClock ? View.VISIBLE : View.GONE);
     }
 
     /** Launch the system uninstall flow for {@code app}. Shared by the drawer
@@ -2043,7 +2142,7 @@ public class LauncherActivity extends Activity {
             });
         } else {
             int last = s.lastIndex();
-            if (last < 0) { View nb = netBtn; if (nb != null) nb.requestFocus(); }
+            if (last < 0) { View nb = netBtn != null ? netBtn : mapperBtnView; if (nb != null) nb.requestFocus(); }
             else          s.requestFocusOnIndex(Math.max(0, Math.min(focusHint, last)), true);
         }
     }
@@ -2072,6 +2171,32 @@ public class LauncherActivity extends Activity {
         DisplayMetrics dm = getResources().getDisplayMetrics();
         density = dm.density; screenW = dm.widthPixels; screenH = dm.heightPixels;
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        NativeTheme.init(this);
+        // Apply the approved appearance/favourites once; preserve previous values
+        // privately for rollback and retain every app, shortcut and saved wallpaper.
+        if (!prefs.getBoolean("feather_theme_v1", false)) {
+            prefs.edit().putBoolean("feather_theme_v1", true)
+                    .putInt("pre_feather_layout_columns",prefs.getInt(KEY_LAYOUT_COLUMNS,6))
+                    .putInt("pre_feather_card_corner",prefs.getInt(KEY_CARD_CORNER_PERCENT,20))
+                    .putBoolean("pre_feather_focus_border",prefs.getBoolean(KEY_FOCUS_BORDER_ENABLED,false))
+                    .putString("pre_feather_app_order",prefs.getString(KEY_APP_ORDER,""))
+                    .putInt("pre_feather_home_count",prefs.getInt(KEY_HOME_COUNT,-1))
+                    .putBoolean("pre_feather_system_wallpaper",prefs.getBoolean(KEY_SYSTEM_WALLPAPER,false))
+                    .putString(KEY_APP_ORDER,"com.edde746.plezy,com.apple.atve.androidtv.appletv,com.google.android.youtube.tv,com.amazon.amazonvideo.livingroom,com.jio.media.jiotvplus,"+prefs.getString(KEY_APP_ORDER,""))
+                    .putInt(KEY_HOME_COUNT,5)
+                    .putBoolean(KEY_INITIAL_ORDER_APPLIED,true)
+                    .putBoolean(KEY_SYSTEM_WALLPAPER,false)
+                    .putBoolean(KEY_AMBIENT_BACKGROUND,true)
+                    .putInt(KEY_LAYOUT_COLUMNS, 5).putInt(KEY_CARD_CORNER_PERCENT, 14)
+                    .putBoolean(KEY_FOCUS_BORDER_ENABLED, false).apply();
+        }
+        // Separate gate also repairs the first preview's stale-cache order.
+        if(!prefs.getBoolean("feather_favorites_v1",false)) {
+            prefs.edit().putBoolean("feather_favorites_v1",true)
+                    .putString(KEY_APP_ORDER,"com.edde746.plezy,com.apple.atve.androidtv.appletv,com.google.android.youtube.tv,com.amazon.amazonvideo.livingroom,com.jio.media.jiotvplus,"+prefs.getString(KEY_APP_ORDER,""))
+                    .putInt(KEY_HOME_COUNT,5).apply();
+        }
+        ambientBackgroundEnabled=prefs.getBoolean(KEY_AMBIENT_BACKGROUND,true);
         loadLayoutOptions();
         computeTileDims();
         pm = getPackageManager();
@@ -2137,6 +2262,8 @@ public class LauncherActivity extends Activity {
                     hideSettingsPanel();
                     return;
                 }
+                if (btPanel != null && btPanel.isVisible()) {btPanel.handleKeyDown(KeyEvent.KEYCODE_BACK); return;}
+                if (controlCenter != null && controlCenter.isVisible()) {controlCenter.hide();return;}
                 // 3. Context menu / reorder mode open → exit it. The context
                 //    menu lives inside reorder mode in this design, so a
                 //    single exitReorderMode call hides both.
@@ -2275,7 +2402,9 @@ public class LauncherActivity extends Activity {
                     // Skip when appList was empty in onResume (pendingScrollIdx was
                     // set). loadApps will call requestFocusOnIndex once the shelf is
                     // populated; firing here would snap to focusedIndex=0 first → flash.
-                    if (!destroyed && pendingScrollIdx < 0) s.requestFocusOnIndex(s.focusedIndex);
+                    if (!destroyed && pendingScrollIdx < 0 && !anyOverlayLogicallyOpen()
+                            && !(controlCenter!=null && controlCenter.isVisible())) s.requestFocusOnIndex(s.focusedIndex);
+                    else if(controlCenter!=null && controlCenter.isVisible() && !anyOverlayLogicallyOpen())controlCenter.restoreFocus();
                 }
             };
             ViewTreeObserver vto = s.getViewTreeObserver();
@@ -2570,6 +2699,9 @@ public class LauncherActivity extends Activity {
 
     @Override @SuppressWarnings("deprecation")
     public void onBackPressed() {
+        if (btPanel != null && btPanel.isVisible()) { btPanel.handleKeyDown(KeyEvent.KEYCODE_BACK); return; }
+        if (controlCenter != null && controlCenter.isVisible()
+                && (settingsOverlay == null || settingsOverlay.getVisibility()!=View.VISIBLE)) {controlCenter.hide();return;}
         FrameLayout fp = folderPickerOverlay;
         if (fp != null && fp.getVisibility() == View.VISIBLE) {
             hideFolderPicker(); return;
@@ -2705,13 +2837,19 @@ public class LauncherActivity extends Activity {
         // {@link #loadWallpaper()} called later in onCreate is then a
         // no-op (the controller's loadStored short-circuits when the
         // snapshot pre-painted) — no second decode, no flicker.
-        if (systemWallpaper) {
+        if (systemWallpaper || ambientBackgroundEnabled) {
             wallpaperFront.setVisibility(View.GONE);
             wallpaperBack.setVisibility(View.GONE);
             wallpaperCtl.suspend();
         } else {
             wallpaperCtl.loadSnapshotSync();
         }
+
+        ambientBackground = new AmbientBackgroundView(this);
+        ambientBackground.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        // A chosen wallpaper stays available through Glass's existing picker.
+        ambientBackground.setVisibility(ambientBackgroundEnabled ? View.VISIBLE : View.GONE);
+        root.addView(ambientBackground, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         drawerBlurLayer = new ImageView(this);
         drawerBlurLayer.setScaleType(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -2727,8 +2865,8 @@ public class LauncherActivity extends Activity {
                 View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         root.addView(drawerBlurLayer, new FrameLayout.LayoutParams(MATCH, MATCH));
 
-        final int favoritesMarginH = dp(32);
-        final int favoritesBottom = dp(18);
+        final int favoritesMarginH = NativeTheme.px(this, 68);
+        final int favoritesBottom = NativeTheme.px(this, 49);
         if (favoritesBackground) {
             favoritesBlurLayer = new FavoritesBlurView(
                     this,
@@ -2746,6 +2884,8 @@ public class LauncherActivity extends Activity {
             FavoritesBlurView favorites = favoritesBlurLayer;
             if (favorites != null) favorites.invalidate();
             legacyGridBlurDirty = true;
+            if (ambientBackground != null) ambientBackground.setVisibility(
+                    ambientBackgroundEnabled ? View.VISIBLE : View.GONE);
         });
 
         shelf = new RecyclingShelfView(this);
@@ -2756,11 +2896,24 @@ public class LauncherActivity extends Activity {
         shelf.setLayoutParams(shelfLp);
         if (favoritesBackground) {
             shelf.setBackground(new FavoritesGlassDrawable(
-                    Math.round(bannerHpx * 0.22f), density, false));
+                    NativeTheme.px(this, 29), density, false));
         }
         shelf.setContentDescription(getString(R.string.cd_app_shelf));
         shelf.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         root.addView(shelf);
+
+        selectedAppName = new TextView(this);
+        selectedAppName.setTypeface(NativeTheme.light());
+        selectedAppName.setTextColor(0xFFF8F6FA);
+        selectedAppName.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, NativeTheme.px(this, 43));
+        selectedAppName.setIncludeFontPadding(false);
+        selectedAppName.setSingleLine(true);
+        selectedAppName.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        FrameLayout.LayoutParams nameLp = new FrameLayout.LayoutParams(screenW - NativeTheme.px(this, 170), NativeTheme.px(this, 58));
+        nameLp.gravity = Gravity.BOTTOM | Gravity.START;
+        nameLp.setMarginStart(NativeTheme.px(this, 85));
+        nameLp.bottomMargin = favoritesBottom + cellHpx + NativeTheme.px(this, 14);
+        root.addView(selectedAppName, nameLp);
 
         clockView = new TextView(this);
         // v1.4.9: the rounded "pill" plate is gone — the clock floats directly
@@ -2776,7 +2929,7 @@ public class LauncherActivity extends Activity {
         // the time (left-alignment read as "off to the side"). Small positive
         // inter-line gap so the second line sits cleanly below the time rather
         // than riding up into its descenders.
-        clockView.setGravity(Gravity.CENTER_HORIZONTAL);
+        clockView.setGravity(Gravity.START);
         clockView.setLineSpacing(dp(2), 1.0f);
         clockView.setContentDescription(getString(R.string.cd_clock));
         clockView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
@@ -2785,18 +2938,18 @@ public class LauncherActivity extends Activity {
         // Mirror the toolbar's MARG_E (dp 16) on the start side, and use
         // the same MARG_T (dp 14) on top, so the left-edge clock and the
         // right-edge toolbar are visually symmetric.
-        clkLp.setMarginStart(dp(16));
-        clkLp.topMargin = dp(14);
+        clkLp.setMarginStart(NativeTheme.px(this, 76));
+        clkLp.topMargin = NativeTheme.px(this, 48);
         clockView.setLayoutParams(clkLp);
         clockView.setTextColor(Color.WHITE);
         // Bigger, more modern clock now that the plate is gone (was 22 sp in a
         // pill, then 38 sp). 44 sp in a light weight reads as a clean, modern
         // time; the day/date line below renders at 0.40x via ClockFormatter.
-        clockView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 44);
+        clockView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, NativeTheme.px(this, 68));
         // sans-serif-medium for a bolder HH:mm that stays legible over light
         // wallpapers. AM/PM (thin) and the date line (regular) set their own
         // faces via ClockFormatter spans, so only the digits change.
-        clockView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        clockView.setTypeface(NativeTheme.light());
         clockView.setLetterSpacing(0.01f);
         // If the user has the clock off, hide it before the first paint so
         // cold start never flashes a visible-then-hidden clock. {@link
@@ -2859,80 +3012,36 @@ public class LauncherActivity extends Activity {
         overlayBackdrop.setClickable(true);
         root.addView(overlayBackdrop, new FrameLayout.LayoutParams(MATCH, MATCH));
 
-        // Top-right toolbar buttons. Layout left-to-right after the v1.3.3
-        // swap that moved the WiFi pill to its leftmost-in-cluster
-        // position and the gear pill to the right edge:
-        //
-        //     [ wifi ]   [ ⚙ gear ]
-        //
-        // Why swap from the v1.3.0 [ ⚙ ] [ wifi ] order: WiFi is the
-        // single daily-frequent action on the toolbar (people dig into
-        // network settings far more often than the consolidated config
-        // panel). Putting it leftmost in the cluster lines it up with
-        // the visual centre-of-mass of the home shelf below.
-        // The gear pill takes the right-edge slot. Pressing UP from a
-        // shelf cell lands on the gear.
-        //
-        // Both pills are positioned from the right edge: gear sits flush
-        // at MARG_E (rightmost), WiFi sits one (BTN_VIEW_SZ + BTN_GAP)
-        // step further left (the "leftmost-in-cluster" slot).
-        netBtn = buildNetBtn(BTN_SZ);
-        FrameLayout.LayoutParams netLp = new FrameLayout.LayoutParams(BTN_VIEW_SZ, BTN_VIEW_SZ);
-        netLp.gravity = Gravity.TOP | Gravity.END;
-        netLp.topMargin = MARG_T;
-        // One stride step from the right edge (left of the gear pill).
-        netLp.setMarginEnd(MARG_E + BTN_VIEW_SZ + BTN_GAP);
-        netBtn.setLayoutParams(netLp);
-        netBtn.setClipBounds(null);
-        netBtn.setContentDescription(getString(R.string.cd_network_settings));
-        root.addView(netBtn);
-
-        // BT status pill — leftmost in the cluster, two strides from the right
-        // edge: [ bt ] [ wifi ] [ gear ]. Only built on devices that actually
-        // have a Bluetooth radio (mirrors the TV-input tiles only appearing on
-        // TVs with inputs). On a BT-less box the cluster stays [ wifi ] [ gear ]
-        // exactly as before and nothing in the d-pad chain changes, because the
-        // wifi/gear key handlers test btBtn for null before routing to it.
-        hasBluetooth = getPackageManager()
-                .hasSystemFeature(PackageManager.FEATURE_BLUETOOTH);
-        if (hasBluetooth) {
-            btBtn = buildBtBtn(BTN_SZ);
-            FrameLayout.LayoutParams btLp = new FrameLayout.LayoutParams(BTN_VIEW_SZ, BTN_VIEW_SZ);
-            btLp.gravity = Gravity.TOP | Gravity.END;
-            btLp.topMargin = MARG_T;
-            // Two stride steps from the right edge (left of the WiFi pill).
-            btLp.setMarginEnd(MARG_E + 2 * (BTN_VIEW_SZ + BTN_GAP));
-            btBtn.setLayoutParams(btLp);
-            btBtn.setClipBounds(null);
-            btBtn.setContentDescription(getString(R.string.cd_bluetooth_settings));
-            root.addView(btBtn);
+        // Three outline controls in a single, quiet glass capsule.
+        hasBluetooth = getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH);
+        android.widget.LinearLayout controls = new android.widget.LinearLayout(this);
+        controls.setGravity(Gravity.CENTER);
+        controls.setPadding(NativeTheme.px(this, 7), NativeTheme.px(this, 5), NativeTheme.px(this, 7), NativeTheme.px(this, 5));
+        controls.setBackground(NativeTheme.glass(this, 28, false));
+        controls.setClipChildren(false);
+        toolbarCapsule = controls;
+        airBtn = nativeControl(R.drawable.ic_airplay, "AirPlay", () -> showControlCenter(airBtn, "airplay"));
+        btBtn = nativeControl(R.drawable.ic_bt, "Bluetooth", () -> {resumeControlsAfterBluetooth=false;openBluetoothPairing=false;onBtPillPressed();});
+        mapperBtnView = nativeControl(R.drawable.ic_feather_sliders, "Control Center", () -> showControlCenter(mapperBtnView, "network"));
+        View[] buttons = {airBtn, btBtn, mapperBtnView};
+        for (int i=0;i<buttons.length;i++) {
+            final int at=i;
+            View button=buttons[i];
+            controls.addView(button, new android.widget.LinearLayout.LayoutParams(NativeTheme.px(this, 48), NativeTheme.px(this, 44)));
+            button.setOnKeyListener((v,k,e) -> {
+                if (e.getAction()!=KeyEvent.ACTION_DOWN) return false;
+                if(k==KeyEvent.KEYCODE_DPAD_LEFT || k==KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    buttons[Math.max(0, Math.min(2, at + (k==KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1)))].requestFocus(); return true;
+                }
+                if(k==KeyEvent.KEYCODE_DPAD_DOWN) { toolbarVisitActive=false; if(drawer!=null && drawer.getVisibility()==View.VISIBLE)drawer.requestFocusOnIndex(drawer.focusedIndex);else if(shelf!=null)shelf.requestFocusOnIndex(Math.max(0,toolbarHomeIndex)); return true; }
+                if(k==KeyEvent.KEYCODE_DPAD_UP) return true;
+                return false;
+            });
         }
-
-        // AirPlay status pill — leftmost: [ airplay ] [ bt ] [ wifi ] [ gear ].
-        // Only when the background AirPlay receiver is installed; otherwise the
-        // cluster and its d-pad chain are exactly as before.
-        if (AirPlayMonitorService.receiverInstalled(this)) {
-            airBtn = buildAirBtn(BTN_SZ);
-            FrameLayout.LayoutParams airLp = new FrameLayout.LayoutParams(BTN_VIEW_SZ, BTN_VIEW_SZ);
-            airLp.gravity = Gravity.TOP | Gravity.END;
-            airLp.topMargin = MARG_T;
-            airLp.setMarginEnd(MARG_E + (btBtn != null ? 3 : 2) * (BTN_VIEW_SZ + BTN_GAP));
-            airBtn.setLayoutParams(airLp);
-            airBtn.setClipBounds(null);
-            root.addView(airBtn);
-            refreshAirState();
-        }
-
-        View mpLocal = buildMapperBtn(BTN_SZ);
-        mapperBtnView = mpLocal;
-        FrameLayout.LayoutParams mpLp = new FrameLayout.LayoutParams(BTN_VIEW_SZ, BTN_VIEW_SZ);
-        mpLp.gravity = Gravity.TOP | Gravity.END;
-        mpLp.topMargin = MARG_T;
-        // Flush at the right edge.
-        mpLp.setMarginEnd(MARG_E);
-        mpLocal.setLayoutParams(mpLp);
-        mpLocal.setContentDescription(getString(R.string.cd_settings));
-        root.addView(mpLocal);
+        FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(WRAP, NativeTheme.px(this,56), Gravity.TOP | Gravity.END);
+        controlsLp.topMargin=NativeTheme.px(this,62);controlsLp.setMarginEnd(NativeTheme.px(this,76));
+        root.addView(controls, controlsLp);
+        refreshAirState();
 
         // v1.5.0 pull-down app drawer. Added to the z-order ABOVE the
         // wallpaper / shelf / clock / toolbar so that when it is shown its own
@@ -3614,7 +3723,7 @@ public class LauncherActivity extends Activity {
                     return true;
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
                     // WiFi is BT's right neighbour.
-                    View nb = netBtn; if (nb != null) { nb.requestFocus(); return true; }
+                    View nb = netBtn != null ? netBtn : mapperBtnView; if (nb != null) { nb.requestFocus(); return true; }
                     RecyclingShelfView sr = shelf;
                     if (sr != null) sr.requestFocusOnIndex(0);
                     return true;
@@ -3729,6 +3838,8 @@ public class LauncherActivity extends Activity {
         }
     }
 
+    // The legacy branch only runs below API 33, before exported flags are required.
+    @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
     private void registerAirReceiver() {
         if (airBtn == null || airReceiver != null) return;
         airReceiver = new BroadcastReceiver() {
@@ -3756,12 +3867,13 @@ public class LauncherActivity extends Activity {
         View b = airBtn;
         if (b == null) return;
         AirPlayStatus.State s = AirPlayMonitorService.readState(this);
-        b.setContentDescription(getString(s == AirPlayStatus.State.READY ? R.string.cd_airplay_ready
+        b.setContentDescription(!AirPlayMonitorService.receiverInstalled(this) ? "AirPlay unavailable" : getString(s == AirPlayStatus.State.READY ? R.string.cd_airplay_ready
                 : s == AirPlayStatus.State.FAILED ? R.string.cd_airplay_failed
                 : R.string.cd_airplay_starting));
         if (s != airState) {
             airState = s;
             b.invalidate();
+            if(controlCenter!=null)controlCenter.refresh();
         }
     }
 
@@ -3859,7 +3971,7 @@ public class LauncherActivity extends Activity {
                     return true;
                 case KeyEvent.KEYCODE_DPAD_LEFT:
                     // WiFi is the only neighbour to the left.
-                    View nb = netBtn; if (nb != null) nb.requestFocus(); return true;
+                    View nb = netBtn != null ? netBtn : mapperBtnView; if (nb != null) nb.requestFocus(); return true;
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
                     // Rightmost in the toolbar cluster — wrap to the
                     // first shelf cell. Symmetric with the WiFi pill's
@@ -4080,7 +4192,7 @@ public class LauncherActivity extends Activity {
         int s = computeNetState();
         if (s != netState) {
             netState = s;
-            View nb = netBtn;
+            View nb = netBtn != null ? netBtn : mapperBtnView;
             if (nb != null) nb.invalidate();
         }
     }
@@ -4247,7 +4359,14 @@ public class LauncherActivity extends Activity {
                     if (rv != null) rv.setVisibility(View.INVISIBLE);
                     ensureOverlayBackdropVisible();
                 }
-                @Override public void onPanelHidden() { dismissOverlayBackdropIfIdle(); }
+                @Override public void onPanelHidden() {
+                    restoreToolbarHomeSelection();
+                    dismissOverlayBackdropIfIdle();
+                    if(resumeControlsAfterBluetooth) {
+                        resumeControlsAfterBluetooth=false;
+                        showControlCenter(mapperBtnView, controlsBluetoothKey);
+                    }
+                }
                 @Override public void openBtSettings() { LauncherActivity.this.openBtSettings(); }
                 @Override public void openBtPairing() { LauncherActivity.this.openBtPairing(); }
                 @Override public boolean hasBtSettingsScreen() {
@@ -4268,6 +4387,7 @@ public class LauncherActivity extends Activity {
             }, density);
         }
         btPanel.show();
+        if(openBluetoothPairing) {openBluetoothPairing=false;btPanel.showPairing();}
     }
 
     /** Draws only the wallpaper pixels behind the favorites plate. Android
@@ -4307,7 +4427,7 @@ public class LauncherActivity extends Activity {
         }
 
         @Override protected void onDraw(Canvas canvas) {
-            if (systemWallpaper) return;
+            if (systemWallpaper || ambientBackgroundEnabled) return;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 drawWallpaperSource(canvas, wallpaperBack);
                 drawWallpaperSource(canvas, wallpaperFront);
@@ -4472,8 +4592,8 @@ public class LauncherActivity extends Activity {
             scroller = new OverScroller(ctx, SCROLL_EASE);
             cellW   = tileWpx;
             cellH   = cellHpx;
-            sidePad = dp(12);
-            edgePad = dp(48);
+            sidePad = NativeTheme.px(LauncherActivity.this, 13);
+            edgePad = NativeTheme.px(LauncherActivity.this, 25);
             stride  = cellW + sidePad * 2;
             setFocusable(false);
             setClipChildren(false);
@@ -5030,6 +5150,7 @@ public class LauncherActivity extends Activity {
         private void forceRingAndLabelSync(CellView cv) {
             if (cv == null || !cv.isAttachedToWindow() || cv.getWidth() <= 0) return;
             positionRing(cv);
+            updateSelectedApp(cv.boundApp, cv.iconBitmap);
             cv.invalidate();
         }
 
@@ -5368,7 +5489,7 @@ public class LauncherActivity extends Activity {
                 labelPaint.setTextAlign(Paint.Align.CENTER);
                 labelPaint.setShadowLayer(dp(4), 0, dp(1), 0xCC000000);
                 labelPaint.setLetterSpacing(0.02f);
-                labelPaint.setFakeBoldText(true);                       // match the drawer: slightly heavier app name
+                labelPaint.setFakeBoldText(false);                       // match the drawer: slightly heavier app name
 
                 labelTp = new TextPaint(labelPaint);
 
@@ -5423,6 +5544,7 @@ public class LauncherActivity extends Activity {
                             setScaleX(f ? FOCUS_SCALE : 1f);
                             setScaleY(f ? FOCUS_SCALE : 1f);
                             setTranslationZ(f ? focusShadowZ : 0f);
+                            setTranslationY(f ? -NativeTheme.px(LauncherActivity.this, 8) : 0f);
                             if (f && isAttachedToWindow() && getWidth() > 0)
                                 positionRing(CellView.this);
                         } else if (f) {
@@ -5434,7 +5556,7 @@ public class LauncherActivity extends Activity {
                             // in lockstep with the cell every frame — and being
                             // pre-allocated, avoids per-focus lambda churn.
                             animate().scaleX(FOCUS_SCALE).scaleY(FOCUS_SCALE)
-                                     .translationZ(focusShadowZ)
+                                     .translationY(-NativeTheme.px(LauncherActivity.this, 8)).translationZ(focusShadowZ)
                                      .setDuration(FOCUS_DUR_MS)
                                      .setInterpolator(FOCUS_IN_BOUNCE)
                                      .setUpdateListener(focusUpdateListener)
@@ -5446,7 +5568,7 @@ public class LauncherActivity extends Activity {
                             // during the unfocus tween (it's a no-op anyway since
                             // !isFocused, but the dispatch cost is real).
                             animate().scaleX(1f).scaleY(1f)
-                                     .translationZ(0f)
+                                     .translationY(0f).translationZ(0f)
                                      .setDuration(UNFOCUS_DUR_MS)
                                      .setInterpolator(FOCUS_EASE)
                                      .setUpdateListener(null)
@@ -5456,6 +5578,7 @@ public class LauncherActivity extends Activity {
                     invalidate();
                     if (f) {
                         focusedIndex = boundIndex;
+                        updateSelectedApp(boundApp, iconBitmap);
                         if (!reorderMode) {
                             // Position the ring SYNCHRONOUSLY here. By the time we get
                             // a focus-gain callback, requestFocusOnIndex has already
@@ -5596,6 +5719,7 @@ public class LauncherActivity extends Activity {
                             requestFocusOnIndex(boundIndex + 1, ev.getRepeatCount() > 0);
                             return true;
                         case KeyEvent.KEYCODE_DPAD_UP: {
+                            toolbarHomeIndex=boundIndex;toolbarVisitActive=true;
                             View up = mapperBtnView != null ? mapperBtnView : netBtn;
                             if (up != null) up.requestFocus();
                             return true;
@@ -5744,9 +5868,10 @@ public class LauncherActivity extends Activity {
                 setScaleX(FOCUS_SCALE);
                 setScaleY(FOCUS_SCALE);
                 setTranslationZ(focusShadowZ);
+                setTranslationY(-NativeTheme.px(LauncherActivity.this, 8));
             }
 
-            @Override public void setIconBitmap(Bitmap bmp) { iconBitmap = bmp; invalidate(); }
+            @Override public void setIconBitmap(Bitmap bmp) { iconBitmap = bmp; if(isFocused())updateSelectedApp(boundApp,bmp); invalidate(); }
 
             // ── IconTarget ──────────────────────────────────────────────
             @Override public String  iconTargetPackage() { return boundApp != null ? boundApp.packageName : null; }
@@ -5869,17 +5994,23 @@ public class LauncherActivity extends Activity {
         // ticket is still current before touching rebuildingApps or focus.
         int setAppsGen = 0;
 
+        private final android.graphics.drawable.GradientDrawable drawerSheet = NativeTheme.glass(LauncherActivity.this,29,true);
+        private final Paint drawerTitlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         AppDrawer(Context ctx) {
             super(ctx);
+            drawerTitlePaint.setColor(0xFFF8F6FA);
+            drawerTitlePaint.setTextSize(NativeTheme.px(LauncherActivity.this,34));
+            drawerTitlePaint.setTypeface(NativeTheme.light());
             scroller = new OverScroller(ctx, SCROLL_EASE);
             cellW     = tileWpx;
-            cellH     = cellHpx;
-            sidePad   = dp(12);
+            cellH     = bannerHpx + NativeTheme.px(LauncherActivity.this, 30);
+            sidePad   = NativeTheme.px(LauncherActivity.this, 13);
             stride    = cellW + sidePad * 2;
-            rowGap    = dp(14);
+            rowGap    = NativeTheme.px(LauncherActivity.this, 10);
             rowStride = cellH + rowGap;
-            topPad    = dp(28);
-            bottomPad = dp(28);
+            topPad    = Math.min(NativeTheme.px(LauncherActivity.this,285),
+                    screenH-NativeTheme.px(LauncherActivity.this,100)-2*cellH-rowGap);
+            bottomPad = NativeTheme.px(LauncherActivity.this, 120);
             applyVeil();
             setFocusable(false);
             setClickable(true);
@@ -6052,12 +6183,6 @@ public class LauncherActivity extends Activity {
          *  apps) the block is centred vertically for a balanced look;
          *  otherwise it starts at {@code topPad} and scrolls. */
         private int firstRowTop() {
-            int rows = HomeDrawerModel.rowCount(layoutColumns, displayed.size(), hc());
-            int bh = blockHeight(rows);
-            int vh = getHeight();
-            if (vh > 0 && topPad + bh + bottomPad <= vh) {
-                return Math.max(topPad, (vh - bh) / 2);
-            }
             return topPad;
         }
 
@@ -6089,17 +6214,19 @@ public class LauncherActivity extends Activity {
 
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            if (!favoritesBackground) return;
-            int favorites = hc();
-            if (favorites <= 0) return;
-            float top = At4kHomeLayout.favoritesPlateTop(firstRowTop(), scrollY);
-            float bottom = At4kHomeLayout.favoritesPlateBottom(
-                    firstRowTop(), scrollY, cellH);
-            if (bottom < 0f || top > getHeight()) return;
-            float margin = dp(32);
-            favoritesGlass.setBounds(Math.round(margin), Math.round(top),
-                    Math.round(getWidth() - margin), Math.round(bottom));
-            favoritesGlass.draw(canvas);
+            drawerSheet.setBounds(NativeTheme.px(LauncherActivity.this,68), NativeTheme.px(LauncherActivity.this,183),
+                    getWidth()-NativeTheme.px(LauncherActivity.this,68),getHeight()-NativeTheme.px(LauncherActivity.this,80));
+            drawerSheet.draw(canvas);
+            canvas.drawText("All apps", NativeTheme.px(LauncherActivity.this,98),NativeTheme.px(LauncherActivity.this,244),drawerTitlePaint);
+        }
+
+        @Override protected void dispatchDraw(Canvas canvas) {
+            int save=canvas.save();
+            canvas.clipRect(NativeTheme.px(LauncherActivity.this,68),topPad-NativeTheme.px(LauncherActivity.this,15),
+                    getWidth()-NativeTheme.px(LauncherActivity.this,68),
+                    Math.min(getHeight()-NativeTheme.px(LauncherActivity.this,92),topPad+2*cellH+rowGap+NativeTheme.px(LauncherActivity.this,8)));
+            super.dispatchDraw(canvas);
+            canvas.restoreToCount(save);
         }
 
         private int rowLeftPad(int row, int len) {
@@ -6125,7 +6252,10 @@ public class LauncherActivity extends Activity {
             return firstRowTop() + row * rowStride - scrollY;
         }
 
-        private int scrollYMax() { return Math.max(0, contentH - getHeight()); }
+        private int scrollYMax() {
+            int rows=HomeDrawerModel.rowCount(layoutColumns,displayed.size(),hc());
+            return Math.max(0,(rows-2)*rowStride);
+        }
         private int clampScrollY(int y) { return Math.max(0, Math.min(y, scrollYMax())); }
 
         private void fillVisible() {
@@ -6279,21 +6409,14 @@ public class LauncherActivity extends Activity {
 
         /** Scroll so the row of {@code index} is fully visible. */
         private void ensureVisible(int index, boolean snap) {
-            int viewH = getHeight();
-            if (viewH <= 0) return;   // not laid out yet — open()'s retry handles it
-            int row = HomeDrawerModel.rowOf(layoutColumns, index, hc());
-            int top    = firstRowTop() + row * rowStride;   // content-space (no scroll)
-            int bottom = top + cellH;
-            // Keep one whole row of context beyond the focused row, so focus
-            // scrolls the grid once it reaches the 2nd-last visible row (in
-            // either direction) instead of sitting flush against the edge.
-            int pad    = rowStride;
-            int target = scrollY;
-            if      (top - pad < scrollY)             target = top - pad;
-            else if (bottom + pad > scrollY + viewH)  target = bottom + pad - viewH;
-            target = clampScrollY(target);
-            if (snap) { if (target != scrollY) doScrollTo(target); }
-            else      smoothScrollTo(target);
+            if (getHeight() <= 0) return;
+            int row=HomeDrawerModel.rowOf(layoutColumns,index,hc());
+            int first=Math.round(scrollY/(float)rowStride);
+            int target=first*rowStride;
+            if(row<first)target=row*rowStride;
+            else if(row>=first+2)target=(row-1)*rowStride;
+            target=clampScrollY(target);
+            if(snap)doScrollTo(target);else smoothScrollTo(target);
         }
 
         void requestFocusOnIndex(int idx) { requestFocusOnIndex(idx, false); }
@@ -6688,11 +6811,11 @@ public class LauncherActivity extends Activity {
                 labelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
                 labelPaint.setColor(Color.WHITE);                       // white — visible over the frosted blur
                 labelPaint.setTextSize(dp(11));
-                labelPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                labelPaint.setTypeface(NativeTheme.regular());
                 labelPaint.setTextAlign(Paint.Align.CENTER);
                 labelPaint.setShadowLayer(dp(4), 0, dp(1), 0xCC000000);  // dark halo keeps white legible
                 labelPaint.setLetterSpacing(0.02f);
-                labelPaint.setFakeBoldText(true);                        // slightly heavier stroke (free at draw time)
+                labelPaint.setFakeBoldText(false);                        // slightly heavier stroke (free at draw time)
                 labelTp = new TextPaint(labelPaint);
 
                 setFocusable(true); setFocusableInTouchMode(true);
@@ -6731,18 +6854,19 @@ public class LauncherActivity extends Activity {
                             setTranslationX(0f);
                             setTranslationY(0f);
                             setTranslationZ(f ? focusShadowZ : 0f);
+                            setTranslationY(f ? -NativeTheme.px(LauncherActivity.this, 8) : 0f);
                             if (f && isAttachedToWindow() && getWidth() > 0) {
                                 positionRing(DrawerCell.this);
                             }
                         } else if (f) {
                             animate().scaleX(FOCUS_SCALE).scaleY(FOCUS_SCALE)
-                                     .translationZ(focusShadowZ)
+                                     .translationY(-NativeTheme.px(LauncherActivity.this, 8)).translationZ(focusShadowZ)
                                      .setDuration(GRID_FOCUS_DUR_MS)
                                      .setInterpolator(FOCUS_EASE)
                                      .setUpdateListener(focusUpdateListener).start();
                         } else {
                             animate().scaleX(1f).scaleY(1f)
-                                     .translationZ(0f)
+                                     .translationY(0f).translationZ(0f)
                                      .setDuration(UNFOCUS_DUR_MS).setInterpolator(FOCUS_EASE)
                                      .setUpdateListener(null).start();
                         }
@@ -6750,6 +6874,7 @@ public class LauncherActivity extends Activity {
                     invalidate();
                     if (f) {
                         focusedIndex = boundIndex;
+                        updateSelectedApp(boundApp, iconBitmap);
                         if (!reorderMode) {
                             if (isAttachedToWindow() && getWidth() > 0) positionRing(DrawerCell.this);
                             if (!fastNav) ensureVisible(boundIndex, false);
@@ -6879,7 +7004,7 @@ public class LauncherActivity extends Activity {
                 });
             }
 
-            @Override public void setIconBitmap(Bitmap bmp) { iconBitmap = bmp; invalidate(); }
+            @Override public void setIconBitmap(Bitmap bmp) { iconBitmap = bmp; if(isFocused())updateSelectedApp(boundApp,bmp); invalidate(); }
             @Override public String  iconTargetPackage() { return boundApp != null ? boundApp.packageName : null; }
             @Override public boolean iconTargetVisible() { return getVisibility() == View.VISIBLE; }
 
@@ -6888,7 +7013,7 @@ public class LauncherActivity extends Activity {
                 if (w <= 0 || h <= 0) return;
                 float cx  = w / 2f;
                 boolean favorite = boundIndex >= 0 && boundIndex < hc();
-                float icy = favorite ? cellH / 2f : icyOffset;
+                float icy = icyOffset;
                 boolean isDragTarget = reorderMode && boundIndex == dragIndex;
                 drawIcon(canvas, cx, icy);
                 // The !rebuildingApps guard mirrors CellView.onDraw's
@@ -6900,7 +7025,7 @@ public class LauncherActivity extends Activity {
                 // label on the wrong cell for a frame even though the ring
                 // itself is correctly suppressed. See RecyclingShelfView's
                 // rebuildingApps for the full history.
-                boolean showLabel = At4kHomeLayout.shouldShowLabel(boundIndex, hc())
+                boolean showLabel = true
                         && !labelDisplay.isEmpty()
                         && ((isFocused() && !reorderMode && !rebuildingApps) || isDragTarget);
                 if (showLabel) {
@@ -6981,6 +7106,10 @@ public class LauncherActivity extends Activity {
                 appByPackage.put(pkg, a);
             });
             if (ok && !appList.isEmpty()) {
+                // Preferences can change during a theme migration or restore.
+                // Reorder cached entries BEFORE pre-paint/saveOrder, otherwise
+                // the old cache can overwrite the newly persisted order.
+                applyStoredOrder(appList);
                 RecyclingShelfView s = shelf;
                 if (s != null) {
                     // Pre-seed so setApps posts the saved index, not 0.
@@ -7905,6 +8034,13 @@ public class LauncherActivity extends Activity {
             if (isLetThroughKey(event.getKeyCode())) return super.dispatchKeyEvent(event);
             return true;
         }
+        if (controlCenter != null && controlCenter.isVisible()) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (controlCenter.key(event.getKeyCode())) return true;
+                return super.dispatchKeyEvent(event);
+            }
+            return isLetThroughKey(event.getKeyCode()) ? super.dispatchKeyEvent(event) : true;
+        }
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && event.getRepeatCount() == 0
                 && keyMap.size() > 0
@@ -7966,6 +8102,7 @@ public class LauncherActivity extends Activity {
         View bd = overlayBackdrop;
         if (bd == null) return;
         if (anyOverlayLogicallyOpen()) return;
+        if(controlCenter!=null && controlCenter.isVisible()) controlCenter.restoreFocus();
         bd.animate().cancel();
         bd.animate()
                 .alpha(0f)
@@ -8302,7 +8439,7 @@ public class LauncherActivity extends Activity {
         View mb = mapperBtnView;
         if (mb != null) mb.requestFocus();
         else {
-            View nb = netBtn;
+            View nb = netBtn != null ? netBtn : mapperBtnView;
             if (nb != null) nb.requestFocus();
         }
     }
@@ -8376,6 +8513,9 @@ public class LauncherActivity extends Activity {
                               : clockMode == CLOCK_TIME_ONLY ? "Time" : "Off");
                     if (clockMode == CLOCK_OFF) ind.setTextColor(sel ? 0x66111114 : 0x66FFFFFF);
                     else                        ind.setTextColor(sel ? selTx : EdgeGlassStyle.VALUE_ACCENT);
+                } else if (rowId == SR_AMBIENT_BACKGROUND) {
+                    ind.setText(ambientBackgroundEnabled?"On":"Off");
+                    ind.setTextColor(sel?selTx:EdgeGlassStyle.VALUE_ACCENT);
                 } else if (rowId == SR_SYSTEM_WALLPAPER) {
                     ind.setText(systemWallpaper ? "On" : "Off");
                     ind.setTextColor(systemWallpaper ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
@@ -8384,12 +8524,12 @@ public class LauncherActivity extends Activity {
                     ind.setText(slideshowDurationLabel());
                     boolean on = slideshowDurationSec != 0;
                     ind.setTextColor(on ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT) : (sel ? 0x66111114 : 0x66FFFFFF));
-                    ind.setAlpha(systemWallpaper ? 0.45f : 1f);
+                    ind.setAlpha(systemWallpaper || ambientBackgroundEnabled ? 0.45f : 1f);
                 } else if (rowId == SR_SLIDESHOW_RESTART) {
                     ind.setText(slideshowRestart ? "On" : "Off");
                     ind.setTextColor(slideshowRestart ? (sel ? selTx : EdgeGlassStyle.VALUE_ACCENT)
                                                       : (sel ? 0x66111114 : 0x66FFFFFF));
-                    ind.setAlpha(systemWallpaper ? 0.45f : 1f);
+                    ind.setAlpha(systemWallpaper || ambientBackgroundEnabled ? 0.45f : 1f);
                 } else if (rowId == SR_SLIDESHOW_FOLDER) {
                     boolean set = slideshowFolderUri != null;
                     ind.setText(set ? "Set" : "Not set");
@@ -8597,6 +8737,9 @@ public class LauncherActivity extends Activity {
             case SR_SYSTEM:
                 hideSettingsPanel();
                 openSystemSettings();
+                break;
+            case SR_AMBIENT_BACKGROUND:
+                setAmbientBackground(!ambientBackgroundEnabled,true);
                 break;
             case SR_SYSTEM_WALLPAPER:
                 toggleSystemWallpaper();
@@ -9238,7 +9381,7 @@ public class LauncherActivity extends Activity {
         View mb = mapperBtnView;
         if (mb != null) mb.requestFocus();
         else {
-            View nb = netBtn;
+            View nb = netBtn != null ? netBtn : mapperBtnView;
             if (nb != null) nb.requestFocus();
         }
     }
@@ -10972,7 +11115,7 @@ public class LauncherActivity extends Activity {
     // forwards the four lifecycle / interaction calls below.
 
     private void loadWallpaper() {
-        if (wallpaperCtl != null && !systemWallpaper) wallpaperCtl.loadStored();
+        if (wallpaperCtl != null && !systemWallpaper && !ambientBackgroundEnabled) wallpaperCtl.loadStored();
     }
 
     private void loadSystemWallpaper() {
@@ -10980,6 +11123,7 @@ public class LauncherActivity extends Activity {
     }
 
     private void applyWallpaperFromUri(Uri uri) {
+        setAmbientBackground(false,false);
         if (wallpaperCtl != null) wallpaperCtl.applyFromUri(uri);
     }
 
@@ -11248,7 +11392,7 @@ public class LauncherActivity extends Activity {
     /** {@code true} when the slideshow controls the wallpaper: a folder is set
      *  and at least one rotation trigger (timer or each-restart) is on. */
     private boolean slideshowActive() {
-        return slideshowFolderUri != null && (slideshowDurationSec > 0 || slideshowRestart);
+        return !ambientBackgroundEnabled && !systemWallpaper && slideshowFolderUri != null && (slideshowDurationSec > 0 || slideshowRestart);
     }
 
     /** Human label for the current duration setting. */
@@ -11356,6 +11500,7 @@ public class LauncherActivity extends Activity {
         int prev = slideshowDurationSec;
         idx = (idx + dir + SLIDESHOW_STEPS_SEC.length) % SLIDESHOW_STEPS_SEC.length;
         slideshowDurationSec = SLIDESHOW_STEPS_SEC[idx];
+        if(slideshowDurationSec>0)setAmbientBackground(false,true);
         prefs.edit().putInt(KEY_SLIDESHOW_DURATION, slideshowDurationSec).apply();
         // Mutual exclusion: enabling the interval timer turns off "change each restart".
         if (prev == 0 && slideshowDurationSec != 0 && slideshowRestart) {
@@ -11374,6 +11519,7 @@ public class LauncherActivity extends Activity {
      *  it also shows an image straight away so the user sees it take effect. */
     private void toggleSlideshowRestart() {
         slideshowRestart = !slideshowRestart;
+        if(slideshowRestart)setAmbientBackground(false,true);
         prefs.edit().putBoolean(KEY_SLIDESHOW_RESTART, slideshowRestart).apply();
         // Mutual exclusion: enabling "change each restart" turns off the interval timer.
         if (slideshowRestart && slideshowDurationSec != 0) {
@@ -11390,6 +11536,28 @@ public class LauncherActivity extends Activity {
         if (slideshowRestart) kickSlideshowNow();
     }
 
+    /** Select the new background without destroying the user's saved wallpaper/slideshow. */
+    private void setAmbientBackground(boolean on,boolean repaint) {
+        if(on==ambientBackgroundEnabled)return;
+        ambientBackgroundEnabled=on;
+        prefs.edit().putBoolean(KEY_AMBIENT_BACKGROUND,on).apply();
+        if(on && systemWallpaper)setSystemWallpaper(false,false);
+        if(ambientBackground!=null)ambientBackground.setVisibility(on?View.VISIBLE:View.GONE);
+        int visibility=on || systemWallpaper?View.GONE:View.VISIBLE;
+        if(wallpaperFront!=null)wallpaperFront.setVisibility(visibility);
+        if(wallpaperBack!=null)wallpaperBack.setVisibility(visibility);
+        if(wallpaperCtl!=null) {
+            if(on || systemWallpaper)wallpaperCtl.suspend();else wallpaperCtl.resume();
+        }
+        uiHandler.removeCallbacks(slideshowTick);
+        if(!on && !systemWallpaper && repaint) {
+            if(slideshowActive()){kickSlideshowNow();restartSlideshowTimer();}else loadWallpaper();
+        }
+        if(favoritesBlurLayer!=null)favoritesBlurLayer.invalidate();
+        legacyGridBlurDirty=true;
+        refreshSettingsRows();
+    }
+
     private void toggleSystemWallpaper() {
         setSystemWallpaper(!systemWallpaper, true);
     }
@@ -11404,6 +11572,7 @@ public class LauncherActivity extends Activity {
             showToast(getString(R.string.toast_system_wallpaper_unsupported));
             return;
         }
+        if(on)setAmbientBackground(false,false);
         systemWallpaper = on;
         prefs.edit().putBoolean(KEY_SYSTEM_WALLPAPER, on).apply();
         applySystemWallpaperWindow(on);
@@ -11640,7 +11809,7 @@ public class LauncherActivity extends Activity {
      *  start. This only arms the NEXT rotation. */
     private void restartSlideshowTimer() {
         uiHandler.removeCallbacks(slideshowTick);
-        if (uiPaused || systemWallpaper
+        if (uiPaused || systemWallpaper || ambientBackgroundEnabled
                 || slideshowFolderUri == null || slideshowDurationSec <= 0) return;
         uiHandler.postDelayed(slideshowTick, slideshowDurationSec * 1000L);
     }
@@ -11650,7 +11819,7 @@ public class LauncherActivity extends Activity {
      *  off but the slideshow is active, restore the current image so a cold
      *  restart doesn't leave the stock wallpaper visible. */
     private void slideshowRestartAdvanceOnce() {
-        if (slideshowRestartApplied || systemWallpaper) return;
+        if (slideshowRestartApplied || systemWallpaper || ambientBackgroundEnabled) return;
         if (slideshowFolderUri == null) return;
         if (!slideshowRestart && slideshowDurationSec <= 0) return;
         slideshowRestartApplied = true;
@@ -11802,11 +11971,13 @@ public class LauncherActivity extends Activity {
         RingView rv = ringView;
         if (s    != null) s   .animate().alpha(target).setDuration(dur).start();
         if (blur != null) blur.animate().alpha(target).setDuration(dur).start();
-        if (ab   != null) ab  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
-        if (bb   != null) bb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
-        if (nb   != null) nb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
-        if (mb   != null) mb  .animate().alpha(hide ? 0f : 0.6f).setDuration(dur).start();
+        if (ab   != null) ab  .animate().alpha(hide ? 0f : 1f).setDuration(dur).start();
+        if (bb   != null) bb  .animate().alpha(hide ? 0f : 1f).setDuration(dur).start();
+        if (nb   != null) nb  .animate().alpha(hide ? 0f : 1f).setDuration(dur).start();
+        if (mb   != null) mb  .animate().alpha(hide ? 0f : 1f).setDuration(dur).start();
         if (rv   != null) rv  .animate().alpha(target).setDuration(dur).start();
+        if(toolbarCapsule!=null)toolbarCapsule.animate().alpha(target).setDuration(dur).start();
+        if(selectedAppName!=null)selectedAppName.animate().alpha(target).setDuration(dur).start();
         // Clock stays fully visible — it is the reason idle-hide exists
         // (wallpaper + clock, nothing else).
     }
@@ -12058,6 +12229,7 @@ public class LauncherActivity extends Activity {
      *  without requiring extra configuration. */
     private void selectFolder(int index) {
         if (index < 0 || index >= folderPickerData.size()) return;
+        setAmbientBackground(false,false);
         String bucketId = folderPickerData.get(index)[0];
         slideshowFolderUri = bucketId;
         slideshowIndex     = 0;
@@ -12096,7 +12268,7 @@ public class LauncherActivity extends Activity {
         if (s != null && s.getVisibility() == View.VISIBLE && !appList.isEmpty()) {
             s.requestFocusOnIndex(Math.max(0, Math.min(s.focusedIndex, s.lastIndex())));
         } else {
-            View nb = netBtn; if (nb != null) nb.requestFocus();
+            View nb = netBtn != null ? netBtn : mapperBtnView; if (nb != null) nb.requestFocus();
         }
     }
 
@@ -12503,18 +12675,12 @@ public class LauncherActivity extends Activity {
     /** Compute 5:3 tvOS-style app cards for both the favorites shelf and the
      *  lower grid using the persisted density options. */
     private void computeTileDims() {
-        int sidePad = dp(12);
-        int avail   = Math.max(0, screenW - dp(24) * 2);
-        int stride  = avail > 0 ? avail / layoutColumns : dp(150);
-        int cw = stride - sidePad * 2;
-        int capW = dp(156), minW = dp(64);
-        if (cw > capW) cw = capW;
-        cw = Math.round(cw * 0.92f);
-        if (cw < minW) cw = minW;
-        tileWpx      = cw;
-        bannerHpx    = At4kHomeLayout.tileHeightPx(cw);
+        int gap = NativeTheme.px(this, 26);
+        int avail = screenW - NativeTheme.px(this, 68*2 + 25*2) - gap*(layoutColumns-1);
+        tileWpx = Math.max(NativeTheme.px(this, 90), avail / layoutColumns);
+        bannerHpx = At4kHomeLayout.tileHeightPx(tileWpx);
         tileCornerPx = At4kHomeLayout.cornerRadiusPx(bannerHpx, cardCornerPercent);
-        cellHpx      = bannerHpx + dp(28);
+        cellHpx = bannerHpx + NativeTheme.px(this, 46);
     }
 
     /** Clip a small list/chip {@link ImageView} to a circle so the shared

@@ -202,4 +202,5 @@
     <string name="toast_slideshow_need_permission">Photo access is needed to choose a folder</string>
     <string name="toast_slideshow_no_folders">No image folders found</string>
     <string name="folder_picker_title">Choose a slideshow folder</string>
+    <string name="settings_row_ambient_background">App-colour ambient background</string>
 </resources>

@@ -499,8 +499,8 @@ android {
         // Bumped 51 → 52: 2.6.1 reorganizes settings into a compact category
         // hub, removes the About/QR surface, and refines the Orange focus color.
         // SemVer PATCH — settings navigation and visual clarity refinement.
-        versionCode   = 13
-        versionName   = "1.0.6-airplay.6"
+        versionCode   = 14
+        versionName   = "1.0.6-feather.1"
         resourceConfigurations += listOf("en")
 
         // Instrumentation test runner. Required so :app:connectedDebugAndroidTest

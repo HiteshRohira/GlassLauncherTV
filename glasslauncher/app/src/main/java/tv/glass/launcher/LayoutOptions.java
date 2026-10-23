@@ -4,12 +4,12 @@ package tv.glass.launcher;
 final class LayoutOptions {
     static final int MIN_COLUMNS = 4;
     static final int MAX_COLUMNS = 7;
-    static final int DEFAULT_COLUMNS = 6;
+    static final int DEFAULT_COLUMNS = 5;
 
     static final int MIN_CORNER_PERCENT = 0;
     static final int MAX_CORNER_PERCENT = 30;
     static final int CORNER_STEP_PERCENT = 2;
-    static final int DEFAULT_CORNER_PERCENT = 20;
+    static final int DEFAULT_CORNER_PERCENT = 14;
 
     static final boolean DEFAULT_FOCUS_BORDER_ENABLED = false;
     static final int DEFAULT_FOCUS_COLOR = 0xFFFFFFFF;

@@ -7,8 +7,8 @@ import org.junit.Test;
 public class LayoutOptionsTest {
 
     @Test public void defaultsPreserveCurrentLayout() {
-        assertEquals(6, LayoutOptions.DEFAULT_COLUMNS);
-        assertEquals(20, LayoutOptions.DEFAULT_CORNER_PERCENT);
+        assertEquals(5, LayoutOptions.DEFAULT_COLUMNS);
+        assertEquals(14, LayoutOptions.DEFAULT_CORNER_PERCENT);
     }
 
     @Test public void columnsClampAndStepAcrossFourToSeven() {

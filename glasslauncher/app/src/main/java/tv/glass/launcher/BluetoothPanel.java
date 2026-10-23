@@ -180,6 +180,15 @@ final class BluetoothPanel {
         });
     }
 
+    void showPairing() {
+        if(canScanInPanel()) enterScanMode();
+        else {hide();host.openBtPairing();}
+    }
+
+    void showDeviceDetails(BluetoothDevice device) {
+        detail=device; selected=-1; rebuild();
+    }
+
     void hide() {
         final FrameLayout ov = overlay;
         final LinearLayout c = card;
@@ -273,7 +282,9 @@ final class BluetoothPanel {
 
         LinearLayout c = new LinearLayout(activity);
         c.setOrientation(LinearLayout.VERTICAL);
-        EdgeGlassStyle.applyPanel(c, density);
+        c.setBackground(NativeTheme.glass(activity,28,true));
+        c.setPadding(NativeTheme.px(activity,16),NativeTheme.px(activity,16),NativeTheme.px(activity,16),NativeTheme.px(activity,16));
+        c.setElevation(NativeTheme.px(activity,15));
         c.setClipChildren(false);
         c.setClipToPadding(false);
 
@@ -309,8 +320,8 @@ final class BluetoothPanel {
         }
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) c.getLayoutParams();
         lp.gravity = Gravity.TOP | Gravity.END;
-        lp.topMargin = top;
-        lp.rightMargin = right;
+        lp.topMargin = NativeTheme.px(activity,135);
+        lp.rightMargin = NativeTheme.px(activity,68);
         c.setLayoutParams(lp);
     }
 
@@ -491,7 +502,7 @@ final class BluetoothPanel {
         t.setText(r.text);
         t.setTextColor(0x80FFFFFF);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
-        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t.setTypeface(NativeTheme.medium());
         t.setAllCaps(true);
         t.setLetterSpacing(0.08f);
         t.setPadding(dp(10), dp(6), dp(10), dp(3));
@@ -521,8 +532,7 @@ final class BluetoothPanel {
         label.setText(r.text);
         boolean info = r.type == ROW_INFO;
         label.setTextSize(TypedValue.COMPLEX_UNIT_SP, info ? 11 : 13);
-        label.setTypeface(Typeface.create(info ? "sans-serif" : "sans-serif-medium",
-                Typeface.NORMAL));
+        label.setTypeface(NativeTheme.regular());
         label.setSingleLine(!info);
         label.setMaxLines(info ? 2 : 1);
         label.setEllipsize(TextUtils.TruncateAt.END);
@@ -1054,7 +1064,7 @@ final class BluetoothPanel {
         return TextUtils.isEmpty(n) ? str(R.string.bt_unknown_device) : n;
     }
 
-    private int iconFor(BluetoothDevice d) {
+    static int iconFor(BluetoothDevice d) {
         BluetoothClass c = bluetoothClass(d);
         if (c == null) return R.drawable.ic_bt;
         int major = c.getMajorDeviceClass();

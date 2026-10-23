@@ -41,7 +41,7 @@ final class At4kHomeLayout {
     }
 
     static int tileHeightPx(int tileWidthPx) {
-        return Math.round(Math.max(0, tileWidthPx) * 3.0f / 5.0f);
+        return Math.round(Math.max(0, tileWidthPx) * 9.0f / 16.0f);
     }
 
     static int cornerRadiusPx(int tileHeightPx, int cornerPercent) {
