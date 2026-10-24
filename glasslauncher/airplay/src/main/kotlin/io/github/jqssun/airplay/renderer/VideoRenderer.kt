@@ -4,6 +4,9 @@ import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Process
 import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
@@ -22,6 +25,17 @@ class VideoRenderer(ctx: Context) {
     private var videoWidth = 0
     private var videoHeight = 0
     private var firstFrameQueued = false
+    // Async codec state (guarded by lock). Frames from the network thread are
+    // queued and submitted as input buffers free up, so the receive thread
+    // never blocks; output is released the moment it decodes, so the last
+    // frame of a still screen shows immediately instead of waiting for the next.
+    private var codecThread: HandlerThread? = null
+    private var codecHandler: Handler? = null
+    private val freeInputs = ArrayDeque<Int>()
+    private val pending = ArrayDeque<Pair<ByteArray, Long>>()
+    /** True when the decoder renders straight into the display surface (no GL copy). */
+    private var direct = false
+    @Volatile private var _lastStatsLogMs = 0L
 
     // stats
     @Volatile var fps = 0; private set
@@ -55,9 +69,23 @@ class VideoRenderer(ctx: Context) {
         stopCodec()
     }
 
-    // doesn't restart codec; decoder renders into pipeline's own persistent surface
+    // Prefer decoding straight into the display surface; the GL pipeline is
+    // only a holding surface while no display is attached. Switching uses
+    // setOutputSurface, so the codec (and its reference frames) survives.
     fun setSurface(surface: Surface) = synchronized(lock) {
+        if (displaySurface === surface) return@synchronized
         displaySurface = surface
+        val c = codec
+        if (c != null) {
+            try {
+                c.setOutputSurface(surface)
+                direct = true
+                pipeline.setDisplaySurface(null)
+                return@synchronized
+            } catch (e: Exception) {
+                Log.w(TAG, "setOutputSurface to display failed; keeping GL pipeline", e)
+            }
+        }
         pipeline.setDisplaySurface(surface)
     }
 
@@ -65,6 +93,18 @@ class VideoRenderer(ctx: Context) {
         if (displaySurface !== surface) return@synchronized
         displaySurface = null
         pipeline.setDisplaySurface(null)
+        val c = codec ?: return@synchronized
+        if (!direct) return@synchronized
+        // The display is going away: park the decoder on the pipeline surface.
+        try {
+            pipeline.start()
+            pipeline.setVideoSize(videoWidth, videoHeight)
+            c.setOutputSurface(pipeline.inputSurface ?: error("no pipeline surface"))
+            direct = false
+        } catch (e: Exception) {
+            Log.w(TAG, "could not park decoder; stopping", e)
+            stopCodec()
+        }
     }
 
     fun selectDecoders(w: Int, h: Int, fps: Int, h265: Boolean?): Boolean = synchronized(lock) {
@@ -105,6 +145,14 @@ class VideoRenderer(ctx: Context) {
             _bytesThisSec = 0
             _lastStatReset = now
             if (benchmarkLog) _emitBenchmarkLine()
+            // Light always-on health line for diagnosing mirroring on the TV.
+            if (now - _lastStatsLogMs >= 5000) {
+                _lastStatsLogMs = now
+                Log.i(TAG, "mirror in=${fps}fps out=${_outFrames - _outFramesAtLog}/5s " +
+                    "kbps=${bitrateBps / 1000} pending=${pending.size} drops=$droppedFrames " +
+                    "jitter=${framePacingJitterUs}us ${if (direct) "direct" else "gl"}")
+                _outFramesAtLog = _outFrames
+            }
         }
         _framesThisSec++
         _bytesThisSec += size
@@ -136,8 +184,12 @@ class VideoRenderer(ctx: Context) {
 
             try {
                 if (codec == null) startCodec(isH265)
-                _feedToCodec(data, ntpTimeNs)
-                drainOutput()
+                pending.addLast(data to ntpTimeNs / 1000)
+                if (pending.size > MAX_PENDING) {
+                    pending.removeFirst()
+                    droppedFrames++
+                }
+                _submitPending()
             } catch (e: Exception) {
                 Log.w(TAG, "Codec error, resetting", e)
                 stopCodec()
@@ -145,24 +197,55 @@ class VideoRenderer(ctx: Context) {
         }
     }
 
-    private fun _feedToCodec(data: ByteArray, ntpTimeNs: Long) {
+    private fun _submitPending() {
         val c = codec ?: return
-        // dropping a frame desyncs decoder until the next keyframe, but source would only send one on (re)connect
-        val retries = if (firstFrameQueued) FEED_RETRIES else FIRST_FEED_RETRIES
-        repeat(retries) {
-            val idx = c.dequeueInputBuffer(FEED_WAIT_US)
-            if (idx >= 0) {
-                val buf = c.getInputBuffer(idx) ?: return
-                buf.clear()
-                buf.put(data)
-                c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
-                firstFrameQueued = true
-                return
-            }
-            drainOutput()
+        while (freeInputs.isNotEmpty() && pending.isNotEmpty()) {
+            val idx = freeInputs.removeFirst()
+            val (data, ptsUs) = pending.removeFirst()
+            val buf = c.getInputBuffer(idx) ?: continue
+            buf.clear()
+            if (data.size > buf.capacity()) { droppedFrames++; freeInputs.addFirst(idx); continue }
+            buf.put(data)
+            c.queueInputBuffer(idx, 0, data.size, ptsUs, 0)
+            firstFrameQueued = true
         }
-        droppedFrames++
-        Log.w(TAG, "Decoder input queue full; dropping frame. drops=$droppedFrames")
+    }
+
+    private fun _callback(owner: MediaCodec) = object : MediaCodec.Callback() {
+        override fun onInputBufferAvailable(c: MediaCodec, index: Int) = synchronized(lock) {
+            if (c !== codec) return@synchronized
+            freeInputs.addLast(index)
+            try { _submitPending() } catch (e: Exception) { Log.w(TAG, "submit failed", e); stopCodec() }
+        }
+        override fun onOutputBufferAvailable(c: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
+            synchronized(lock) {
+                if (c !== codec) return
+                _recordOutputFrameTime()
+                try {
+                    if (scheduledOutputBufferRelease) {
+                        val ptsUs = info.presentationTimeUs
+                        if (_ptsBaseUs == Long.MIN_VALUE) { _ptsBaseUs = ptsUs; _wallBaseNs = System.nanoTime() }
+                        c.releaseOutputBuffer(index, _wallBaseNs + (ptsUs - _ptsBaseUs) * 1000L)
+                    } else {
+                        c.releaseOutputBuffer(index, true)
+                    }
+                } catch (e: Exception) { Log.w(TAG, "release failed", e) }
+            }
+        }
+        override fun onError(c: MediaCodec, e: MediaCodec.CodecException) {
+            Log.w(TAG, "decoder error (transient=${e.isTransient})", e)
+            synchronized(lock) { if (c === codec && !e.isTransient) stopCodec() }
+        }
+        override fun onOutputFormatChanged(c: MediaCodec, format: MediaFormat) {
+            Log.i(TAG, "decoder output format: $format")
+        }
+    }
+
+    private fun _codecHandler(): Handler {
+        codecHandler?.let { return it }
+        val t = HandlerThread("VideoDecoder", Process.THREAD_PRIORITY_URGENT_DISPLAY).also { it.start() }
+        codecThread = t
+        return Handler(t.looper).also { codecHandler = it }
     }
 
     private fun _isKeyframe(data: ByteArray, isH265: Boolean): Boolean {
@@ -186,9 +269,13 @@ class VideoRenderer(ctx: Context) {
     }
 
     private fun startCodec(h265: Boolean) {
-        pipeline.start()
-        pipeline.setVideoSize(videoWidth, videoHeight)
-        val s = pipeline.inputSurface ?: return
+        val display = displaySurface
+        val s = if (display != null && display.isValid) display else {
+            pipeline.start()
+            pipeline.setVideoSize(videoWidth, videoHeight)
+            pipeline.inputSurface ?: return
+        }
+        direct = s === display
         currentH265 = h265
         val mime = if (h265) DecoderSelector.HEVC else DecoderSelector.AVC
         val info = (if (h265) hevcDecoder else avcDecoder) ?: error("no decoder selected for $mime")
@@ -202,7 +289,7 @@ class VideoRenderer(ctx: Context) {
             Log.w(TAG, "Hardware decoder failed, trying software fallback", e)
             _startWithLadder(sw, mime, s, h265)
         }
-        Log.i(TAG, "Video codec started: $mime ${videoWidth}x${videoHeight} ($codecName)")
+        Log.i(TAG, "Video codec started: $mime ${videoWidth}x${videoHeight} ($codecName) ${if (direct) "direct" else "via GL"}")
     }
 
     private fun _startWithLadder(info: MediaCodecInfo, mime: String, s: Surface, h265: Boolean) {
@@ -240,6 +327,7 @@ class VideoRenderer(ctx: Context) {
 
     private fun _startDecoder(c: MediaCodec, format: MediaFormat, surface: Surface, h265: Boolean) {
         try {
+            c.setCallback(_callback(c), _codecHandler())
             c.configure(format, surface, null, 0)
             c.start()
         } catch (e: Exception) {
@@ -256,6 +344,8 @@ class VideoRenderer(ctx: Context) {
         _lastOutputFrameNs = 0L
         _ptsBaseUs = Long.MIN_VALUE
         _wallBaseNs = 0L
+        freeInputs.clear()
+        pending.clear()
         codec?.let {
             try {
                 it.stop()
@@ -265,34 +355,21 @@ class VideoRenderer(ctx: Context) {
         codec = null
     }
 
-    private fun drainOutput() {
-        val c = codec ?: return
-        val info = MediaCodec.BufferInfo()
-        while (true) {
-            val idx = c.dequeueOutputBuffer(info, 0)
-            if (idx < 0) break
-            _recordOutputFrameTime()
-            if (scheduledOutputBufferRelease) {
-                // schedule frame at VSYNC matching its NTP presentation time
-                val ptsUs = info.presentationTimeUs
-                if (_ptsBaseUs == Long.MIN_VALUE) {
-                    _ptsBaseUs = ptsUs
-                    _wallBaseNs = System.nanoTime()
-                }
-                c.releaseOutputBuffer(idx, _wallBaseNs + (ptsUs - _ptsBaseUs) * 1000L)
-            } else {
-                c.releaseOutputBuffer(idx, true)
-            }
-        }
-    }
-
     fun release() = synchronized(lock) {
         stopCodec()
         pipeline.release()
+        direct = false
+        codecThread?.quitSafely()
+        codecThread = null
+        codecHandler = null
         _resetStats()
     }
 
+    private var _outFrames = 0L
+    private var _outFramesAtLog = 0L
+
     private fun _recordOutputFrameTime() {
+        _outFrames++
         val now = System.nanoTime()
         if (_lastOutputFrameNs > 0) {
             _frameIntervalsNs[_frameIntervalIdx % _frameIntervalsNs.size] = now - _lastOutputFrameNs
@@ -321,8 +398,7 @@ class VideoRenderer(ctx: Context) {
     companion object {
         private const val TAG = "VideoRenderer"
         private const val BENCH_TAG = "BENCHMARK"
-        private const val FEED_WAIT_US = 20_000L
-        private const val FEED_RETRIES = 10
-        private const val FIRST_FEED_RETRIES = 50
+        /** ~1 s at 60 fps; beyond this the decoder cannot keep up anyway. */
+        private const val MAX_PENDING = 60
     }
 }

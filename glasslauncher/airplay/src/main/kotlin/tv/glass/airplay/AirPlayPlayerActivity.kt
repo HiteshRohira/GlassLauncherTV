@@ -183,7 +183,9 @@ class AirPlayPlayerActivity : Activity() {
         val mirroring = kind == "mirroring"
         val playing = kind == "video" || pending
         val audio = kind == "audio"
-        show(mirror, mirroring)
+        // The mirror surface exists before the first frame so the decoder can
+        // render straight into it from the start.
+        show(mirror, !playing && !audio)
         show(video, playing)
         if (mirroring) mirror.setAspect(service!!.videoAspect.value)
         if (playing) video.setAspect(service!!.videoPlaybackAspect.value)

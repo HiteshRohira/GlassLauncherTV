@@ -12,6 +12,8 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.VideoSize
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 
 // rate is 0 while buffering; speed is the configured rate regardless of pause state
@@ -69,10 +71,20 @@ class AirPlayVideoPlayer(private val context: Context) {
         }
     }
 
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
-        val p = ExoPlayer.Builder(context).build().also {
+        val p = ExoPlayer.Builder(context)
+            // Start as soon as ~0.75 s is buffered (default 2.5 s): AirPlay
+            // video comes from the phone on the same network, so a short
+            // initial buffer is safe and makes the first frame much sooner.
+            .setLoadControl(DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15_000, 50_000, 750, 2_000)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build())
+            .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true))
+            .build().also {
             it.addListener(_listener)
             pendingSurface?.let { s -> it.setVideoSurface(s) }
             it.volume = clientGain

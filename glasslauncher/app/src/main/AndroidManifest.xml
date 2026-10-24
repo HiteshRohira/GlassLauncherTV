@@ -125,7 +125,11 @@
         android:label="@string/app_name"
         android:largeHeap="false"
         android:supportsRtl="true"
-        android:theme="@style/Theme.GlassLauncher">
+        android:theme="@style/Theme.GlassLauncher"
+        android:usesCleartextTraffic="true">
+        <!-- Cleartext: AirPlay video is served over plain HTTP, both by the
+             receiver's own local HLS server (localhost:7000) and by the
+             sending iPhone on the home network. -->
 
         <activity
             android:name=".LauncherActivity"
