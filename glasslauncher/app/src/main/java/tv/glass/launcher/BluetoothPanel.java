@@ -64,6 +64,10 @@ final class BluetoothPanel {
         void openDeviceSettings(BluetoothDevice device, String name);
         void refreshPill();
         void toast(String text);
+        /** Back returns to Control Center rather than Home. */
+        boolean returnsToControlCenter();
+        /** One-line summary under the sheet title. */
+        String subtitle();
     }
 
     private static final int MAX_LISTED_DEVICES = 6;
@@ -83,7 +87,7 @@ final class BluetoothPanel {
     private static final int ACT_DEVICE_SETTINGS = 7;
     private static final int ACT_OPEN_SETTINGS = 8;
 
-    private static final int MUTED = 0x73FFFFFF;
+    private static final int MUTED = 0xA6FFFFFF;
     private static final long AUDIO_TIMEOUT_MS = 20_000L;
     private static final String UUID_A2DP_SINK = "0000110b-0000-1000-8000-00805f9b34fb";
 
@@ -117,6 +121,8 @@ final class BluetoothPanel {
     private FrameLayout overlay;
     private LinearLayout card;
     private LinearLayout column;
+    private TextView title, subtitle;
+    private ImageView backGlyph;
 
     private final List<Row> rows = new ArrayList<>();
     private int selected = -1;
@@ -145,7 +151,9 @@ final class BluetoothPanel {
         return overlay != null && overlay.getVisibility() == View.VISIBLE;
     }
 
-    void show() {
+    void show() { show(true); }
+
+    void show(boolean animate) {
         if (overlay == null) build();
         FrameLayout ov = overlay;
         LinearLayout c = card;
@@ -167,17 +175,9 @@ final class BluetoothPanel {
         ov.bringToFront();
         ov.requestFocus();
         c.animate().cancel();
-        c.setAlpha(0f);
-        c.setScaleX(0.94f);
-        c.setScaleY(0.86f);
-        c.setTranslationY(-dp(6));
-        c.post(() -> {
-            if (c != card) return;
-            c.setPivotX(c.getWidth());
-            c.setPivotY(0f);
-            c.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
-                    .setDuration(160).setInterpolator(host.menuIn()).withLayer().start();
-        });
+        c.setTranslationX(0f);
+        c.setAlpha(1f);
+        if (animate) NativeTheme.sheetIn(c);
     }
 
     void showPairing() {
@@ -196,10 +196,10 @@ final class BluetoothPanel {
         stopDiscovery();
         clearPendingAudio();
         unregister();
-        if (c != null) {
+        if (c != null && !host.returnsToControlCenter()) {
             c.animate().cancel();
-            c.animate().alpha(0f).scaleX(0.96f).scaleY(0.9f).translationY(-dp(4))
-                    .setDuration(110).setInterpolator(host.menuOut()).withLayer()
+            c.animate().alpha(0f).translationX(NativeTheme.px(activity, 36))
+                    .setDuration(140).setInterpolator(host.menuOut()).withLayer()
                     .withEndAction(() -> {
                         if (ov != overlay) return;
                         ov.setVisibility(View.GONE);
@@ -282,21 +282,46 @@ final class BluetoothPanel {
 
         LinearLayout c = new LinearLayout(activity);
         c.setOrientation(LinearLayout.VERTICAL);
-        c.setBackground(NativeTheme.glass(activity,28,true));
-        c.setPadding(NativeTheme.px(activity,16),NativeTheme.px(activity,16),NativeTheme.px(activity,16),NativeTheme.px(activity,16));
-        c.setElevation(NativeTheme.px(activity,15));
-        c.setClipChildren(false);
-        c.setClipToPadding(false);
+        c.setBackground(NativeTheme.glass(activity,30,true));
+        c.setPadding(px(26),px(30),px(26),px(26));
+        c.setElevation(px(18));
+        c.setClipToOutline(true);
+
+        LinearLayout head = new LinearLayout(activity);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        backGlyph = new ImageView(activity);
+        backGlyph.setImageResource(R.drawable.ic_feather_chevron);
+        backGlyph.setRotation(180);
+        backGlyph.setColorFilter(0xFFF1EDF7);
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(px(22), px(22));
+        bl.setMarginEnd(px(10));
+        head.addView(backGlyph, bl);
+        title = new TextView(activity);
+        title.setTypeface(NativeTheme.light());
+        title.setTextColor(0xFFF8F7FA);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(30));
+        title.setIncludeFontPadding(false);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        head.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        c.addView(head);
+        subtitle = new TextView(activity);
+        subtitle.setTypeface(NativeTheme.regular());
+        subtitle.setTextColor(0xFFD4CEDA);
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(14));
+        subtitle.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sl.topMargin = px(6);
+        sl.bottomMargin = px(14);
+        c.addView(subtitle, sl);
 
         LinearLayout col = new LinearLayout(activity);
         col.setOrientation(LinearLayout.VERTICAL);
         c.addView(col, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
-        cardLp.gravity = Gravity.TOP | Gravity.END;
-        c.setLayoutParams(cardLp);
+        c.setLayoutParams(NativeTheme.sheetParams(activity));
         ov.addView(c);
         r.addView(ov);
         overlay = ov;
@@ -304,26 +329,45 @@ final class BluetoothPanel {
         column = col;
     }
 
+    /** The sheet always docks to the right edge, like Control Center. */
     private void anchorUnderPill(View c) {
-        int top = dp(78);
-        int right = dp(20);
-        View a = host.anchor();
-        FrameLayout r = host.root();
-        if (a != null && r != null && a.getWidth() > 0) {
-            int[] aLoc = new int[2];
-            int[] rLoc = new int[2];
-            a.getLocationOnScreen(aLoc);
-            r.getLocationOnScreen(rLoc);
-            top = aLoc[1] - rLoc[1] + a.getHeight() + dp(4);
-            right = r.getWidth() - (aLoc[0] - rLoc[0] + a.getWidth());
-            if (right < dp(8)) right = dp(8);
-        }
-        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) c.getLayoutParams();
-        lp.gravity = Gravity.TOP | Gravity.END;
-        lp.topMargin = NativeTheme.px(activity,135);
-        lp.rightMargin = NativeTheme.px(activity,68);
-        c.setLayoutParams(lp);
+        c.setLayoutParams(NativeTheme.sheetParams(activity));
     }
+
+    private void renderHeader() {
+        if (title == null) return;
+        boolean nested = scanMode || detail != null || host.returnsToControlCenter();
+        backGlyph.setVisibility(nested ? View.VISIBLE : View.GONE);
+        if (scanMode) {
+            title.setText(str(R.string.bt_panel_pair_new));
+            subtitle.setText(discovering ? str(R.string.bt_panel_searching)
+                    : "Put your device in pairing mode, then select it");
+        } else if (detail != null) {
+            title.setText(nameOf(detail));
+            subtitle.setText(deviceKind(detail));
+        } else {
+            title.setText("Bluetooth");
+            subtitle.setText(host.subtitle());
+        }
+    }
+
+    private String deviceKind(BluetoothDevice d) {
+        try {
+            BluetoothClass bc = d.getBluetoothClass();
+            if (bc != null) {
+                switch (bc.getMajorDeviceClass()) {
+                    case BluetoothClass.Device.Major.AUDIO_VIDEO: return "Audio device";
+                    case BluetoothClass.Device.Major.PERIPHERAL: return "Remote or keyboard";
+                    case BluetoothClass.Device.Major.PHONE: return "Phone";
+                    case BluetoothClass.Device.Major.COMPUTER: return "Computer";
+                    default: break;
+                }
+            }
+        } catch (RuntimeException ignored) { }
+        return "Bluetooth device";
+    }
+
+    private int px(float v) { return NativeTheme.px(activity, v); }
 
     // ── Row model ───────────────────────────────────────────────────────
 
@@ -478,6 +522,7 @@ final class BluetoothPanel {
     private void render() {
         LinearLayout col = column;
         if (col == null) return;
+        renderHeader();
         col.removeAllViews();
         for (int i = 0; i < rows.size(); i++) {
             Row r = rows.get(i);
@@ -500,12 +545,12 @@ final class BluetoothPanel {
     private View labelView(Row r) {
         TextView t = new TextView(activity);
         t.setText(r.text);
-        t.setTextColor(0x80FFFFFF);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        t.setTextColor(0x99FFFFFF);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(12));
         t.setTypeface(NativeTheme.medium());
         t.setAllCaps(true);
-        t.setLetterSpacing(0.08f);
-        t.setPadding(dp(10), dp(6), dp(10), dp(3));
+        t.setLetterSpacing(0.1f);
+        t.setPadding(px(6), px(14), px(6), px(8));
         return t;
     }
 
@@ -513,48 +558,55 @@ final class BluetoothPanel {
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(7), dp(10), dp(7));
-        row.setMinimumWidth(dp(250));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(EdgeGlassStyle.rowRadiusPx(density));
-        bg.setColor(EdgeGlassStyle.ROW_IDLE_BG);
-        row.setBackground(bg);
+        boolean info = r.type == ROW_INFO;
+        row.setPadding(px(16), px(info ? 6 : 10), px(16), px(info ? 6 : 10));
+        row.setMinimumHeight(px(info ? 40 : 60));
+        row.setBackground(NativeTheme.row(activity, false, 18));
+        if (info) row.getBackground().setAlpha(0);
 
         if (r.iconRes != 0) {
             ImageView icon = new ImageView(activity);
             icon.setImageResource(r.iconRes);
-            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(16), dp(16));
-            ilp.setMarginEnd(dp(10));
+            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(px(22), px(22));
+            ilp.setMarginEnd(px(14));
             row.addView(icon, ilp);
         }
 
+        LinearLayout words = new LinearLayout(activity);
+        words.setOrientation(LinearLayout.VERTICAL);
         TextView label = new TextView(activity);
         label.setText(r.text);
-        boolean info = r.type == ROW_INFO;
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, info ? 11 : 13);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(info ? 13 : 16));
         label.setTypeface(NativeTheme.regular());
+        label.setIncludeFontPadding(false);
         label.setSingleLine(!info);
-        label.setMaxLines(info ? 2 : 1);
+        label.setMaxLines(info ? 3 : 1);
         label.setEllipsize(TextUtils.TruncateAt.END);
-        label.setMaxWidth(dp(info ? 250 : 190));
-        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        row.addView(label, llp);
-
+        words.addView(label);
         if (r.status != null) {
             TextView st = new TextView(activity);
             st.setText(r.status);
-            st.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            st.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(12));
+            st.setTypeface(NativeTheme.regular());
+            st.setIncludeFontPadding(false);
             st.setSingleLine(true);
+            st.setTag("status");
             LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            slp.setMarginStart(dp(12));
-            row.addView(st, slp);
+            slp.topMargin = px(5);
+            words.addView(st, slp);
+        }
+        row.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        if (r.type == ROW_ACTION && r.device != null) {
+            ImageView chevron = new ImageView(activity);
+            chevron.setImageResource(R.drawable.ic_feather_chevron);
+            row.addView(chevron, new LinearLayout.LayoutParams(px(16), px(16)));
         }
 
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        rlp.bottomMargin = dp(2);
+        rlp.bottomMargin = px(8);
         row.setLayoutParams(rlp);
         return row;
     }
@@ -568,22 +620,21 @@ final class BluetoothPanel {
             if (!(v instanceof LinearLayout)) continue;
             LinearLayout row = (LinearLayout) v;
             boolean sel = i == selected;
-            if (row.getBackground() instanceof GradientDrawable) {
-                ((GradientDrawable) row.getBackground())
-                        .setColor(sel ? EdgeGlassStyle.SELECTED_PILL : EdgeGlassStyle.ROW_IDLE_BG);
-            }
-            int text = sel ? EdgeGlassStyle.SELECTED_TEXT
-                    : (r.type == ROW_INFO ? 0x99FFFFFF : EdgeGlassStyle.IDLE_TEXT);
-            for (int k = 0; k < row.getChildCount(); k++) {
-                View child = row.getChildAt(k);
-                if (child instanceof ImageView) {
-                    ((ImageView) child).setColorFilter(text);
-                } else if (child instanceof TextView) {
-                    boolean isStatus = r.status != null && k == row.getChildCount() - 1;
-                    ((TextView) child).setTextColor(
-                            isStatus ? (sel ? EdgeGlassStyle.SELECTED_TEXT : r.statusColor) : text);
-                }
-            }
+            if (r.type != ROW_INFO) row.setBackground(NativeTheme.row(activity, sel, 18));
+            int text = sel ? 0xFF222029 : (r.type == ROW_INFO ? 0xB3FFFFFF : 0xFFF8F7FA);
+            paintRow(row, r, sel, text);
+        }
+    }
+
+    private void paintRow(View v, Row r, boolean sel, int text) {
+        if (v instanceof ImageView) {
+            ((ImageView) v).setColorFilter(text);
+        } else if (v instanceof TextView) {
+            boolean isStatus = "status".equals(v.getTag());
+            ((TextView) v).setTextColor(isStatus ? (sel ? 0xFF625C68 : r.statusColor) : text);
+        } else if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int k = 0; k < g.getChildCount(); k++) paintRow(g.getChildAt(k), r, sel, text);
         }
     }
 

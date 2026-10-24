@@ -1,8 +1,14 @@
 package tv.glass.launcher;
 
 import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
+import android.view.View;
+import android.view.animation.DecelerateInterpolator;
+import android.widget.FrameLayout;
 
 /** Shared, allocation-light material and type for the ambient launcher. */
 final class NativeTheme {
@@ -43,6 +49,41 @@ final class NativeTheme {
         d.setCornerRadius(px(c, radius));
         d.setStroke(Math.max(1, px(c, .7f)), selected ? 0x88FFFFFF : 0x16FFFFFF);
         return d;
+    }
+    /** The shared right-edge glass sheet used by Control Center and Bluetooth. */
+    static FrameLayout sheet(Context c) {
+        FrameLayout card = new FrameLayout(c);
+        card.setBackground(glass(c, 30, true));
+        card.setElevation(px(c, 18));
+        card.setClipToOutline(true);
+        return card;
+    }
+    static FrameLayout.LayoutParams sheetParams(Context c) {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px(c, ControlCenterPanel.SHEET_W), -1, Gravity.END);
+        lp.topMargin = px(c, 24); lp.bottomMargin = px(c, 24); lp.setMarginEnd(px(c, 24));
+        return lp;
+    }
+    static void sheetIn(View card) {
+        card.setAlpha(0f); card.setTranslationX(px(card.getContext(), 36));
+        card.animate().alpha(1f).translationX(0f).setDuration(200).setInterpolator(new DecelerateInterpolator(1.6f)).start();
+    }
+    static Toggle toggle(Context c, boolean on) { return new Toggle(c, on); }
+
+    /** Small on/off switch drawn to match the glass rows. */
+    static final class Toggle extends View {
+        private final boolean on;
+        private boolean focusedStyle;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Toggle(Context c, boolean on) { super(c); this.on = on; setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO); }
+        void setFocusedStyle(boolean f) { focusedStyle = f; invalidate(); }
+        @Override protected void onDraw(Canvas canvas) {
+            float w = getWidth(), h = getHeight(), r = h / 2f;
+            paint.setColor(on ? (focusedStyle ? 0xFF2E7D5B : 0xFF6ED69A) : (focusedStyle ? 0x33000000 : 0x33FFFFFF));
+            canvas.drawRoundRect(0, 0, w, h, r, r, paint);
+            paint.setColor(on ? 0xFFFFFFFF : (focusedStyle ? 0xFF6B6570 : 0xFFE6E1EA));
+            float knob = r - px(getContext(), 3);
+            canvas.drawCircle(on ? w - r : r, r, knob, paint);
+        }
     }
     private NativeTheme() { }
 }

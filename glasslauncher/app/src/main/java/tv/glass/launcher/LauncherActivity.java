@@ -381,20 +381,26 @@ public class LauncherActivity extends Activity {
     private void showControlCenter(View anchor,String key) {
         if(controlCenter==null) {
             controlCenter=new ControlCenterPanel(this,new ControlCenterPanel.Host() {
-                public String deviceName() { return "This TV"; }
+                public String deviceName() {
+                    String n=android.provider.Settings.Global.getString(getContentResolver(),android.provider.Settings.Global.DEVICE_NAME);
+                    return n==null||n.trim().isEmpty()?"This TV":n.trim();
+                }
                 public String networkName() { return netState==NET_WIFI?"Wi-Fi":netState==NET_ETHERNET?"Ethernet":"Network"; }
                 public String networkStatus() {return netState==NET_NONE?"Not connected":"Connected";}
-                public String airStatus() {return !AirPlayMonitorService.receiverInstalled(LauncherActivity.this)?"Unavailable":airState==AirPlayStatus.State.READY?"Ready":airState==AirPlayStatus.State.STARTING?"Starting":"Unavailable";}
-                public String airSummary() {return !AirPlayMonitorService.receiverInstalled(LauncherActivity.this)?"Receiver not installed":airState==AirPlayStatus.State.FAILED?"Open receiver to retry":"Screen mirroring receiver";}
-                public String bluetoothSummary() {return btAdapter()==null?"Not available on this device":isBtOn()?"Open paired devices":"Bluetooth is off";}
+                public AirPlayMonitorService.Snapshot air() {return AirPlayMonitorService.read(LauncherActivity.this);}
+                public boolean airLegacyInstalled() {return AirPlayMonitorService.legacyReceiverInstalled(LauncherActivity.this);}
+                public String bluetoothSummary() {return bluetoothTileSummary();}
+                public String remoteSummary() {return "Use your iPhone";}
+                public void setAirEnabled(boolean on) {AirPlayMonitorService.setEnabled(LauncherActivity.this,on);uiHandler.postDelayed(LauncherActivity.this::refreshAirState,400);}
+                public void restartAir() {AirPlayMonitorService.start(LauncherActivity.this,AirPlayMonitorService.ACTION_RESTART);showToast("Restarting AirPlay…");}
+                public void showAirPlayer() {controlCenter.hide();openAirPlayPlayer();}
                 public void network() {openNetSettings();}
                 public void inputs() {
                     controlCenter.hide();
                     Intent input=new Intent("android.settings.TV_INPUT_SETTINGS");
                     try {startActivity(input);} catch(RuntimeException e){openDrawer();}
                 }
-                public void airplay() {openAirPlayReceiver();}
-                public void bluetooth() {controlsBluetoothKey="bluetooth";resumeControlsAfterBluetooth=true;onBtPillPressed();}
+                public void bluetooth() {controlsBluetoothKey="bluetooth";resumeControlsAfterBluetooth=true;sheetHandoff=true;controlCenter.hide(false);onBtPillPressed();}
                 public void settings() {controlCenter.hide();openSystemSettings();}
                 public View appearance() {return embeddedAppearance();}
                 public View remote() {return GlassRemotePanel.create(LauncherActivity.this);}
@@ -407,15 +413,51 @@ public class LauncherActivity extends Activity {
             });
             root.addView(controlCenter);
         }
-        controlCenter.show(anchor,key);
+        boolean animate=!sheetHandoff;sheetHandoff=false;
+        controlCenter.show(anchor,key,animate);
     }
 
-    /** AirPlay status pill — leftmost toolbar pill, built only when the
-     *  AirPlay receiver app ({@link AirPlayMonitorService#RECEIVER_PKG}) is
-     *  installed. Null otherwise. */
+    /** True while Control Center and the Bluetooth sheet hand over to each
+     *  other; both occupy the same place, so the swap skips entry motion. */
+    private boolean sheetHandoff;
+
+    /** One line for the Control Center Bluetooth tile. */
+    @android.annotation.SuppressLint("MissingPermission")
+    private String bluetoothTileSummary() {
+        android.bluetooth.BluetoothAdapter a=btAdapter();
+        if(a==null)return "Not available";
+        if(!isBtOn())return "Off";
+        try {
+            if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED)return "On";
+            java.util.Set<android.bluetooth.BluetoothDevice> bonded=a.getBondedDevices();
+            String only=null;int connected=0;
+            if(bonded!=null)for(android.bluetooth.BluetoothDevice d:bonded){
+                boolean live=false;
+                try{live=(Boolean)d.getClass().getMethod("isConnected").invoke(d);}catch(Exception ignored){}
+                if(live){connected++;only=Build.VERSION.SDK_INT>=Build.VERSION_CODES.R&&d.getAlias()!=null?d.getAlias():d.getName();}
+            }
+            if(connected==1&&only!=null)return only;
+            if(connected>1)return connected+" connected";
+            return bonded==null||bonded.isEmpty()?"No devices":"Not connected";
+        } catch(RuntimeException e) {return "On";}
+    }
+
+    /** Bring the AirPlay player (running in the receiver process) forward. */
+    private void openAirPlayPlayer() {
+        try {
+            startActivity(new Intent(io.github.jqssun.airplay.service.AirPlayService.ACTION_SHOW_PLAYER)
+                    .setPackage(getPackageName()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            showToast("Couldn’t open AirPlay");
+        }
+    }
+
+    /** AirPlay toolbar control for the built-in receiver
+     *  ({@link AirPlayMonitorService}). */
     private View               airBtn = null;
     /** Last state read from {@link AirPlayMonitorService}; UI-thread only. */
     private AirPlayStatus.State airState = AirPlayStatus.State.STARTING;
+    private String airRecord = "";
     /** Package-scoped "status changed" ping from the monitor process. */
     private BroadcastReceiver  airReceiver = null;
     private FavoritesBlurView   favoritesBlurLayer;
@@ -2038,7 +2080,8 @@ public class LauncherActivity extends Activity {
         if (selectedAppName != null) selectedAppName.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         FavoritesBlurView blur = favoritesBlurLayer;
         if (blur != null) blur.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
-        if (clockView != null) clockView.setVisibility(showClock ? View.VISIBLE : View.GONE);
+        if (clockView != null) clockView.setVisibility(showClock && visible ? View.VISIBLE : showClock ? View.INVISIBLE : View.GONE);
+        if (toolbarCapsule != null) toolbarCapsule.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
     }
 
     /** Launch the system uninstall flow for {@code app}. Shared by the drawer
@@ -3001,7 +3044,10 @@ public class LauncherActivity extends Activity {
         controls.setBackground(NativeTheme.glass(this, 28, false));
         controls.setClipChildren(false);
         toolbarCapsule = controls;
-        airBtn = nativeControl(R.drawable.ic_airplay, "AirPlay", () -> showControlCenter(airBtn, "airplay"));
+        airBtn = nativeControl(R.drawable.ic_airplay, "AirPlay", () -> {
+            if(AirPlayMonitorService.read(this).inSession())openAirPlayPlayer();
+            else showControlCenter(airBtn, "airplay");
+        });
         btBtn = nativeControl(R.drawable.ic_bt, "Bluetooth", () -> {resumeControlsAfterBluetooth=false;openBluetoothPairing=false;onBtPillPressed();});
         mapperBtnView = nativeControl(R.drawable.ic_feather_sliders, "Control Center", () -> showControlCenter(mapperBtnView, "network"));
         View[] buttons = {airBtn, btBtn, mapperBtnView};
@@ -3699,111 +3745,6 @@ public class LauncherActivity extends Activity {
         return v;
     }
 
-    /** AirPlay status pill — leftmost toolbar pill while the AirPlay receiver
-     *  app is installed. Same glass look and focus behaviour as the BT pill;
-     *  a small status dot sits at its lower right: green = ready, amber =
-     *  starting, red = not available. Short-press opens the receiver app,
-     *  which (re)starts its server — the "Retry" path. Long-press reports the
-     *  current status. */
-    private View buildAirBtn(int sz) {
-        View v = new View(this) {
-            private final Paint bgFocus = makeBgFocusPaint();
-            private final Paint rim     = makeRimPaint();
-            private final Paint dot     = new Paint(Paint.ANTI_ALIAS_FLAG);
-            private final Paint dotRim  = new Paint(Paint.ANTI_ALIAS_FLAG);
-            private final android.graphics.drawable.Drawable icAir = loadPillIcon(R.drawable.ic_airplay);
-            @Override protected void onDraw(Canvas c) {
-                int w = getWidth(), h = getHeight();
-                if (w <= 0 || h <= 0) return;
-                boolean focused = isFocused();
-                float scale = focused ? 1f : 0.86f;
-                float cx = w / 2f, cy = h / 2f;
-                float r = Math.min(cx, cy) * scale;
-                if (focused) {
-                    c.drawCircle(cx, cy, r, bgFocus);
-                    c.drawCircle(cx, cy, r - rim.getStrokeWidth() / 2f, rim);
-                }
-                drawPillIcon(c, icAir, cx, cy, r, focused);
-                int color = airDotColor(airState);
-                if (color != 0) {
-                    float dr = r * 0.2f;
-                    float dx = cx + r * 0.52f, dy = cy + r * 0.48f;
-                    dotRim.setColor(focused ? bgFocus.getColor() : 0x59000000);
-                    c.drawCircle(dx, dy, dr + Math.max(1f, density), dotRim);
-                    dot.setColor(color);
-                    c.drawCircle(dx, dy, dr, dot);
-                }
-            }
-        };
-        applyPillStyle(v);
-        v.setOnClickListener(view -> {
-            view.playSoundEffect(SoundEffectConstants.CLICK);
-            openAirPlayReceiver();
-        });
-        v.setOnLongClickListener(view -> {
-            view.playSoundEffect(SoundEffectConstants.CLICK);
-            showToast(getString(airState == AirPlayStatus.State.READY ? R.string.toast_airplay_ready
-                    : airState == AirPlayStatus.State.FAILED ? R.string.cd_airplay_failed
-                    : R.string.toast_airplay_starting));
-            AirPlayMonitorService.start(this, AirPlayMonitorService.ACTION_IN_USE);
-            return true;
-        });
-        v.setAlpha(0.6f);   // dimmed when idle; brightens to full on focus
-        v.setOnFocusChangeListener((view, f) -> {
-            view.animate().cancel();
-            view.animate().scaleX(f ? BTN_FOCUS_SCALE : 1f).scaleY(f ? BTN_FOCUS_SCALE : 1f)
-                    .alpha(f ? 1f : 0.6f)
-                    .setDuration(100).setInterpolator(FOCUS_EASE).start();
-            view.invalidate();
-        });
-        v.setOnKeyListener((view, kc, ev) -> {
-            if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
-            switch (kc) {
-                case KeyEvent.KEYCODE_DPAD_DOWN:
-                    // Leftmost pill → first shelf cell, like the BT pill.
-                    RecyclingShelfView sd = shelf;
-                    if (sd != null) sd.requestFocusOnIndex(0);
-                    return true;
-                case KeyEvent.KEYCODE_DPAD_LEFT:
-                    // Leftmost in the cluster — wrap to the last shelf cell.
-                    RecyclingShelfView sl = shelf;
-                    if (sl != null) sl.requestFocusOnIndex(sl.lastIndex());
-                    return true;
-                case KeyEvent.KEYCODE_DPAD_RIGHT:
-                    View nb = btBtn != null ? btBtn : netBtn;
-                    if (nb != null) { nb.requestFocus(); return true; }
-                    RecyclingShelfView sr = shelf;
-                    if (sr != null) sr.requestFocusOnIndex(0);
-                    return true;
-                default: return false;
-            }
-        });
-        return v;
-    }
-
-    private static int airDotColor(AirPlayStatus.State s) {
-        switch (s) {
-            case READY:    return 0xFF34C759;
-            case STARTING: return 0xFFFFCC00;
-            case FAILED:   return 0xFFFF453A;
-            default:       return 0;
-        }
-    }
-
-    /** Open the receiver app; its auto-start brings the server back up. */
-    private void openAirPlayReceiver() {
-        PackageManager pm = getPackageManager();
-        Intent i = pm.getLeanbackLaunchIntentForPackage(AirPlayMonitorService.RECEIVER_PKG);
-        if (i == null) i = pm.getLaunchIntentForPackage(AirPlayMonitorService.RECEIVER_PKG);
-        if (i == null) { showToast(getString(R.string.toast_airplay_open_failed)); return; }
-        if (airState == AirPlayStatus.State.FAILED) showToast(getString(R.string.toast_airplay_failed));
-        try {
-            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        } catch (RuntimeException e) {
-            showToast(getString(R.string.toast_airplay_open_failed));
-        }
-    }
-
     // The legacy branch only runs below API 33, before exported flags are required.
     @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
     private void registerAirReceiver() {
@@ -3832,13 +3773,24 @@ public class LauncherActivity extends Activity {
     private void refreshAirState() {
         View b = airBtn;
         if (b == null) return;
-        AirPlayStatus.State s = AirPlayMonitorService.readState(this);
-        b.setContentDescription(!AirPlayMonitorService.receiverInstalled(this) ? "AirPlay unavailable" : getString(s == AirPlayStatus.State.READY ? R.string.cd_airplay_ready
+        AirPlayMonitorService.Snapshot snap = AirPlayMonitorService.read(this);
+        AirPlayStatus.State s = snap.state;
+        b.setContentDescription(s == AirPlayStatus.State.OFF ? "AirPlay off" : getString(s == AirPlayStatus.State.READY ? R.string.cd_airplay_ready
                 : s == AirPlayStatus.State.FAILED ? R.string.cd_airplay_failed
                 : R.string.cd_airplay_starting));
-        if (s != airState) {
+        // A quiet dot on the toolbar glyph only when something needs
+        // attention or a session is live; a healthy idle receiver shows none.
+        int dot = snap.inSession() ? ControlCenterPanel.airColor(snap)
+                : s == AirPlayStatus.State.FAILED || s == AirPlayStatus.State.STARTING ? ControlCenterPanel.airColor(snap) : 0;
+        if (b instanceof ImageView) {
+            ImageView iv = (ImageView) b;
+            android.graphics.drawable.Drawable glyph = getDrawable(R.drawable.ic_airplay);
+            iv.setImageDrawable(dot == 0 ? glyph : new StatusDotDrawable(glyph, dot));
+        }
+        String key = s.name() + snap.session + snap.name;
+        if (!key.equals(airRecord)) {
+            airRecord = key;
             airState = s;
-            b.invalidate();
             if(controlCenter!=null)controlCenter.refresh();
         }
     }
@@ -4330,9 +4282,12 @@ public class LauncherActivity extends Activity {
                     dismissOverlayBackdropIfIdle();
                     if(resumeControlsAfterBluetooth) {
                         resumeControlsAfterBluetooth=false;
+                        sheetHandoff=true;
                         showControlCenter(mapperBtnView, controlsBluetoothKey);
                     }
                 }
+                @Override public boolean returnsToControlCenter() { return resumeControlsAfterBluetooth; }
+                @Override public String subtitle() { return bluetoothTileSummary(); }
                 @Override public void openBtSettings() { LauncherActivity.this.openBtSettings(); }
                 @Override public void openBtPairing() { LauncherActivity.this.openBtPairing(); }
                 @Override public boolean hasBtSettingsScreen() {
@@ -4352,7 +4307,8 @@ public class LauncherActivity extends Activity {
                 @Override public void toast(String text) { showToast(text); }
             }, density);
         }
-        btPanel.show();
+        boolean animate=!sheetHandoff;sheetHandoff=false;
+        btPanel.show(animate);
         if(openBluetoothPairing) {openBluetoothPairing=false;btPanel.showPairing();}
     }
 
@@ -5926,6 +5882,8 @@ public class LauncherActivity extends Activity {
         private final ArrayList<AppInfo> displayed = new ArrayList<>();
 
         private final int cellW, cellH, sidePad, stride, rowGap, rowStride, topPad, bottomPad;
+        /** Rows kept fully on screen; the next row peeks under the bottom fade. */
+        private final int visibleRows;
         private int gridLeft = 0;   // left edge of the centred grid block (rows 1+)
         private int scrollY  = 0;
         private int contentH = 0;
@@ -5960,23 +5918,27 @@ public class LauncherActivity extends Activity {
         // ticket is still current before touching rebuildingApps or focus.
         int setAppsGen = 0;
 
-        private final android.graphics.drawable.GradientDrawable drawerSheet = NativeTheme.glass(LauncherActivity.this,29,true);
         private final Paint drawerTitlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint drawerCountPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint drawerFadePaint = new Paint();
         AppDrawer(Context ctx) {
             super(ctx);
             drawerTitlePaint.setColor(0xFFF8F6FA);
-            drawerTitlePaint.setTextSize(NativeTheme.px(LauncherActivity.this,34));
+            drawerTitlePaint.setTextSize(NativeTheme.px(LauncherActivity.this,40));
             drawerTitlePaint.setTypeface(NativeTheme.light());
+            drawerCountPaint.setColor(0x99F8F6FA);
+            drawerCountPaint.setTextSize(NativeTheme.px(LauncherActivity.this,15));
+            drawerCountPaint.setTypeface(NativeTheme.regular());
             scroller = new OverScroller(ctx, SCROLL_EASE);
             cellW     = tileWpx;
-            cellH     = bannerHpx + NativeTheme.px(LauncherActivity.this, 30);
+            cellH     = bannerHpx + NativeTheme.px(LauncherActivity.this, 32);
             sidePad   = NativeTheme.px(LauncherActivity.this, 13);
             stride    = cellW + sidePad * 2;
-            rowGap    = NativeTheme.px(LauncherActivity.this, 10);
+            rowGap    = NativeTheme.px(LauncherActivity.this, 8);
             rowStride = cellH + rowGap;
-            topPad    = Math.min(NativeTheme.px(LauncherActivity.this,285),
-                    screenH-NativeTheme.px(LauncherActivity.this,100)-2*cellH-rowGap);
+            topPad    = NativeTheme.px(LauncherActivity.this, 150);
             bottomPad = NativeTheme.px(LauncherActivity.this, 120);
+            visibleRows = Math.max(2, (screenH - topPad) / rowStride);
             applyVeil();
             setFocusable(false);
             setClickable(true);
@@ -5992,10 +5954,12 @@ public class LauncherActivity extends Activity {
          *  needs the old near-opaque dark fallback. The system wallpaper is not
          *  blurred, so it gets a darker veil to keep labels readable. */
         void applyVeil() {
-            setBackgroundColor(systemWallpaper ? 0x99121216   // 60%, unblurred
+            // All apps is a full screen of its own: a deeper veil than the
+            // old floating sheet so the grid, not the wallpaper, reads first.
+            setBackgroundColor(systemWallpaper ? 0xB30E0E12
                     : Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                    ? 0x3326262B      // 20% tint over hardware RenderEffect
-                    : 0x481E1E22);    // 28% tint over cached software blur
+                    ? 0x8C121216
+                    : 0x99141418);
         }
 
         /** Clamped, effective home-row size for the current visible count. */
@@ -6180,20 +6144,43 @@ public class LauncherActivity extends Activity {
 
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            drawerSheet.setBounds(NativeTheme.px(LauncherActivity.this,68), NativeTheme.px(LauncherActivity.this,183),
-                    getWidth()-NativeTheme.px(LauncherActivity.this,68),getHeight()-NativeTheme.px(LauncherActivity.this,80));
-            drawerSheet.draw(canvas);
-            canvas.drawText("All apps", NativeTheme.px(LauncherActivity.this,98),NativeTheme.px(LauncherActivity.this,244),drawerTitlePaint);
+            int left = gridLeft + sidePad;
+            int baseline = NativeTheme.px(LauncherActivity.this, 98);
+            canvas.drawText("All apps", left, baseline, drawerTitlePaint);
+            String count = displayed.size() == 1 ? "1 app" : displayed.size() + " apps";
+            float titleW = drawerTitlePaint.measureText("All apps");
+            canvas.drawText(count, left + titleW + NativeTheme.px(LauncherActivity.this, 16), baseline, drawerCountPaint);
+            String hint = "Hold OK to move or hide";
+            canvas.drawText(hint, getWidth() - left - drawerCountPaint.measureText(hint), baseline, drawerCountPaint);
         }
 
         @Override protected void dispatchDraw(Canvas canvas) {
-            int save=canvas.save();
-            canvas.clipRect(NativeTheme.px(LauncherActivity.this,68),topPad-NativeTheme.px(LauncherActivity.this,15),
-                    getWidth()-NativeTheme.px(LauncherActivity.this,68),
-                    Math.min(getHeight()-NativeTheme.px(LauncherActivity.this,92),topPad+2*cellH+rowGap+NativeTheme.px(LauncherActivity.this,8)));
+            int top = topPad - NativeTheme.px(LauncherActivity.this, 14);
+            int save = canvas.saveLayer(0, top, getWidth(), getHeight(), null);
+            canvas.clipRect(0, top, getWidth(), getHeight());
             super.dispatchDraw(canvas);
+            // Soft fade on the scroll edges so rows slide under the title and
+            // off the bottom instead of being cut on a hard line.
+            int fade = NativeTheme.px(LauncherActivity.this, 26);
+            int bottomFade = NativeTheme.px(LauncherActivity.this, 70);
+            if (topFadeShader == null || fadeHeight != getHeight()) {
+                fadeHeight = getHeight();
+                topFadeShader = new android.graphics.LinearGradient(0, top, 0, top + fade,
+                        0xFF000000, 0x00000000, Shader.TileMode.CLAMP);
+                bottomFadeShader = new android.graphics.LinearGradient(0, fadeHeight - bottomFade, 0, fadeHeight,
+                        0x00000000, 0xE6000000, Shader.TileMode.CLAMP);
+                drawerFadePaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT));
+            }
+            if (scrollY > 0) {
+                drawerFadePaint.setShader(topFadeShader);
+                canvas.drawRect(0, top, getWidth(), top + fade, drawerFadePaint);
+            }
+            drawerFadePaint.setShader(bottomFadeShader);
+            canvas.drawRect(0, getHeight() - bottomFade, getWidth(), getHeight(), drawerFadePaint);
             canvas.restoreToCount(save);
         }
+        private Shader topFadeShader, bottomFadeShader;
+        private int fadeHeight;
 
         private int rowLeftPad(int row, int len) {
             int hc = hc();
@@ -6220,7 +6207,7 @@ public class LauncherActivity extends Activity {
 
         private int scrollYMax() {
             int rows=HomeDrawerModel.rowCount(layoutColumns,displayed.size(),hc());
-            return Math.max(0,(rows-2)*rowStride);
+            return Math.max(0,(rows-visibleRows)*rowStride);
         }
         private int clampScrollY(int y) { return Math.max(0, Math.min(y, scrollYMax())); }
 
@@ -6380,7 +6367,7 @@ public class LauncherActivity extends Activity {
             int first=Math.round(scrollY/(float)rowStride);
             int target=first*rowStride;
             if(row<first)target=row*rowStride;
-            else if(row>=first+2)target=(row-1)*rowStride;
+            else if(row>=first+visibleRows)target=(row-visibleRows+1)*rowStride;
             target=clampScrollY(target);
             if(snap)doScrollTo(target);else smoothScrollTo(target);
         }
@@ -6991,10 +6978,11 @@ public class LauncherActivity extends Activity {
                 // label on the wrong cell for a frame even though the ring
                 // itself is correctly suppressed. See RecyclingShelfView's
                 // rebuildingApps for the full history.
-                boolean showLabel = true
-                        && !labelDisplay.isEmpty()
-                        && ((isFocused() && !reorderMode && !rebuildingApps) || isDragTarget);
-                if (showLabel) {
+                // Labels stay on in All apps so the grid can be scanned by
+                // name; the focused (or dragged) app's label is brightest.
+                if (!labelDisplay.isEmpty()) {
+                    boolean strong = (isFocused() && !reorderMode && !rebuildingApps) || isDragTarget;
+                    labelPaint.setAlpha(strong ? 255 : 150);
                     float labelY = icy + labelOffsetY;
                     if (labelY < h) canvas.drawText(labelDisplay, cx, labelY, labelPaint);
                 }

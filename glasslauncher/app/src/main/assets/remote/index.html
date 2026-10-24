@@ -1,19 +1,54 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#15171e"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Glass Remote"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icon.png"><link rel="icon" href="/icon.png"><link rel="stylesheet" href="/style.css"><title>Glass Remote</title></head>
-<body><main>
-<header><div><p class="eyebrow">GLASS</p><h1>TV Remote</h1></div><button id="setupButton" class="icon small" aria-label="Connection settings"><svg><use href="#settings"/></svg></button></header>
-<div class="status"><span id="dot"></span><span id="statusText" role="status">Connecting…</span><button id="reconnect" hidden>Reconnect</button></div>
-<section id="pairPanel" class="sheet" hidden><h2>Pair your phone</h2><p>Open Control Center → Phone remote on your TV, then enter its pairing code.</p><form id="pairForm"><label for="pin">Glass pairing code</label><div class="inline"><input id="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required placeholder="000000"><button class="primary">Pair</button></div></form></section>
-<section id="nativePanel" class="sheet" hidden><h2>Enable TV controls</h2><p id="nativeHint">Approve Android’s debugging authorization on the TV once. Glass uses its own local connection; your Mac is not needed.</p><button id="startNative" class="primary">Enable TV controls</button></section>
-<div id="remoteControls">
-<div class="top-actions"><button data-key="back" class="icon" aria-label="Back"><svg><use href="#back"/></svg><span>Back</span></button><button data-key="home" class="icon" aria-label="Home"><svg><use href="#home"/></svg><span>Home</span></button><button id="keyboardButton" class="icon" aria-label="Open iPhone keyboard"><svg><use href="#keyboard"/></svg><span>Keyboard</span></button></div>
-<div class="dpad" role="group" aria-label="Directional controls"><button data-key="up" class="direction up" aria-label="Up"><svg><use href="#chevron"/></svg></button><button data-key="left" class="direction left" aria-label="Left"><svg><use href="#chevron"/></svg></button><button data-key="ok" class="ok" aria-label="OK">OK</button><button data-key="right" class="direction right" aria-label="Right"><svg><use href="#chevron"/></svg></button><button data-key="down" class="direction down" aria-label="Down"><svg><use href="#chevron"/></svg></button></div>
-<div class="playback"><button data-key="rewind" class="icon" aria-label="Rewind"><svg><use href="#rewind"/></svg></button><button data-key="playPause" class="icon play" aria-label="Play or pause"><svg><use href="#playPause"/></svg></button><button data-key="forward" class="icon" aria-label="Fast forward"><svg class="flip"><use href="#rewind"/></svg></button></div>
-<div class="volume" role="group" aria-label="Volume"><button data-key="volumeDown" aria-label="Volume down">−</button><button data-key="mute" class="icon" aria-label="Mute or unmute"><svg><use href="#volume"/></svg><span>Volume</span></button><button data-key="volumeUp" aria-label="Volume up">+</button></div>
-</div>
-<section id="keyboardPanel" class="sheet" hidden><div class="sheet-heading"><h2>Type on TV</h2><button id="closeKeyboard" aria-label="Close keyboard">✕</button></div><p>Select a search or text field on the TV, then send your text.</p><form id="textForm"><label class="sr-only" for="tvText">Text to send to the TV</label><textarea id="tvText" rows="2" maxlength="2048" placeholder="Type or paste here…" autocomplete="off" autocorrect="on"></textarea><div class="text-actions"><button type="button" data-key="delete">⌫ Delete</button><button type="button" data-key="enter">Enter ↵</button><button class="primary">Send text</button></div></form></section>
-<p id="feedback" role="alert" aria-live="polite"></p><footer>Phone → TV. Just your Wi-Fi.</footer>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="theme-color" content="#121319"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Glass Remote"><meta name="format-detection" content="telephone=no"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icon.png"><link rel="icon" href="/icon.png"><link rel="stylesheet" href="/style.css"><title>Glass Remote</title></head>
+<body><main id="app">
+<header>
+  <div class="who"><p class="eyebrow">GLASS REMOTE</p><p class="status" id="status"><span id="dot"></span><span id="statusText" role="status">Connecting…</span></p></div>
+  <button id="setupButton" class="round" aria-label="Remote settings"><svg><use href="#settings"/></svg></button>
+</header>
+
+<section class="pad-wrap" aria-label="Navigation">
+  <div id="pad" class="pad" role="group" aria-label="Touchpad. Swipe to move, tap to select." tabindex="-1">
+    <span class="edge up"><svg><use href="#chevron"/></svg></span><span class="edge right"><svg><use href="#chevron"/></svg></span><span class="edge down"><svg><use href="#chevron"/></svg></span><span class="edge left"><svg><use href="#chevron"/></svg></span>
+    <span class="center" id="padCenter">OK</span>
+    <span class="ripple" id="ripple"></span>
+    <button class="sr-only" data-key="up">Up</button><button class="sr-only" data-key="down">Down</button><button class="sr-only" data-key="left">Left</button><button class="sr-only" data-key="right">Right</button><button class="sr-only" data-key="ok">OK</button>
+  </div>
+  <p class="pad-hint" id="padHint">Swipe to move · tap to select</p>
+</section>
+
+<section class="dock" id="dock" aria-label="Controls">
+  <div class="row actions">
+    <button data-key="back" class="key" aria-label="Back"><svg><use href="#back"/></svg><span>Back</span></button>
+    <button data-key="home" class="key" aria-label="Home"><svg><use href="#home"/></svg><span>Home</span></button>
+    <button data-key="playPause" class="key" aria-label="Play or pause"><svg><use href="#playPause"/></svg><span>Play</span></button>
+    <button id="keyboardButton" class="key" aria-label="Type on TV"><svg><use href="#keyboard"/></svg><span>Type</span></button>
+  </div>
+  <div class="row media">
+    <button data-key="rewind" class="key slim" aria-label="Rewind"><svg><use href="#rewind"/></svg></button>
+    <div class="volume" role="group" aria-label="Volume">
+      <button data-key="volumeDown" aria-label="Volume down"><svg><use href="#minus"/></svg></button>
+      <button data-key="mute" class="mute" aria-label="Mute"><svg><use href="#volume"/></svg></button>
+      <button data-key="volumeUp" aria-label="Volume up"><svg><use href="#plus"/></svg></button>
+    </div>
+    <button data-key="forward" class="key slim" aria-label="Fast forward"><svg class="flip"><use href="#rewind"/></svg></button>
+  </div>
+</section>
+<p id="feedback" role="alert" aria-live="polite"></p>
 </main>
+
+<div id="scrim" class="scrim" hidden></div>
+<section id="pairPanel" class="sheet" hidden aria-labelledby="pairTitle"><div class="grab"></div><h2 id="pairTitle">Pair with your TV</h2><p>On the TV open Control Center → Phone remote, then enter the six-digit code.</p><form id="pairForm"><label class="sr-only" for="pin">Pairing code</label><input id="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required placeholder="000000"><button class="primary">Pair</button></form></section>
+<section id="nativePanel" class="sheet" hidden aria-labelledby="nativeTitle"><div class="grab"></div><h2 id="nativeTitle">Enable TV controls</h2><p id="nativeHint">Approve Android’s debugging prompt on the TV once (choose Always allow). Everything stays on your Wi‑Fi.</p><button id="startNative" class="primary wide">Enable TV controls</button><button id="reconnect" class="ghost wide" hidden>Reconnect</button></section>
+<section id="settingsPanel" class="sheet" hidden aria-labelledby="settingsTitle"><div class="grab"></div><h2 id="settingsTitle">Remote</h2>
+  <p class="label">Navigation</p>
+  <div class="segmented" role="radiogroup" aria-label="Navigation style"><button role="radio" data-mode="pad">Touchpad</button><button role="radio" data-mode="dpad">Buttons</button></div>
+  <p class="label">Feel</p>
+  <div class="segmented" role="radiogroup" aria-label="Haptics"><button role="radio" data-haptics="on">Haptics on</button><button role="radio" data-haptics="off">Off</button></div>
+  <button id="openSetup" class="ghost wide">Connection &amp; pairing</button>
+  <button id="closeSettings" class="primary wide">Done</button></section>
+<section id="keyboardPanel" class="sheet" hidden aria-labelledby="keyboardTitle"><div class="grab"></div><div class="sheet-heading"><h2 id="keyboardTitle">Type on TV</h2><button id="closeKeyboard" class="round small" aria-label="Close keyboard"><svg><use href="#close"/></svg></button></div><p>Select a search or text field on the TV first.</p><form id="textForm"><label class="sr-only" for="tvText">Text to send to the TV</label><textarea id="tvText" rows="2" maxlength="2048" placeholder="Type or paste…" autocomplete="off" autocorrect="on" enterkeyhint="send"></textarea><div class="text-actions"><button type="button" data-key="delete" class="ghost">⌫ Delete</button><button type="button" data-key="enter" class="ghost">Enter</button><button class="primary">Send</button></div></form></section>
+<label id="hapticLabel" class="haptic" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
+
 <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
-<symbol id="chevron" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol><symbol id="back" viewBox="0 0 24 24"><path d="m10 6-6 6 6 6M4 12h11a5 5 0 0 1 5 5"/></symbol><symbol id="home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10H3Z M9 20v-7h6v7"/></symbol><symbol id="keyboard" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"/></symbol><symbol id="playPause" viewBox="0 0 24 24"><path d="m3 5 9 7-9 7ZM16 5v14M21 5v14"/></symbol><symbol id="rewind" viewBox="0 0 24 24"><path d="m11 5-9 7 9 7ZM22 5l-9 7 9 7Z"/></symbol><symbol id="volume" viewBox="0 0 24 24"><path d="M11 4 6 8H2v8h4l5 4ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></symbol><symbol id="settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol>
+<symbol id="chevron" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol><symbol id="back" viewBox="0 0 24 24"><path d="m10 6-6 6 6 6M4 12h11a5 5 0 0 1 5 5"/></symbol><symbol id="home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10H3Z M9 20v-7h6v7"/></symbol><symbol id="keyboard" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"/></symbol><symbol id="playPause" viewBox="0 0 24 24"><path d="m3 5 9 7-9 7ZM16 5v14M21 5v14"/></symbol><symbol id="rewind" viewBox="0 0 24 24"><path d="m11 5-9 7 9 7ZM22 5l-9 7 9 7Z"/></symbol><symbol id="volume" viewBox="0 0 24 24"><path d="M11 4 6 8H2v8h4l5 4ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></symbol><symbol id="settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol><symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol><symbol id="minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol><symbol id="close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
 </defs></svg><script src="/app.js" defer></script></body></html>

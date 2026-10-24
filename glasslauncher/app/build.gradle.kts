@@ -499,8 +499,8 @@ android {
         // Bumped 51 → 52: 2.6.1 reorganizes settings into a compact category
         // hub, removes the About/QR surface, and refines the Orange focus color.
         // SemVer PATCH — settings navigation and visual clarity refinement.
-        versionCode   = 15
-        versionName   = "1.0.6-feather.2"
+        versionCode   = 16
+        versionName   = "1.1.0-airplay.1"
         resourceConfigurations += listOf("en")
 
         // Instrumentation test runner. Required so :app:connectedDebugAndroidTest
@@ -508,47 +508,12 @@ android {
         // under src/androidTest. JUnit 4 runner shipped with androidx.test.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // ABI cap for the shipped APK.
-        //
-        // Today the launcher is pure Java with zero native dependencies, so
-        // the produced APK has no `lib/` folder and a single binary already
-        // runs on every Android ABI. This `abiFilters` block is therefore a
-        // no-op against the current dependency set — but it is a defensive
-        // cap: if a future transitive dependency ever brings in a native
-        // library, R8 / AGP will package only the ABIs listed here.
-        //
-        // ABIs we cap to:
-        //   armeabi-v7a — 32-bit ARM (legacy Android TV boxes, ancient
-        //                 phones, the long tail of Amlogic / Allwinner
-        //                 hardware that Glass Launcher specifically wants
-        //                 to support after the 1.2.0 minSdk-26 expansion).
-        //   arm64-v8a   — 64-bit ARM (every modern phone, tablet, TV box,
-        //                 streaming stick — the dominant Android ABI).
-        //   x86_64      — 64-bit x86. Two reasons it MUST stay in the cap:
-        //                 (1) Chromebooks running ARC++ and the small
-        //                 segment of x86 Android tablets are real
-        //                 production targets; cutting them off would be
-        //                 a regression. (2) AGP's connectedAndroidTest
-        //                 task uses this list to decide which connected
-        //                 devices count as "compatible" — it intersects
-        //                 the device's reported ABIs with this filter.
-        //                 GitHub-Actions emulators run on x86_64 hosts,
-        //                 so the AVD's reported ABIs are [x86_64, x86]
-        //                 (and on API 30+ also arm64-v8a via Google's
-        //                 binary translation). Without x86_64 in this
-        //                 filter, API 26-29 emulators are flagged
-        //                 incompatible and the smoke test fails with
-        //                 "Found 1 connected device(s), 0 of which were
-        //                 compatible." API 30+ accidentally worked
-        //                 before because the arm64 binary-translation
-        //                 layer ships in 30+ system images only — see
-        //                 https://developer.android.com/studio/run/emulator-acceleration#binary-translation
-        //                 for the version boundary.
-        // ABIs we DON'T cap (would still bloat the APK if any native dep
-        // ever arrived): x86 (32-bit, dead in 2026), riscv64 (no Android
-        // TV hardware ships it yet), mips* (long discontinued).
+        // ABIs for the AirPlay engine's native library: ARMv7 (this TCL and
+        // most TV SoCs run 32-bit userspace) and ARM64 (newer TVs and the
+        // Apple-silicon Android TV emulator). Each extra ABI rebuilds
+        // OpenSSL and FFmpeg, so x86 emulators are intentionally omitted.
         ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
         }
     }
 
@@ -577,14 +542,22 @@ android {
     // but its implementation uses Kotlin and Okio, so their bytecode remains.
     packaging {
         resources {
+            // Keep META-INF/services: coroutines (used by the AirPlay engine)
+            // discovers its Android main dispatcher through ServiceLoader.
             excludes += setOf(
                 "kotlin/**",
-                "META-INF/**",
+                "META-INF/*.version",
+                "META-INF/*.kotlin_module",
+                "META-INF/versions/**",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/com.android.tools/**",
                 "DebugProbesKt.bin",
                 "**.properties"
             )
         }
-        // Launcher has zero native libs — disable legacy extraction
+        // Native libs come only from the AirPlay engine; keep them stored
+        // uncompressed and page-aligned so they map straight from the APK.
         jniLibs {
             useLegacyPackaging = false
         }
@@ -645,6 +618,9 @@ configurations.matching {
 }
 
 dependencies {
+    // Built-in AirPlay receiver (engine, renderers, player activity).
+    implementation(project(":airplay"))
+
     // Local ADB client used only by the explicit Google TV setup / restore
     // actions. Pure protocol implementation: no bundled native executable and
     // one universal APK across ARMv7, ARM64, and x86_64.
