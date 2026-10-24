@@ -1,5 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
+const standalone=navigator.standalone===true||matchMedia('(display-mode: standalone)').matches;
 let authenticated=false,connected=false,busy=false,pollTimer,lastStatus=null,polled=false,lastReconnect=0;
 const store={get:(k,d)=>{try{return localStorage.getItem(k)??d;}catch{return d;}},set:(k,v)=>{try{localStorage.setItem(k,v);}catch{}}};
 let navMode=store.get('glass.nav','pad'),haptics=store.get('glass.haptics','on')==='on';
@@ -28,10 +29,13 @@ function render(){
   $('statusText').textContent=!authenticated?'Not paired':ready?'Connected':lastStatus?.pairing?'Approve on your TV':lastStatus?.paired?'Reconnecting…':'Set up TV controls';
   $('startNative').disabled=!!lastStatus?.pairing;
   $('reconnect').hidden=!(authenticated&&!connected&&lastStatus?.paired);
+  $('pairButton').hidden=!polled||authenticated;
+  $('openInstall').hidden=standalone;
   if(!polled)return;
   if(!authenticated&&!sheetOpen())openSheet('pairPanel');
   else if(authenticated&&!connected&&lastStatus&&!lastStatus.paired&&!sheetOpen())openSheet('nativePanel');
-  else if(ready&&(isOpen('pairPanel')||isOpen('nativePanel')))closeSheets();
+  else if(ready&&(isOpen('pairPanel')||isOpen('nativePanel'))){closeSheets();offerInstall();}
+  else if(ready&&!sheetOpen())offerInstall();
 }
 async function poll(){
   clearTimeout(pollTimer);
@@ -47,7 +51,7 @@ async function poll(){
 async function action(fn){if(busy)return;busy=true;feedback('');try{await fn();}catch(e){feedback(e.message);}finally{busy=false;}}
 
 // ── Sheets ──
-const sheets=['pairPanel','nativePanel','settingsPanel','keyboardPanel'];
+const sheets=['pairPanel','nativePanel','settingsPanel','keyboardPanel','installPanel'];
 const isOpen=id=>!$(id).hidden;
 const sheetOpen=()=>sheets.some(isOpen);
 function openSheet(id){sheets.forEach(s=>$(s).hidden=s!==id);$('scrim').hidden=false;if(id==='pairPanel')setTimeout(()=>$('pin').focus(),250);if(id==='keyboardPanel')$('tvText').focus();}
@@ -58,7 +62,8 @@ $('closeSettings').addEventListener('click',closeSheets);
 $('openSetup').addEventListener('click',()=>openSheet(authenticated?'nativePanel':'pairPanel'));
 $('keyboardButton').addEventListener('click',()=>{haptic();openSheet('keyboardPanel');});
 $('closeKeyboard').addEventListener('click',closeSheets);
-$('pairForm').addEventListener('submit',event=>{event.preventDefault();action(async()=>{await api('pair',{pin:$('pin').value.trim()});$('pin').value='';authenticated=true;closeSheets();await poll();});});
+$('pairForm').addEventListener('submit',event=>{event.preventDefault();const pin=$('pin').value.trim();action(async()=>{await api('pair',{pin});rememberPin(pin);$('pin').value='';authenticated=true;closeSheets();await poll();});});
+$('pairButton').addEventListener('click',()=>openSheet('pairPanel'));
 $('startNative').addEventListener('click',()=>action(async()=>{await api('native/start',{});feedback('Approve the prompt on your TV.');setTimeout(poll,1500);}));
 $('reconnect').addEventListener('click',()=>action(async()=>{await api('reconnect',{});setTimeout(poll,800);}));
 $('textForm').addEventListener('submit',event=>{event.preventDefault();const text=$('tvText').value;if(!text)return;action(async()=>{await api('text',{text});$('tvText').value='';haptic();feedback('Sent to the TV.');});});
@@ -157,4 +162,38 @@ document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 addEventListener('blur',stopHold);addEventListener('pagehide',stopHold);
 document.addEventListener('visibilitychange',()=>{stopHold();if(!document.hidden)poll();});
 addEventListener('keydown',event=>{if(['INPUT','TEXTAREA'].includes(event.target.tagName))return;const key={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',Enter:'ok',Escape:'back',Backspace:'back',' ':'playPause'}[event.key];if(key){event.preventDefault();sendKey(key);}});
-paintSettings();fitPad();render();poll();
+// ── Pairing from the QR code and Home Screen install ──
+// The TV's QR code carries its pairing code (?pair=123456), so scanning pairs
+// at once. The code stays in the page URL and the manifest's start URL because
+// an iOS Home Screen web app has its own cookies and must pair itself again.
+let pairPin=new URLSearchParams(location.search).get('pair');
+if(pairPin&&!/^[0-9]{6}$/.test(pairPin))pairPin=null;
+function rememberPin(pin){
+  pairPin=pin;
+  history.replaceState(null,'','/?pair='+pin);
+  $('manifestLink').href='/manifest.webmanifest?pair='+pin;
+}
+if(pairPin)rememberPin(pairPin);
+async function autoPair(){
+  if(!pairPin)return false;
+  try{await api('pair',{pin:pairPin});authenticated=true;return true;}catch{return false;}
+}
+function offerInstall(){
+  if(standalone||store.get('glass.installOffered','')==='1')return;
+  store.set('glass.installOffered','1');openSheet('installPanel');
+}
+$('openInstall').addEventListener('click',()=>openSheet('installPanel'));
+$('installLater').addEventListener('click',closeSheets);
+$('shareNow').addEventListener('click',async()=>{
+  // The Web Share sheet is Safari's own; if it lacks Add to Home Screen,
+  // the toolbar Share button has it.
+  try{await navigator.share({title:'Glass Remote',url:location.href});}
+  catch(e){if(e?.name!=='AbortError')feedback('Use the Share button in Safari’s toolbar.');}
+});
+if(!navigator.share)$('shareNow').hidden=true;
+
+paintSettings();fitPad();render();
+(async()=>{
+  try{await api('status');authenticated=true;}catch{if(!authenticated)await autoPair();}
+  poll();
+})();

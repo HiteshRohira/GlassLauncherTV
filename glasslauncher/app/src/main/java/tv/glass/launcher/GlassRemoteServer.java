@@ -48,7 +48,7 @@ final class GlassRemoteServer implements AutoCloseable {
             InputStream in=new BufferedInputStream(socket.getInputStream());OutputStream out=socket.getOutputStream();
             String line=readLine(in,2048);String[] request=line.split(" ");
             if(request.length!=3){reply(out,400,"text/plain","Bad request");return;}
-            String method=request[0],path=request[1];Map<String,String> headers=new HashMap<>();int total=0;
+            String method=request[0],target=request[1];int q=target.indexOf('?');String path=q<0?target:target.substring(0,q),query=q<0?"":target.substring(q+1);Map<String,String> headers=new HashMap<>();int total=0;
             while(!(line=readLine(in,4096)).isEmpty()){
                 total+=line.length();if(total>8192)throw new IOException("Headers too large");int colon=line.indexOf(':');if(colon<1)throw new IOException("Invalid header");
                 String name=line.substring(0,colon).toLowerCase(Locale.ROOT);if(headers.put(name,line.substring(colon+1).trim())!=null)throw new IOException("Duplicate header");
@@ -104,12 +104,28 @@ final class GlassRemoteServer implements AutoCloseable {
                 case "/icon.png":file="icon.png";type="image/png";break;
                 default:reply(out,404,"text/plain","Not found");return;
             }
+            if(file.equals("manifest.webmanifest")){
+                // A Home Screen web app has its own cookie jar on iOS, so the
+                // installed icon carries the pairing code in its start URL and
+                // pairs itself on first launch.
+                String pin=queryValue(query,"pair");
+                String start=pin!=null&&constant(pin,access.pin)?"/?pair="+pin:"/";
+                JSONObject manifest=new JSONObject().put("id","/").put("name","Glass TV Remote").put("short_name","Glass Remote")
+                    .put("start_url",start).put("scope","/").put("display","standalone").put("orientation","portrait")
+                    .put("background_color","#121319").put("theme_color","#121319")
+                    .put("icons",new org.json.JSONArray().put(new JSONObject().put("src","/icon.png").put("sizes","180x180").put("type","image/png")));
+                reply(out,200,type,manifest.toString().getBytes(StandardCharsets.UTF_8),"");return;
+            }
             try(InputStream asset=context.getAssets().open("remote/"+file)){
                 ByteArrayOutputStream data=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=asset.read(buffer))!=-1)data.write(buffer,0,n);
                 reply(out,200,type,data.toByteArray(),"");
             }
         }catch(Exception error){try{reply(socket.getOutputStream(),409,"application/json",new JSONObject().put("error",error instanceof IOException?error.getMessage():"Request could not be completed.").toString());}catch(Exception ignored){}
         }finally{sockets.remove(socket);try{socket.close();}catch(IOException ignored){}}
+    }
+    private static String queryValue(String query,String key){
+        for(String part:query.split("&")){int eq=part.indexOf('=');if(eq>0&&part.substring(0,eq).equals(key))return part.substring(eq+1);}
+        return null;
     }
     private boolean hasCookie(String cookies){for(String cookie:cookies.split(";")){String value=cookie.trim();if(value.startsWith("glass_remote=")&&constant(value.substring(13),access.token))return true;}return false;}
     private static boolean constant(String a,String b){return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),b.getBytes(StandardCharsets.UTF_8));}

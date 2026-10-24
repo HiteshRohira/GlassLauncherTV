@@ -4,7 +4,7 @@
    rubber-bands or pull-to-refreshes. Sheets scroll internally if ever needed. */
 html,body{height:100%;overflow:hidden;overscroll-behavior:none;position:fixed;inset:0;width:100%}
 body{margin:0;background:radial-gradient(ellipse 120% 60% at 85% -10%,#4a2f3a99,transparent 60%),radial-gradient(ellipse 90% 60% at -10% 60%,#22384a88,transparent 70%),#121319;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none}
-main{height:100%;max-width:460px;margin:auto;display:flex;flex-direction:column;padding:calc(14px + env(safe-area-inset-top)) 20px calc(14px + env(safe-area-inset-bottom))}
+main{height:100%;max-width:460px;margin:auto;display:flex;flex-direction:column;padding:calc(34px + env(safe-area-inset-top)) 20px calc(10px + env(safe-area-inset-bottom))}
 button,input,textarea{font:inherit;color:inherit}
 button{border:0;background:transparent;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;transition:transform .12s ease,background-color .12s ease,opacity .2s}
 button:disabled{opacity:.32;cursor:default}
@@ -19,10 +19,16 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;fl
 .connected #dot{background:#7fdca2;box-shadow:0 0 0 3px #7fdca226,0 0 14px #7fdca266}
 .round{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:var(--glass);border:1px solid var(--rim)}
 .round.small{width:38px;height:38px}
+.pill{margin-left:auto;min-height:40px;padding:0 16px;border-radius:20px;background:#ece8f2;color:#25212c;font-size:14px;font-weight:600}
+.steps{list-style:none;margin:4px 0 18px;padding:0;display:flex;flex-direction:column;gap:12px}
+.steps li{display:flex;align-items:center;gap:14px;font-size:15px;color:#e7e3ee}
+.step-icon{flex:none;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:#ffffff12;border:1px solid #ffffff1c}
+.step-icon svg{width:21px;height:21px}
 .round:active,.key:active:not(:disabled),.key.pressed,.volume button:active:not(:disabled),.volume button.pressed{transform:scale(.94);background-color:#ffffff24}
 
 /* Touchpad: the largest target sits in the middle of the thumb's reach. */
-.pad-wrap{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;padding:14px 0 10px}
+/* Spare height goes above the pad, so controls sit low, within thumb reach. */
+.pad-wrap{flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-height:0;padding:14px 0 16px}
 .pad{position:relative;width:100%;aspect-ratio:1/1;max-height:100%;margin:0 auto;border-radius:38px;background:var(--glass);border:1px solid var(--rim);box-shadow:inset 0 1px 0 #ffffff14,0 18px 40px #0005;touch-action:none;overflow:hidden;outline:none}
 .pad-wrap{align-items:center}
 .pad{width:min(100%,var(--pad-size,100%))}
