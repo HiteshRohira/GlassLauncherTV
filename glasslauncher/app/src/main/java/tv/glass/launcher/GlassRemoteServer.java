@@ -16,7 +16,7 @@ final class GlassRemoteServer implements AutoCloseable {
     static final int PORT=48633;
     private final Context context;
     private final TvRemoteClient tv;
-    private volatile GlassRemoteAccess access;
+    private volatile PairingBook access;
     private volatile long accessVersion;
     private final Runnable onLockout;
     private final ThreadPoolExecutor requests=new ThreadPoolExecutor(2,4,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
@@ -41,19 +41,27 @@ final class GlassRemoteServer implements AutoCloseable {
     /** @param onLockout runs (on a request thread) when repeated wrong codes close pairing. */
     GlassRemoteServer(Context context,Runnable onLockout)throws Exception{this.context=context.getApplicationContext();this.onLockout=onLockout;access=GlassRemoteAccess.load(context);accessVersion=GlassRemoteAccess.version(context);tv=new TvRemoteClient(context);}
     /** Current pairing material; picks up "Forget paired phones" from the launcher process. */
-    private GlassRemoteAccess access()throws Exception{
+    private PairingBook access()throws Exception{
         long version=GlassRemoteAccess.version(context);
         if(version!=accessVersion){synchronized(this){if(version!=accessVersion){access=GlassRemoteAccess.load(context);accessVersion=version;guard.reset();}}}
         return access;
     }
-    /** Checks a code against the shared brute-force budget. Never reveals
-     *  anything while blocked; only distinct wrong codes count. */
-    private boolean pinMatches(String pin,String ip)throws Exception{
-        if(pin==null||!pin.matches("[0-9]{6}")||guard.blocked(ip))return false;
-        if(constant(pin,access().pin)){guard.succeed(ip);return true;}
+    /** Pairs a phone if {@code pin} is the current code, under the shared
+     *  brute-force budget. Returns {device token, install token} or null.
+     *  The code is re-checked inside the file lock, so two phones racing with
+     *  the same code cannot both use it; on success the TV shows a new code. */
+    private String[] pair(String pin,String ip)throws Exception{
+        if(pin==null||!pin.matches("[0-9]{6}")||guard.blocked(ip))return null;
+        long now=System.currentTimeMillis();
+        String[] paired=GlassRemoteAccess.update(context,book->constant(pin,book.pin)
+                ?new String[]{book.pair(GlassRemoteAccess.RANDOM,now),book.newInstall(GlassRemoteAccess.RANDOM,now)}:null);
+        if(paired!=null){guard.succeed(ip);reloadAccess();return paired;}
         if(guard.fail(ip,pin)){Log.w("GlassRemote","Pairing locked after repeated wrong codes");if(onLockout!=null)onLockout.run();}
-        return false;
+        return null;
     }
+    private synchronized void reloadAccess()throws Exception{access=GlassRemoteAccess.load(context);accessVersion=GlassRemoteAccess.version(context);}
+    private boolean installValid(String token)throws Exception{return token!=null&&token.length()==43&&access().installValid(token,System.currentTimeMillis());}
+    private static final String COOKIE="; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000\r\n";
     void start()throws IOException{
         server=new ServerSocket();server.setReuseAddress(true);server.bind(new InetSocketAddress(PORT),16);
         Thread accept=new Thread(()->{
@@ -106,8 +114,20 @@ final class GlassRemoteServer implements AutoCloseable {
                 if(guard.lockedOut()){reply(out,429,"application/json","{\"error\":\"Pairing is paused after too many wrong codes. Try again in 15 minutes.\"}");return;}
                 if(guard.blocked(ip)){reply(out,429,"application/json","{\"error\":\"Wait a minute before trying another code.\"}");return;}
                 JSONObject data=new JSONObject(new String(body,StandardCharsets.UTF_8));
-                if(!pinMatches(data.optString("pin"),ip)){reply(out,401,"application/json","{\"error\":\"That code does not match the code in Glass.\"}");return;}
-                reply(out,200,"application/json","{\"ok\":true}","Set-Cookie: glass_remote="+access().token+"; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000\r\n");return;
+                String[] paired=pair(data.optString("pin"),ip);
+                if(paired==null){reply(out,401,"application/json","{\"error\":\"That code does not match the code on the TV.\"}");return;}
+                reply(out,200,"application/json",new JSONObject().put("ok",true).put("install",paired[1]).toString(),"Set-Cookie: glass_remote="+paired[0]+COOKIE);return;
+            }
+            // A Home Screen web app has its own cookie jar: it trades the
+            // one-time install token from its start URL for its own token.
+            if(method.equals("POST")&&path.equals("/api/install")){
+                if(origin==null || !headers.getOrDefault("content-type","").startsWith("application/json")){reply(out,403,"text/plain","Open the remote page to pair.");return;}
+                String token=new JSONObject(new String(body,StandardCharsets.UTF_8)).optString("token");
+                long now=System.currentTimeMillis();
+                String device=token.length()==43?GlassRemoteAccess.update(context,book->book.redeem(token,GlassRemoteAccess.RANDOM,now)):null;
+                if(device==null){reply(out,401,"application/json","{\"error\":\"This link was already used or has expired. Enter the code on the TV.\"}");return;}
+                reloadAccess();
+                reply(out,200,"application/json","{\"ok\":true}","Set-Cookie: glass_remote="+device+COOKIE);return;
             }
             if(path.startsWith("/api/")){
                 if(!authenticated){reply(out,401,"application/json","{\"authenticated\":false}");return;}
@@ -153,13 +173,13 @@ final class GlassRemoteServer implements AutoCloseable {
             }
             if(file.equals("manifest.webmanifest")){
                 // A Home Screen web app has its own cookie jar on iOS, so the
-                // installed icon carries the pairing code in its start URL and
-                // pairs itself on first launch.
-                // Without a valid code, omit start_url: iOS then installs the
-                // page's current URL, which carries the code once paired.
-                String pin=queryValue(query,"pair");
+                // installed icon carries this phone's one-time install token
+                // in its start URL and redeems it on first launch. The pairing
+                // code itself changes after every pairing and is never put in
+                // a URL. Without a valid token, start_url is omitted.
+                String install=queryValue(query,"install");
                 JSONObject manifest=new JSONObject().put("id","/").put("name","Glass TV Remote").put("short_name","Glass Remote");
-                if(pinMatches(pin,ip))manifest.put("start_url","/?pair="+pin);
+                if(installValid(install))manifest.put("start_url","/?install="+install);
                 manifest.put("scope","/").put("display","standalone").put("orientation","portrait")
                     .put("background_color","#121319").put("theme_color","#121319")
                     .put("icons",new org.json.JSONArray().put(new JSONObject().put("src","/icon.png").put("sizes","180x180").put("type","image/png")));
@@ -169,10 +189,10 @@ final class GlassRemoteServer implements AutoCloseable {
                 ByteArrayOutputStream data=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=asset.read(buffer))!=-1)data.write(buffer,0,n);
                 byte[] bytes=data.toByteArray();
                 // iOS reads the manifest link once, as the page loads; put the
-                // code in it server-side so Add to Home Screen keeps pairing.
-                String pin=queryValue(query,"pair");
-                if(file.equals("index.html")&&pinMatches(pin,ip))
-                    bytes=new String(bytes,StandardCharsets.UTF_8).replace("href=\"/manifest.webmanifest\"","href=\"/manifest.webmanifest?pair="+pin+"\"").getBytes(StandardCharsets.UTF_8);
+                // install token in it server-side so Add to Home Screen keeps it.
+                String install=queryValue(query,"install");
+                if(file.equals("index.html")&&installValid(install))
+                    bytes=new String(bytes,StandardCharsets.UTF_8).replace("href=\"/manifest.webmanifest\"","href=\"/manifest.webmanifest?install="+install+"\"").getBytes(StandardCharsets.UTF_8);
                 reply(out,200,type,bytes,"");
             }
         }catch(Exception error){try{reply(socket.getOutputStream(),409,"application/json",new JSONObject().put("error",error instanceof IOException?error.getMessage():"Request could not be completed.").toString());}catch(Exception ignored){}
@@ -182,7 +202,7 @@ final class GlassRemoteServer implements AutoCloseable {
         for(String part:query.split("&")){int eq=part.indexOf('=');if(eq>0&&part.substring(0,eq).equals(key))return part.substring(eq+1);}
         return null;
     }
-    private boolean hasCookie(String cookies)throws Exception{String token=access().token;for(String cookie:cookies.split(";")){String value=cookie.trim();if(value.startsWith("glass_remote=")&&constant(value.substring(13),token))return true;}return false;}
+    private boolean hasCookie(String cookies)throws Exception{PairingBook book=access();for(String cookie:cookies.split(";")){String value=cookie.trim();if(value.startsWith("glass_remote=")&&book.isDevice(value.substring(13)))return true;}return false;}
     private static boolean constant(String a,String b){return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),b.getBytes(StandardCharsets.UTF_8));}
     private static boolean allowedHost(String host){
         if(!host.endsWith(":"+PORT))return false;String name=host.substring(0,host.length()-(":"+PORT).length());

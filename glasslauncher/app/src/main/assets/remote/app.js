@@ -76,11 +76,9 @@ $('closeSettings').addEventListener('click',closeSheets);
 $('openSetup').addEventListener('click',()=>openSheet(authenticated?'nativePanel':'pairPanel'));
 $('keyboardButton').addEventListener('click',()=>{haptic();openSheet('keyboardPanel');});
 $('closeKeyboard').addEventListener('click',closeSheets);
-$('pairForm').addEventListener('submit',event=>{event.preventDefault();const pin=$('pin').value.trim();action(async()=>{await api('pair',{pin});
-    // Reload with the code so the TV serves a manifest that carries it; iOS
-    // installs the address the page loaded with, not one changed in script.
-    if(!new URLSearchParams(location.search).get('pair')){location.replace('/?pair='+pin);return;}
-    rememberPin(pin);$('pin').value='';authenticated=true;closeSheets();await poll();});});
+$('pairForm').addEventListener('submit',event=>{event.preventDefault();const pin=$('pin').value.trim();action(async()=>{const result=await api('pair',{pin});
+    if(afterPair(result))return;
+    $('pin').value='';authenticated=true;closeSheets();await poll();});});
 $('pairButton').addEventListener('click',()=>openSheet('pairPanel'));
 $('startNative').addEventListener('click',()=>action(async()=>{await api('native/start',{});feedback('Approve the prompt on your TV.');setTimeout(poll,1500);}));
 $('reconnect').addEventListener('click',()=>action(async()=>{await api('reconnect',{});setTimeout(poll,800);}));
@@ -195,20 +193,28 @@ addEventListener('blur',stopHold);addEventListener('pagehide',stopHold);
 document.addEventListener('visibilitychange',()=>{stopHold();if(!document.hidden)poll();});
 addEventListener('keydown',event=>{if(['INPUT','TEXTAREA'].includes(event.target.tagName))return;const key={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',Enter:'ok',Escape:'back',Backspace:'back',' ':'playPause'}[event.key];if(key){event.preventDefault();sendKey(key);}});
 // ── Pairing from the QR code and Home Screen install ──
-// The TV's QR code carries its pairing code (?pair=123456), so scanning pairs
-// at once. The code stays in the page URL and the manifest's start URL because
-// an iOS Home Screen web app has its own cookies and must pair itself again.
-let pairPin=new URLSearchParams(location.search).get('pair');
+// The TV's QR code carries its current code (?pair=123456), so scanning pairs
+// at once. Each pairing gives this phone its own connection and the TV a new
+// code, so the code is never kept in a URL. An iOS Home Screen web app has its
+// own cookies: after pairing, the page reloads with a one-time install token
+// (?install=…) that the TV also puts in the manifest's start URL, and the
+// Home Screen app trades it for its own connection on first launch.
+const params=new URLSearchParams(location.search);
+let pairPin=params.get('pair');
 if(pairPin&&!/^[0-9]{6}$/.test(pairPin))pairPin=null;
-function rememberPin(pin){
-  pairPin=pin;
-  history.replaceState(null,'','/?pair='+pin);
-  $('manifestLink').href='/manifest.webmanifest?pair='+pin;
+const installToken=/^[A-Za-z0-9_-]{43}$/.test(params.get('install')||'')?params.get('install'):null;
+// Reload in Safari so the manifest carries the install token; returns true when reloading.
+function afterPair(result){
+  if(!standalone&&result?.install){location.replace('/?install='+encodeURIComponent(result.install));return true;}
+  if(pairPin)history.replaceState(null,'','/');
+  return false;
 }
-if(pairPin)rememberPin(pairPin);
 async function autoPair(){
-  if(!pairPin)return false;
-  try{await api('pair',{pin:pairPin});authenticated=true;return true;}catch{return false;}
+  try{
+    if(installToken){await api('install',{token:installToken});authenticated=true;return true;}
+    if(pairPin){const result=await api('pair',{pin:pairPin});authenticated=true;afterPair(result);return true;}
+  }catch(e){feedback(e.message);}
+  return false;
 }
 function offerInstall(){
   if(standalone||store.get('glass.installOffered','')==='1')return;
@@ -226,6 +232,7 @@ if(!navigator.share)$('shareNow').hidden=true;
 
 paintSettings();fitPad();render();
 (async()=>{
-  try{await api('status');authenticated=true;}catch{if(!authenticated)await autoPair();}
+  try{await api('status');authenticated=true;if(pairPin)history.replaceState(null,'','/');}
+  catch{if(!authenticated)await autoPair();}
   poll();
 })();

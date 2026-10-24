@@ -24,6 +24,19 @@ final class GlassRemotePanel {
     static LinearLayout create(Context context){
         LinearLayout content=new LinearLayout(context);content.setOrientation(LinearLayout.VERTICAL);content.setGravity(Gravity.CENTER_HORIZONTAL);
         fill(content,null,false);
+        // A phone that pairs replaces the code: show the new QR and code without
+        // having to reopen the page.
+        final long[] seen={GlassRemoteAccess.version(context)};
+        Runnable watch=new Runnable(){@Override public void run(){
+            if(!content.isAttachedToWindow())return;
+            long v=GlassRemoteAccess.version(context);
+            if(v!=seen[0]){seen[0]=v;View f=content.findFocus();fill(content,f!=null&&f.getTag()!=null?f.getTag().toString():null,false);}
+            content.postDelayed(this,1500);
+        }};
+        content.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener(){
+            @Override public void onViewAttachedToWindow(View v){content.removeCallbacks(watch);content.postDelayed(watch,1500);}
+            @Override public void onViewDetachedFromWindow(View v){content.removeCallbacks(watch);}
+        });
         return content;
     }
     /** (Re)build the page in place, keeping focus on {@code focusTag}. */
@@ -33,7 +46,7 @@ final class GlassRemotePanel {
         boolean on=GlassRemoteAccess.enabled(context);
         try{
             if(on){
-                GlassRemoteAccess access=GlassRemoteAccess.load(context);String address=address();
+                PairingBook access=GlassRemoteAccess.load(context);String address=address();
                 TextView intro=text(context,"Scan with your camera",16);intro.setGravity(Gravity.CENTER);content.addView(intro);
                 if(address!=null){
                     String url="http://"+address+":"+GlassRemoteServer.PORT+"/";String pairUrl=url+"?pair="+access.pin;
@@ -45,7 +58,9 @@ final class GlassRemotePanel {
                     content.addView(text(context,url,15));
                 }else content.addView(text(context,"Connect this TV to Wi-Fi first.",15));
                 TextView pin=text(context,"Pairing code  ·  "+access.pin,24);LinearLayout.LayoutParams pp=new LinearLayout.LayoutParams(-2,-2);pp.topMargin=NativeTheme.px(context,14);content.addView(pin,pp);
-                TextView hint=text(context,"Scanning connects your phone instantly — no code to type.\nThen add it to your Home Screen when the page asks.",12);hint.setGravity(Gravity.CENTER);hint.setTextColor(0xFFD4CEDA);
+                int phones=access.deviceCount();
+                TextView hint=text(context,"Scanning connects your phone instantly — no code to type.\nEach phone gets its own connection; the code changes after each one.\n"
+                        +(phones==0?"No phones paired yet.":phones==1?"1 phone paired.":phones+" phones paired."),12);hint.setGravity(Gravity.CENTER);hint.setTextColor(0xFFD4CEDA);
                 LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(-1,-2);hp.topMargin=NativeTheme.px(context,12);content.addView(hint,hp);
             }else{
                 TextView off=text(context,"The phone remote is off. Phones can’t control this TV.",15);off.setGravity(Gravity.CENTER);content.addView(off);
@@ -61,7 +76,7 @@ final class GlassRemotePanel {
             View forget=row(context,"remote-forget","Forget paired phones",
                     confirmForget?"Press again: every phone must scan the new code":"New code; phones paired before stop working",null,()->{
                 if(!confirmForget){fill(content,"remote-forget",true);return;}
-                try{GlassRemoteAccess.rotate(context);}catch(Exception ignored){}
+                try{GlassRemoteAccess.forgetAll(context);}catch(Exception ignored){}
                 AirPlayMonitorService.start(context,AirPlayMonitorService.ACTION_REMOTE_CHANGED);
                 fill(content,"remote-forget",false);
             });
