@@ -23,18 +23,18 @@ final class GlassRemotePanel {
         LinearLayout content=new LinearLayout(context);content.setOrientation(LinearLayout.VERTICAL);content.setGravity(Gravity.CENTER_HORIZONTAL);
         try{
             GlassRemoteAccess access=GlassRemoteAccess.load(context);String address=address();
-            TextView intro=text(context,"Scan with your iPhone camera",16);intro.setGravity(Gravity.CENTER);content.addView(intro);
+            TextView intro=text(context,"Scan with your camera",16);intro.setGravity(Gravity.CENTER);content.addView(intro);
             if(address!=null){
-                String url="http://"+address+":"+GlassRemoteServer.PORT+"/";
-                BitMatrix matrix=new QRCodeWriter().encode(url,BarcodeFormat.QR_CODE,256,256,Collections.singletonMap(EncodeHintType.MARGIN,2));
+                String url="http://"+address+":"+GlassRemoteServer.PORT+"/";String pairUrl=url+"?pair="+access.pin;
+                BitMatrix matrix=new QRCodeWriter().encode(pairUrl,BarcodeFormat.QR_CODE,256,256,Collections.singletonMap(EncodeHintType.MARGIN,2));
                 int[] pixels=new int[256*256];for(int y=0;y<256;y++)for(int x=0;x<256;x++)pixels[y*256+x]=matrix.get(x,y)?Color.BLACK:Color.WHITE;
                 Bitmap image=Bitmap.createBitmap(pixels,256,256,Bitmap.Config.ARGB_8888);
                 ImageView qr=new ImageView(context);qr.setImageBitmap(image);qr.setContentDescription("QR code for the phone remote");
-                LinearLayout.LayoutParams qp=new LinearLayout.LayoutParams(NativeTheme.px(context,150),NativeTheme.px(context,150));qp.topMargin=NativeTheme.px(context,12);qp.bottomMargin=NativeTheme.px(context,10);content.addView(qr,qp);
+                LinearLayout.LayoutParams qp=new LinearLayout.LayoutParams(NativeTheme.px(context,200),NativeTheme.px(context,200));qp.topMargin=NativeTheme.px(context,16);qp.bottomMargin=NativeTheme.px(context,10);content.addView(qr,qp);
                 content.addView(text(context,url,15));
             }else content.addView(text(context,"Connect this TV to Wi-Fi first.",15));
             TextView pin=text(context,"Pairing code  ·  "+access.pin,24);LinearLayout.LayoutParams pp=new LinearLayout.LayoutParams(-2,-2);pp.topMargin=NativeTheme.px(context,14);content.addView(pin,pp);
-            TextView hint=text(context,"Use the same Wi-Fi. In Safari, tap Share → Add to Home Screen.\nConnect TV controls once from the webpage.",12);hint.setGravity(Gravity.CENTER);hint.setTextColor(0xFFD4CEDA);
+            TextView hint=text(context,"Scanning connects your phone instantly — no code to type.\nThen add it to your Home Screen when the page asks.",12);hint.setGravity(Gravity.CENTER);hint.setTextColor(0xFFD4CEDA);
             LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(-1,-2);hp.topMargin=NativeTheme.px(context,12);content.addView(hint,hp);
         }catch(Exception e){content.addView(text(context,"Phone remote is starting. Close and reopen this page.",15));}
         return content;

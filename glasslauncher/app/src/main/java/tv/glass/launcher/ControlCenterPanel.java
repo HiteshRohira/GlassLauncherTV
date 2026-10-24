@@ -2,6 +2,8 @@ package tv.glass.launcher;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.graphics.drawable.GradientDrawable;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -16,14 +18,21 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** One stationary glass surface with horizontally sliding pages. */
+/** Control Center: a full-height glass sheet on the right edge. The main page
+ *  is a grid of large status tiles; AirPlay, Phone remote and Appearance slide
+ *  in as pages of the same sheet. Bluetooth uses {@link BluetoothPanel}, which
+ *  draws the identical sheet so moving between them reads as one surface. */
 final class ControlCenterPanel extends FrameLayout {
     interface Host {
         String deviceName(); String networkName(); String networkStatus();
-        String airStatus(); String airSummary(); String bluetoothSummary();
-        void network(); void inputs(); void airplay(); void bluetooth(); void settings();
+        AirPlayMonitorService.Snapshot air(); boolean airLegacyInstalled();
+        String bluetoothSummary(); String remoteSummary();
+        void network(); void inputs(); void bluetooth(); void settings();
+        void setAirEnabled(boolean on); void restartAir(); void showAirPlayer();
         View appearance(); View remote(); void shown(boolean visible);
     }
+    static final int SHEET_W = 440;
+    private static final int PAD = 26;
     private final Host host;
     private final List<List<View>> groups=new ArrayList<>();
     private final List<View> actions=new ArrayList<>();
@@ -37,58 +46,150 @@ final class ControlCenterPanel extends FrameLayout {
         setLayoutParams(new FrameLayout.LayoutParams(-1,-1));
         setVisibility(GONE);setFocusable(true);setClickable(true);
         setContentDescription("Control Center");setOnClickListener(v->hide());
+        setBackgroundColor(0x40000000);
     }
     boolean isVisible(){return getVisibility()==VISIBLE;}
     boolean isDetailVisible(String key){return isVisible() && key.equals(detailKey);}
-    void show(View anchor,String key){
+    void show(View anchor,String key){ show(anchor,key,true); }
+    /** {@code animate=false} when returning from the Bluetooth sheet, which
+     *  occupies the same place, so the switch reads as a page change. */
+    void show(View anchor,String key,boolean animate){
         returnFocus=anchor;if(key!=null)focusKey=key;
         rebuild();setVisibility(VISIBLE);bringToFront();host.shown(true);
-        card.setAlpha(0);card.setScaleX(.97f);card.setScaleY(.97f);
-        card.animate().alpha(1).scaleX(1).scaleY(1).setDuration(150).start();restoreFocus();
+        if(animate){NativeTheme.sheetIn(card);setAlpha(0);animate().alpha(1).setDuration(160).start();}
+        else{setAlpha(1);}
+        restoreFocus();
+        if("airplay".equals(key))post(this::openAirPlay);
     }
-    void hide(){
+    void hide(){ hide(true); }
+    void hide(boolean restoreReturnFocus){
         if(!isVisible())return;
         cancelMotion();setVisibility(GONE);host.shown(false);
-        if(returnFocus!=null && returnFocus.isShown())returnFocus.requestFocus();
+        if(restoreReturnFocus && returnFocus!=null && returnFocus.isShown())returnFocus.requestFocus();
     }
-    void refresh(){if(isVisible() && detailKey==null && !sliding){rebuild();restoreFocus();}}
+    void refresh(){
+        if(!isVisible() || sliding)return;
+        if(detailKey==null){rebuild();restoreFocus();}
+        else if("airplay".equals(detailKey))fillAirPlay();
+    }
     void restoreFocus(){
         for(View v:actions)if(focusKey.equals(v.getTag())){v.requestFocus();return;}
         if(!actions.isEmpty())actions.get(0).requestFocus();
     }
     void openAppearance(){openDetail("appearance","Appearance",host.appearance());}
+    void openAirPlay(){
+        LinearLayout page=new LinearLayout(getContext());page.setOrientation(LinearLayout.VERTICAL);
+        openDetail("airplay","AirPlay",page);fillAirPlay();
+    }
+    private LinearLayout airPage(){
+        if(detail==null)return null;
+        View scroll=detail.getChildAt(1);
+        if(!(scroll instanceof ScrollView))return null;
+        View page=((ScrollView)scroll).getChildAt(0);
+        return page instanceof LinearLayout?(LinearLayout)page:null;
+    }
+    /** (Re)fill the AirPlay page in place, keeping the focused action. */
+    private void fillAirPlay(){
+        LinearLayout page=airPage();if(page==null)return;
+        View f=page.findFocus();String keep=f!=null&&f.getTag()!=null?f.getTag().toString():null;
+        page.removeAllViews();
+        AirPlayMonitorService.Snapshot s=host.air();
+        boolean on=s.state!=AirPlayStatus.State.OFF;
+        LinearLayout status=new LinearLayout(getContext());status.setOrientation(LinearLayout.VERTICAL);
+        status.setPadding(px(20),px(20),px(20),px(20));status.setBackground(NativeTheme.row(getContext(),false,20));
+        LinearLayout top=new LinearLayout(getContext());top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(icon(R.drawable.ic_airplay),new LinearLayout.LayoutParams(px(30),px(30)));
+        LinearLayout.LayoutParams dp=new LinearLayout.LayoutParams(px(10),px(10));dp.setMarginStart(px(12));
+        top.addView(dot(airColor(s)),dp);
+        TextView state=text(airHeadline(s),13,true);LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-2,-2);sp.setMarginStart(px(8));top.addView(state,sp);
+        status.addView(top);
+        TextView name=text(s.name.isEmpty()?host.deviceName():s.name,26,false);name.setTypeface(NativeTheme.light());
+        LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2);np.topMargin=px(16);status.addView(name,np);
+        TextView how=text(airExplain(s),13,true);how.setLineSpacing(px(3),1f);
+        LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(-1,-2);hp.topMargin=px(8);status.addView(how,hp);
+        page.addView(status,new LinearLayout.LayoutParams(-1,-2));
+        List<View> rows=new ArrayList<>();
+        if(s.inSession())rows.add(row("air-show","Show on TV","Bring the AirPlay screen back",R.drawable.ic_feather_chevron,host::showAirPlayer,false,false));
+        rows.add(toggleRow("air-toggle","AirPlay receiver",on?"On · visible to Apple devices":"Off · hidden from Apple devices",on,()->host.setAirEnabled(!on)));
+        if(on)rows.add(row("air-restart","Restart receiver",s.inSession()?"Ends the current session":"Use if your iPhone can’t find this TV",R.drawable.ic_feather_refresh,host::restartAir,false,false));
+        if(host.airLegacyInstalled())rows.add(row("air-legacy","Old AirPlay app installed","Remove it so this TV isn’t listed twice",R.drawable.ic_feather_warning,()->{},false,false));
+        for(View r:rows){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,px(64));lp.topMargin=px(10);page.addView(r,lp);}
+        View target=null;
+        for(View r:rows)if(keep!=null&&keep.equals(r.getTag()))target=r;
+        if(target==null && !rows.isEmpty())target=rows.get(0);
+        if(target!=null && !sliding)target.requestFocus();
+    }
+    private static String airHeadline(AirPlayMonitorService.Snapshot s){
+        if(s.state==AirPlayStatus.State.OFF)return "Off";
+        switch(s.session){
+            case "mirroring":return "Mirroring now";
+            case "video":return "Playing video";
+            case "audio":return "Playing audio";
+            case "connecting":return "Connecting";
+            default:return s.state==AirPlayStatus.State.READY?"Ready":s.state==AirPlayStatus.State.FAILED?"Not visible":"Starting";
+        }
+    }
+    private String airExplain(AirPlayMonitorService.Snapshot s){
+        String name=s.name.isEmpty()?host.deviceName():s.name;
+        if(s.state==AirPlayStatus.State.OFF)return "Turn AirPlay on to mirror or play from an iPhone, iPad or Mac.";
+        if(s.inSession())return "Back on the remote stops the AirPlay screen. Your iPhone controls playback.";
+        if(s.state==AirPlayStatus.State.FAILED)return "Your devices can’t see this TV right now. Glass keeps retrying; Restart usually fixes it.";
+        return "On your iPhone, open Control Center → Screen Mirroring and choose “"+name+"”.";
+    }
+    static int airColor(AirPlayMonitorService.Snapshot s){
+        if(s.state==AirPlayStatus.State.OFF)return 0x66FFFFFF;
+        if(s.inSession())return 0xFF7DB4FF;
+        return s.state==AirPlayStatus.State.READY?0xFF6ED69A:s.state==AirPlayStatus.State.FAILED?0xFFFF7A6E:0xFFF2C46B;
+    }
     private void openDetail(String key,String title,View content){
         if(sliding || detailKey!=null)return;
         detailKey=key;focusKey=key;
         detail=new LinearLayout(getContext());detail.setOrientation(LinearLayout.VERTICAL);
-        detail.setPadding(px(22),px(22),px(22),px(22));
-        View back=row("detail-back",title,null,R.drawable.ic_feather_chevron,this::backToControls,false,false);
-        detail.addView(back,new LinearLayout.LayoutParams(-1,px(42)));
-        ScrollView scroll=new ScrollView(getContext());scroll.setFillViewport(false);scroll.setClipToPadding(false);
+        detail.setPadding(px(PAD),px(PAD),px(PAD),px(PAD));
+        View back=backRow(title);
+        detail.addView(back,new LinearLayout.LayoutParams(-1,px(48)));
+        ScrollView scroll=new ScrollView(getContext());scroll.setFillViewport(false);scroll.setClipToPadding(false);scroll.setVerticalScrollBarEnabled(false);
         if(content.getParent() instanceof ViewGroup)((ViewGroup)content.getParent()).removeView(content);
         scroll.addView(content,new ScrollView.LayoutParams(-1,-2));
-        LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-1,0,1);sp.topMargin=px(15);detail.addView(scroll,sp);
+        LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-1,0,1);sp.topMargin=px(18);detail.addView(scroll,sp);
         if("appearance".equals(key)){content.setFocusable(true);content.setFocusableInTouchMode(true);}
         card.addView(detail,new FrameLayout.LayoutParams(-1,-1));
-        int distance=px(422);detail.setTranslationX(distance);sliding=true;
+        int distance=px(SHEET_W);detail.setTranslationX(distance);sliding=true;
         controls.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-        controls.animate().translationX(-distance).setDuration(260).setInterpolator(new DecelerateInterpolator()).start();
+        controls.animate().translationX(-distance).alpha(0).setDuration(260).setInterpolator(new DecelerateInterpolator()).start();
         detail.animate().translationX(0).setDuration(260).setInterpolator(new DecelerateInterpolator())
-            .withEndAction(()->{sliding=false;if("appearance".equals(key))content.requestFocus();else back.requestFocus();}).start();
+            .withEndAction(()->{
+                sliding=false;
+                if("appearance".equals(key))content.requestFocus();
+                else{View first=firstFocusable(content);if(first!=null)first.requestFocus();else back.requestFocus();}
+            }).start();
+    }
+    private static View firstFocusable(View v){
+        if(v.isFocusable() && v.getVisibility()==VISIBLE && !(v instanceof ViewGroup && ((ViewGroup)v).getChildCount()>0 && !v.isClickable()))return v;
+        if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++){View f=firstFocusable(((ViewGroup)v).getChildAt(i));if(f!=null)return f;}
+        return null;
     }
     void backToControls(){
         if(detailKey==null || sliding)return;
         sliding=true;final LinearLayout old=detail;
-        controls.animate().translationX(0).setDuration(260).setInterpolator(new DecelerateInterpolator()).start();
-        old.animate().translationX(px(422)).setDuration(260).setInterpolator(new DecelerateInterpolator()).withEndAction(()->{
+        controls.animate().translationX(0).alpha(1).setDuration(260).setInterpolator(new DecelerateInterpolator()).start();
+        old.animate().translationX(px(SHEET_W)).setDuration(260).setInterpolator(new DecelerateInterpolator()).withEndAction(()->{
             card.removeView(old);detail=null;detailKey=null;sliding=false;
-            controls.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);restoreFocus();
+            controls.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);rebuildKeepingPosition();
         }).start();
     }
+    private void rebuildKeepingPosition(){rebuild();restoreFocus();}
     boolean key(int key){
         if(sliding)return true;
         if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE){if(detailKey!=null)backToControls();else hide();return true;}
-        if(detailKey!=null)return false;
+        if(detailKey!=null){
+            if(!"appearance".equals(detailKey) && (key==KeyEvent.KEYCODE_DPAD_CENTER || key==KeyEvent.KEYCODE_ENTER || key==KeyEvent.KEYCODE_BUTTON_A)){
+                View selected=findFocus();if(selected!=null && selected.isClickable())selected.performClick();return true;
+            }
+            // Keep focus inside the sheet: LEFT/RIGHT never escape to the home row.
+            return key==KeyEvent.KEYCODE_DPAD_LEFT || key==KeyEvent.KEYCODE_DPAD_RIGHT
+                    ? !"appearance".equals(detailKey) : false;
+        }
         int row=0,col=0;
         for(int r=0;r<groups.size();r++)for(int c=0;c<groups.get(r).size();c++)if(groups.get(r).get(c).hasFocus()){row=r;col=c;}
         switch(key){
@@ -102,49 +203,96 @@ final class ControlCenterPanel extends FrameLayout {
         }
         groups.get(row).get(Math.min(col,groups.get(row).size()-1)).requestFocus();return true;
     }
-    private void cancelMotion(){if(card!=null)card.animate().cancel();if(controls!=null)controls.animate().cancel();if(detail!=null)detail.animate().cancel();sliding=false;}
+    private void cancelMotion(){if(card!=null)card.animate().cancel();if(controls!=null)controls.animate().cancel();if(detail!=null)detail.animate().cancel();animate().cancel();sliding=false;}
     private void rebuild(){
         cancelMotion();removeAllViews();groups.clear();actions.clear();detailKey=null;detail=null;
-        card=new FrameLayout(getContext());card.setBackground(NativeTheme.glass(getContext(),28,true));
-        card.setElevation(px(15));card.setClipToOutline(true);card.setOnClickListener(v->{});
-        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(px(422),px(470),Gravity.TOP|Gravity.END);
-        cp.topMargin=px(135);cp.setMarginEnd(px(68));addView(card,cp);
+        card=NativeTheme.sheet(getContext());card.setOnClickListener(v->{});
+        addView(card,NativeTheme.sheetParams(getContext()));
         controls=new LinearLayout(getContext());controls.setOrientation(LinearLayout.VERTICAL);
-        controls.setPadding(px(22),px(22),px(22),px(22));card.addView(controls,new FrameLayout.LayoutParams(-1,-1));
-        LinearLayout header=new LinearLayout(getContext());header.setGravity(Gravity.CENTER_VERTICAL);
-        header.addView(text("Control Center",23,false),new LinearLayout.LayoutParams(0,-2,1));header.addView(text(host.deviceName(),12,true));
-        controls.addView(header,new LinearLayout.LayoutParams(-1,px(28)));
-        LinearLayout quick=new LinearLayout(getContext());
-        View net=row("network",host.networkName(),host.networkStatus(),R.drawable.ic_feather_wifi,host::network,false,true);
-        View input=row("input","Inputs","Choose source",R.drawable.ic_feather_input,host::inputs,false,true);
-        LinearLayout.LayoutParams qp=new LinearLayout.LayoutParams(0,px(60),1);qp.setMarginEnd(px(10));quick.addView(net,qp);quick.addView(input,new LinearLayout.LayoutParams(0,px(60),1));
-        add(quick,12,60);groups.add(Arrays.asList(net,input));
-        View air=row("airplay","AirPlay · "+host.airStatus(),host.airSummary(),R.drawable.ic_airplay,()->{hide();host.airplay();},true,true);
-        add(air,9,55);groups.add(Arrays.asList(air));
-        View remote=row("remote","Phone remote","Open on your phone",R.drawable.ic_btp_remote,()->openDetail("remote","Phone remote",host.remote()),true,true);
-        add(remote,9,55);groups.add(Arrays.asList(remote));
-        View settings=row("settings","System settings",null,R.drawable.ic_feather_settings,host::settings,true,true);
-        add(settings,12,44);groups.add(Arrays.asList(settings));
-        View appearance=row("appearance","Appearance",null,R.drawable.ic_feather_sliders,this::openAppearance,true,true);
-        add(appearance,7,44);groups.add(Arrays.asList(appearance));
+        controls.setPadding(px(PAD),px(PAD+4),px(PAD),px(PAD));card.addView(controls,new FrameLayout.LayoutParams(-1,-1));
+        TextView title=text("Control Center",30,false);title.setTypeface(NativeTheme.light());
+        controls.addView(title);
+        TextView device=text(host.deviceName(),14,true);
+        LinearLayout.LayoutParams dp=new LinearLayout.LayoutParams(-2,-2);dp.topMargin=px(6);controls.addView(device,dp);
+
+        AirPlayMonitorService.Snapshot air=host.air();
+        View net=tile("network",R.drawable.ic_feather_wifi,host.networkName(),host.networkStatus(),"Connected".equals(host.networkStatus())?0xFF6ED69A:0xFFFF7A6E,host::network);
+        View bt=tile("bluetooth",R.drawable.ic_bt,"Bluetooth",host.bluetoothSummary(),0,()->{focusKey="bluetooth";host.bluetooth();});
+        View ap=tile("airplay",R.drawable.ic_airplay,"AirPlay",airHeadline(air),airColor(air),this::openAirPlay);
+        View remote=tile("remote",R.drawable.ic_btp_remote,"Phone remote",host.remoteSummary(),0,()->openDetail("remote","Phone remote",host.remote()));
+        View input=tile("input",R.drawable.ic_feather_input,"Inputs","HDMI & sources",0,host::inputs);
+        View look=tile("appearance",R.drawable.ic_feather_sliders,"Appearance","Layout & wallpaper",0,this::openAppearance);
+        addTiles(18,net,bt);addTiles(12,ap,remote);addTiles(12,input,look);
+
+        View spacer=new View(getContext());controls.addView(spacer,new LinearLayout.LayoutParams(-1,0,1));
+        View settings=row("settings","System settings","Network, display, sound and more",R.drawable.ic_feather_settings,host::settings,true,true);
+        controls.addView(settings,new LinearLayout.LayoutParams(-1,px(64)));groups.add(Arrays.asList(settings));
     }
-    private void add(View v,int top,int height){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,px(height));lp.topMargin=px(top);controls.addView(v,lp);}
+    private void addTiles(int top,View a,View b){
+        LinearLayout line=new LinearLayout(getContext());
+        LinearLayout.LayoutParams ap=new LinearLayout.LayoutParams(0,-1,1);ap.setMarginEnd(px(12));
+        line.addView(a,ap);line.addView(b,new LinearLayout.LayoutParams(0,-1,1));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,px(104));lp.topMargin=px(top);
+        controls.addView(line,lp);groups.add(Arrays.asList(a,b));
+    }
+    /** Large Control Center tile: icon and status dot on top, title and live
+     *  status beneath. Focus turns it into the light plate. */
+    private View tile(String key,int resource,String title,String status,int dotColor,Runnable action){
+        LinearLayout t=new LinearLayout(getContext());t.setOrientation(LinearLayout.VERTICAL);
+        t.setPadding(px(16),px(15),px(14),px(13));
+        t.setFocusable(true);t.setFocusableInTouchMode(true);t.setClickable(true);t.setTag(key);
+        t.setContentDescription(title+", "+status);
+        LinearLayout top=new LinearLayout(getContext());top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(icon(resource),new LinearLayout.LayoutParams(px(24),px(24)));
+        top.addView(new View(getContext()),new LinearLayout.LayoutParams(0,1,1));
+        if(dotColor!=0)top.addView(dot(dotColor),new LinearLayout.LayoutParams(px(9),px(9)));
+        t.addView(top,new LinearLayout.LayoutParams(-1,-2));
+        t.addView(new View(getContext()),new LinearLayout.LayoutParams(-1,0,1));
+        t.addView(text(title,16,false));
+        TextView sub=text(status,12,true);sub.setSingleLine(true);sub.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams sl=new LinearLayout.LayoutParams(-1,-2);sl.topMargin=px(4);t.addView(sub,sl);
+        t.setBackground(NativeTheme.row(getContext(),false,20));
+        t.setOnClickListener(v->{v.requestFocus();focusKey=key;action.run();});
+        t.setOnFocusChangeListener((v,f)->{
+            if(f)focusKey=key;t.setBackground(NativeTheme.row(getContext(),f,20));tint(t,f);
+            t.animate().scaleX(f?1.03f:1f).scaleY(f?1.03f:1f).setDuration(120).start();
+        });
+        actions.add(t);return t;
+    }
+    private View dot(int color){View d=new View(getContext());GradientDrawable g=new GradientDrawable();g.setShape(GradientDrawable.OVAL);g.setColor(color);d.setBackground(g);d.setTag("dot");return d;}
+    private View backRow(String title){
+        LinearLayout row=new LinearLayout(getContext());row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(px(12),0,px(12),0);
+        row.setFocusable(true);row.setFocusableInTouchMode(true);row.setClickable(true);row.setTag("detail-back");row.setContentDescription("Back");
+        ImageView chevron=icon(R.drawable.ic_feather_chevron);chevron.setRotation(180);
+        row.addView(chevron,new LinearLayout.LayoutParams(px(20),px(20)));
+        TextView t=text(title,22,false);LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(0,-2,1);tp.setMarginStart(px(12));row.addView(t,tp);
+        row.setBackground(NativeTheme.row(getContext(),false,16));row.getBackground().setAlpha(0);
+        row.setOnClickListener(v->backToControls());
+        row.setOnFocusChangeListener((v,f)->{row.setBackground(NativeTheme.row(getContext(),f,16));if(!f)row.getBackground().setAlpha(0);tint(row,f);});
+        return row;
+    }
+    private View toggleRow(String key,String title,String subtitle,boolean on,Runnable action){
+        LinearLayout row=(LinearLayout)row(key,title,subtitle,R.drawable.ic_airplay,action,false,false);
+        View sw=NativeTheme.toggle(getContext(),on);
+        row.addView(sw,new LinearLayout.LayoutParams(px(42),px(24)));
+        return row;
+    }
     private View row(String key,String title,String subtitle,int resource,Runnable action,boolean chevron,boolean track){
-        LinearLayout row=new LinearLayout(getContext());row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(px(13),px(8),px(13),px(8));
+        LinearLayout row=new LinearLayout(getContext());row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(px(16),px(8),px(16),px(8));
         row.setFocusable(true);row.setFocusableInTouchMode(true);row.setClickable(true);row.setTag(key);row.setContentDescription(title+(subtitle==null?"":", "+subtitle));
-        ImageView leading=icon(resource);if("detail-back".equals(key))leading.setRotation(180);
-        row.addView(leading,new LinearLayout.LayoutParams(px(21),px(21)));
+        row.addView(icon(resource),new LinearLayout.LayoutParams(px(22),px(22)));
         LinearLayout words=new LinearLayout(getContext());words.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams wp=new LinearLayout.LayoutParams(0,-2,1);wp.setMarginStart(px(11));row.addView(words,wp);
-        words.addView(text(title,15,false));if(subtitle!=null){TextView sub=text(subtitle,11,true);LinearLayout.LayoutParams sl=new LinearLayout.LayoutParams(-1,-2);sl.topMargin=px(3);words.addView(sub,sl);}
+        LinearLayout.LayoutParams wp=new LinearLayout.LayoutParams(0,-2,1);wp.setMarginStart(px(14));row.addView(words,wp);
+        words.addView(text(title,16,false));
+        if(subtitle!=null){TextView sub=text(subtitle,12,true);sub.setSingleLine(true);sub.setEllipsize(TextUtils.TruncateAt.END);LinearLayout.LayoutParams sl=new LinearLayout.LayoutParams(-1,-2);sl.topMargin=px(4);words.addView(sub,sl);}
         if(chevron)row.addView(icon(R.drawable.ic_feather_chevron),new LinearLayout.LayoutParams(px(16),px(16)));
-        row.setBackground(NativeTheme.row(getContext(),false,16));
+        row.setBackground(NativeTheme.row(getContext(),false,18));
         row.setOnClickListener(v->{v.requestFocus();if(track)focusKey=key;action.run();});
-        row.setOnFocusChangeListener((v,f)->{if(f&&track)focusKey=key;row.setBackground(NativeTheme.row(getContext(),f,16));tint(row,f);});
+        row.setOnFocusChangeListener((v,f)->{if(f&&track)focusKey=key;row.setBackground(NativeTheme.row(getContext(),f,18));tint(row,f);});
         if(track)actions.add(row);return row;
     }
     private ImageView icon(int id){ImageView v=new ImageView(getContext());v.setImageResource(id);v.setImageTintList(ColorStateList.valueOf(0xFFF1EDF7));v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);return v;}
     private TextView text(String value,int size,boolean secondary){TextView v=new TextView(getContext());v.setText(value);v.setTypeface(NativeTheme.regular());v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,px(size));v.setTextColor(secondary?0xFFD4CEDA:0xFFF8F7FA);v.setTag(secondary?"secondary":"primary");v.setIncludeFontPadding(false);return v;}
-    private void tint(View v,boolean focused){if(v instanceof TextView)((TextView)v).setTextColor(focused?("secondary".equals(v.getTag())?0xFF625C68:0xFF222029):("secondary".equals(v.getTag())?0xFFD4CEDA:0xFFF8F7FA));if(v instanceof ImageView)((ImageView)v).setImageTintList(ColorStateList.valueOf(focused?0xFF24212A:0xFFF1EDF7));if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)tint(((ViewGroup)v).getChildAt(i),focused);}
+    static void tint(View v,boolean focused){if(v instanceof TextView)((TextView)v).setTextColor(focused?("secondary".equals(v.getTag())?0xFF625C68:0xFF222029):("secondary".equals(v.getTag())?0xFFD4CEDA:0xFFF8F7FA));if(v instanceof ImageView)((ImageView)v).setImageTintList(ColorStateList.valueOf(focused?0xFF24212A:0xFFF1EDF7));if(v instanceof NativeTheme.Toggle)((NativeTheme.Toggle)v).setFocusedStyle(focused);if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)tint(((ViewGroup)v).getChildAt(i),focused);}
     private int px(float n){return NativeTheme.px(getContext(),n);}
 }

@@ -1,119 +1,68 @@
-<div align="center">
+# Glass TV
 
-<img src="glasslauncher/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="104" alt="Glass Launcher icon" />
+**A fast, quiet home screen for Android TV with AirPlay built in.**
 
-# Glass Launcher
+Glass TV replaces the stock Google TV home with a calm, glass-styled launcher: a clock, an ambient background that takes its colour from the app you're on, and one row of favourite apps. Everything else stays out of the way until you ask for it. It has no ads, recommendations, accounts or telemetry.
 
-**A small, local-first home screen for Android TV, Google TV, and Fire TV.**
+## Features
 
-[![Latest release](https://img.shields.io/gitea/v/release/namillis/GlassLauncherTV?gitea_url=https%3A%2F%2Fgit.namillis.me&style=for-the-badge&color=22c55e&label=latest)](https://git.namillis.me/namillis/GlassLauncherTV/releases/latest)
-[![Download APK](https://img.shields.io/badge/Download-APK-09090b?style=for-the-badge&logo=android&logoColor=22c55e)](https://git.namillis.me/namillis/GlassLauncherTV/releases/download/latest/GlassLauncher.apk)
-[![Downloader code 5226436](https://img.shields.io/badge/Downloader-5226436-FF6B2C?style=for-the-badge&logo=amazonfiretv&logoColor=white)](http://aftv.news/5226436)
-[![Website](https://img.shields.io/badge/Website-glass.namillis.me-6ee7da?style=for-the-badge)](https://glass.namillis.me)
-[![License](https://img.shields.io/badge/License-PolyForm%20NC%201.0-8b5cf6?style=for-the-badge)](./LICENSE)
+- **Home and All apps.** One favourites row on Home, with large 16:9 app banners. Press Down for a full-screen grid of every app, labelled and scrollable. Hold OK on an app to move, hide or inspect it.
+- **Control Center.** A glass side sheet with live tiles for Wi‑Fi, Bluetooth, AirPlay, Phone remote, Inputs and Appearance, plus a shortcut to Android settings.
+- **Bluetooth.** Paired devices sit one click from Home. Connect or disconnect audio devices, or pair new ones, in the same sheet.
+- **Built-in AirPlay receiver.** iPhone, iPad and Mac can mirror the screen, play video (Photos, YouTube) and stream music to the TV. There's no separate app to install or keep alive. The receiver:
+  - runs in its own background process, so a media fault never takes Home down;
+  - re-advertises itself when the network changes and repairs itself if it stops being visible;
+  - decodes mirroring with asynchronous hardware MediaCodec straight to the screen surface;
+  - uses low-latency audio;
+  - trims YouTube HLS playlists to what the TV can play before playback starts.
+- **Phone remote.** The TV serves its own remote web app on your home network:
+  - scan the QR code in Control Center to pair, then add it to your Home Screen;
+  - one-handed layout with a swipe touchpad or arrow buttons, playback, volume and keyboard text entry;
+  - nothing is hosted in the cloud.
+- **Gentle on old hardware.** Designed and tuned on a 2021 TCL Google TV (Android 11, 32-bit ARM, ~1.4 GB RAM). It works around that firmware's app freezer and boot-start restrictions.
 
-</div>
+## Building
 
-## Why Glass Launcher
+Requirements:
 
-Stock TV home screens mix app launching with content feeds and storefronts. Glass Launcher focuses on one job: press Home, choose an app, and get out of the way.
+- JDK 17
+- Android SDK 36
+- NDK `27.0.12077973`
+- CMake `3.31.6`
+- Gradle 8.14
 
-The home screen shows your wallpaper, clock, and one row of favorite apps. Press Down for the complete app grid. Settings and customization stay out of sight until you need them. There are no ads, recommendations, accounts, or telemetry.
+The AirPlay engine pulls UxPlay, libplist, OpenSSL and FFmpeg as git submodules:
 
-## Screenshots
-
-<sub><i>Click an image to open it at full size.</i></sub>
-
-<div align="center">
-<table>
-  <tr>
-    <td align="center">
-      <a href="docs/screenshots/home.png">
-        <img src="docs/screenshots/home.png" alt="Glass Launcher home screen with the favorites shelf" width="460" loading="lazy" />
-      </a><br/><sub><b>Home</b></sub>
-    </td>
-    <td align="center">
-      <a href="docs/screenshots/app-grid.png">
-        <img src="docs/screenshots/app-grid.png" alt="Glass Launcher app grid" width="460" loading="lazy" />
-      </a><br/><sub><b>App grid</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="docs/screenshots/app-options.png">
-        <img src="docs/screenshots/app-options.png" alt="Glass Launcher app options menu for reordering and managing an app" width="460" loading="lazy" />
-      </a><br/><sub><b>Reorder &amp; manage</b></sub>
-    </td>
-    <td align="center">
-      <a href="docs/screenshots/settings-menu.png">
-        <img src="docs/screenshots/settings-menu.png" alt="Glass Launcher settings menu" width="460" loading="lazy" />
-      </a><br/><sub><b>Settings</b></sub>
-    </td>
-  </tr>
-</table>
-</div>
-
-## What it does
-
-- **Favorites and app grid:** Keep the apps you use most on the home screen and open the full grid with one press. Reorder or hide entries with the remote.
-- **App customization:** Long-press an app to rename it, choose custom artwork, move it, hide it, open App info, or uninstall it.
-- **Appearance controls:** Choose 4 to 7 icons per row, icon roundness, focus border and color, whether the favorites bar has its glass background, and whether the clock shows the date, time only, or nothing.
-- **Wallpapers and slideshows:** Use a single wallpaper, rotate through an image folder, or show the system wallpaper, including live wallpapers set by another app. Configure idle mode to hide the launcher UI and leave the wallpaper and clock visible.
-- **Remote and TV controls:** Add supported HDMI and other TV inputs to the grid. Assign the remote's color, menu, and subtitle buttons to apps.
-- **Backup and restore:** Export the launcher layout, settings, and custom icons to a zip file, then restore them after reinstalling or moving to another device. Older .txt backups still restore.
-- **Persistent Google TV Home:** An optional one-time local ADB setup makes Glass Launcher the Home app and includes a restore action for Google TV Home.
-
-## Privacy and size
-
-Normal launcher use makes no network requests. Glass Launcher has no analytics, advertising, account system, or background update service. Custom names, artwork, shortcuts, and settings stay on the device.
-
-The APK includes the `INTERNET` permission only for the explicit Google TV Home setup. That flow connects to the TV's own ADB daemon at `127.0.0.1:5555` and runs a fixed set of setup or restore commands. Photo access is requested only when you choose a slideshow folder.
-
-The UI uses the Android SDK directly, with programmatic layouts and custom recycling views. It has no runtime AndroidX dependency or native code. R8 minifies each release. The only direct production dependency is `dadb`, which is loaded for the local ADB setup and restore flow.
-
-## Compatibility
-
-Glass Launcher requires Android 8.0 (API 26) or newer. It is intended for:
-
-- Android TV and Google TV devices
-- Fire TV Stick and Fire TV Cube
-- Mi Box, Mi Stick, and other Android TV boxes
-
-TV input tiles depend on the device exposing inputs through Android's TV Input Framework. The built-in persistent Home setup is for Google TV devices with local ADB available on port 5555. Other devices use their system launcher-selection flow.
-
-## Install
-
-Glass Launcher is sideload-only. It is not published on the Google Play Store or Amazon Appstore.
-
-### Downloader
-
-Install the **Downloader** app by AFTVnews and enter code **5226436**. The code points to the latest Glass Launcher release.
-
-### Direct APK
-
-1. Download [`GlassLauncher.apk`](https://git.namillis.me/namillis/GlassLauncherTV/releases/download/latest/GlassLauncher.apk) from the latest release.
-2. Move it to the TV with a USB drive, network share, or file-transfer app.
-3. Allow installation from unknown sources when Android asks.
-4. Open the APK and install it.
-
-## Use Glass Launcher as Home on Google TV
-
-After Network debugging is enabled, Glass Launcher configures the TV without a second device:
-
-1. Enable **Developer options**, then enable **Network debugging**.
-2. Open **Settings → Default home & backup → Default home** in Glass Launcher.
-3. Select **Use Glass Launcher as Home**.
-4. Accept Android's one-time debugging authorization prompt.
-
-The setup selects Glass Launcher as the system Home app and disables the Google TV launcher packages. The change survives normal restarts.
-
-Disabling Google TV Home also removes its quick-settings sidebar. Before uninstalling Glass Launcher, use **Restore Google TV Home** from the same screen. If Glass Launcher has already been removed, reconnect with ADB and run:
-
-```shell
-adb shell pm enable --user 0 com.google.android.apps.tv.launcherx
-adb shell pm enable --user 0 com.google.android.tungsten.setupwraith
+```sh
+git clone --recursive https://github.com/HiteshRohira/GlassLauncherTV.git
+cd GlassLauncherTV/glasslauncher
+gradle :app:assembleRelease :app:testReleaseUnitTest
 ```
 
-## License
+The first build compiles OpenSSL and FFmpeg for `armeabi-v7a` and `arm64-v8a`, which takes a while. Sign the APK with your own key, install it, then pick Glass TV as the Home app. The phone remote's controls use the TV's local network ADB (port 5555) once, after you approve Android's prompt. See [`glasslauncher/PHONE-REMOTE.md`](glasslauncher/PHONE-REMOTE.md).
 
-Glass Launcher is available under the **PolyForm Noncommercial License 1.0.0** for personal and non-commercial use. See [LICENSE](./LICENSE) and [NOTICE.md](./NOTICE.md).
+## Project layout
+
+- `glasslauncher/app` — the launcher: Home, All apps, Control Center, Bluetooth, the phone remote server and its web app.
+- `glasslauncher/airplay` — the AirPlay engine and player:
+  - native UxPlay core, with patches in `src/main/cpp/patches`;
+  - Kotlin service and renderers;
+  - the full-screen AirPlay player.
+
+## Licensing
+
+- Launcher code is under the **PolyForm Noncommercial License 1.0.0** ([LICENSE](./LICENSE), [NOTICE.md](./NOTICE.md)). Personal and other non-commercial use, modification and sharing are allowed; commercial use is not.
+- The AirPlay module (`glasslauncher/airplay`) is adapted from [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server) and builds on [UxPlay](https://github.com/FDH2/UxPlay). It is under the **GPL-3.0** ([glasslauncher/airplay/LICENSE](glasslauncher/airplay/LICENSE)).
+- Third-party components keep their own licenses.
+
+This project is personal and non-commercial; no APKs are published.
+
+## Origins
+
+Glass TV started as a fork of [Glass Launcher](https://github.com/namillis/GlassLauncherTV) by mithun.ys / pixel, and its home screen still owes that project a lot. It has since grown into something quite different:
+- a redesigned interface;
+- an AirPlay receiver built into the launcher instead of a separate app;
+- a phone remote served by the TV itself;
+- a long list of performance and reliability work for low-end TV hardware.
+
+The result is a much smoother, much more capable launcher than where it began.
