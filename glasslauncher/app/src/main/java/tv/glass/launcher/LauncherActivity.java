@@ -409,12 +409,19 @@ public class LauncherActivity extends Activity {
                     if(shelf!=null)shelf.animate().alpha(visible?.66f:1f).setDuration(150).start();
                     if(selectedAppName!=null)selectedAppName.animate().alpha(visible?.66f:1f).setDuration(150).start();
                     if(ringView!=null)ringView.setVisibility(View.INVISIBLE);
+                    setToolbarUnderSheet(visible);
                 }
             });
             root.addView(controlCenter);
         }
         boolean animate=!sheetHandoff;sheetHandoff=false;
         controlCenter.show(anchor,key,animate);
+    }
+
+    /** The side sheet covers the toolbar's corner; fade the toolbar so its
+     *  icons don't show through the glass. */
+    private void setToolbarUnderSheet(boolean covered) {
+        if (toolbarCapsule != null) toolbarCapsule.animate().alpha(covered ? 0f : 1f).setDuration(150).start();
     }
 
     /** True while Control Center and the Bluetooth sheet hand over to each
@@ -4276,8 +4283,10 @@ public class LauncherActivity extends Activity {
                     RingView rv = ringView;
                     if (rv != null) rv.setVisibility(View.INVISIBLE);
                     ensureOverlayBackdropVisible();
+                    setToolbarUnderSheet(true);
                 }
                 @Override public void onPanelHidden() {
+                    setToolbarUnderSheet(false);
                     restoreToolbarHomeSelection();
                     dismissOverlayBackdropIfIdle();
                     if(resumeControlsAfterBluetooth) {
