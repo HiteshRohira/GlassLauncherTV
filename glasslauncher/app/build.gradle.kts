@@ -499,8 +499,8 @@ android {
         // Bumped 51 → 52: 2.6.1 reorganizes settings into a compact category
         // hub, removes the About/QR surface, and refines the Orange focus color.
         // SemVer PATCH — settings navigation and visual clarity refinement.
-        versionCode   = 7
-        versionName   = "1.0.6"
+        versionCode   = 15
+        versionName   = "1.0.6-feather.2"
         resourceConfigurations += listOf("en")
 
         // Instrumentation test runner. Required so :app:connectedDebugAndroidTest
@@ -655,6 +655,7 @@ dependencies {
 
     // Local JVM unit tests (run on the host, no emulator). Tiny, only
     // the launcher's pure-Java helpers (e.g. AppOrder) are exercised here.
+    implementation("com.google.zxing:core:3.5.3")
     testImplementation("junit:junit:4.13.2")
 
     // Instrumentation tests (require emulator/device). The smoke test

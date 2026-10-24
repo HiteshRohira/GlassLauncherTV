@@ -7,24 +7,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- A TV-hosted, PIN-paired phone remote with navigation, playback, volume and
+  Unicode text input. Safari can save it to the iPhone Home Screen.
+
 ### Changed
 
-- **Settings is a full-height sheet.** The gear opens a sheet on the right
-  edge of the screen with a short description under every setting, room to
-  scroll, and a header showing where you are. Back returns to the row you
-  came from. Hidden apps, button shortcuts and the slideshow folder list now
-  open inside the sheet instead of separate menus.
-- **Simpler wallpaper settings.** One Source setting picks a picture, a
-  slideshow folder or the system wallpaper, and only the options for that
-  source are shown. Slideshow duration and Change each restart are one
-  Change picture setting.
-- **Every value changes with Left and Right.** Clock and the slideshow timer
-  now respond to Left and Right like the other settings, and every value
-  shows < > arrows.
-- **Backup is one level up.** Back up settings and Restore settings sit
-  directly on the Default home & backup page.
-- The slideshow folder row shows the folder's name, and the main settings
-  page shows the app version.
+- Native Feather home uses an app-colour ambient background and outline controls.
+- Control Center opens Android system settings separately from Appearance.
+  Appearance slides inside the same glass dialog; paired devices and the Pair
+  device button are removed from Control Center.
+- Bluetooth device rows toggle connect/disconnect directly.
+- The glass app menu contains Move, Hide and App info, with Move selected first.
+- This approved in-dialog Appearance flow supersedes the earlier unreleased
+  full-height settings sheet. Existing wallpaper, shortcuts and backup settings
+  remain available through the embedded Appearance categories.
 
 ## [1.0.6] — 2026-10-19
 

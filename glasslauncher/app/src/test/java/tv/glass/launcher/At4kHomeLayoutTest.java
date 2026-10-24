@@ -9,25 +9,25 @@ import org.junit.Test;
 public class At4kHomeLayoutTest {
 
     @Test
-    public void cardsUseFiveByThreeAspectRatio() {
+    public void cardsUseSixteenByNineAspectRatio() {
         At4kHomeLayout.Metrics metrics = At4kHomeLayout.calculate(1920, 1080, 1f);
 
-        assertEquals(metrics.tileWidthPx * 3, metrics.tileHeightPx * 5, 2);
+        assertEquals(metrics.tileWidthPx * 9, metrics.tileHeightPx * 16, 8);
     }
 
     @Test
-    public void runtimeColumnsResizeCardsAndPreserveFiveByThreeRatio() {
+    public void runtimeColumnsResizeCardsAndPreserveSixteenByNineRatio() {
         At4kHomeLayout.Metrics four = At4kHomeLayout.calculate(1920, 1080, 1f, 4, 20);
         At4kHomeLayout.Metrics seven = At4kHomeLayout.calculate(1920, 1080, 1f, 7, 20);
 
         assertTrue(four.tileWidthPx > seven.tileWidthPx);
-        assertEquals(four.tileWidthPx * 3, four.tileHeightPx * 5, 2);
-        assertEquals(seven.tileWidthPx * 3, seven.tileHeightPx * 5, 2);
+        assertEquals(four.tileWidthPx * 9, four.tileHeightPx * 16, 8);
+        assertEquals(seven.tileWidthPx * 9, seven.tileHeightPx * 16, 8);
     }
 
     @Test
     public void fourHundredPixelCardUsesTvOsHeight() {
-        assertEquals(240, At4kHomeLayout.tileHeightPx(400));
+        assertEquals(225, At4kHomeLayout.tileHeightPx(400));
     }
 
     @Test

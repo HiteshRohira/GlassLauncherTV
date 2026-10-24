@@ -44,7 +44,9 @@ final class HomeDrawerModel {
     private HomeDrawerModel() { /* no instances */ }
 
     /** Default apps per row for existing installs and compatibility overloads. */
-    static final int COLS = LayoutOptions.DEFAULT_COLUMNS;
+    // Legacy six-column overloads remain stable; the activity passes its
+    // current layoutColumns explicitly.
+    static final int COLS = 6;
 
     private static int cols(int columns) {
         return LayoutOptions.sanitizeColumns(columns);

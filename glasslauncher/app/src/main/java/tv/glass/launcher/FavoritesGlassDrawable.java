@@ -15,15 +15,15 @@ import android.graphics.drawable.Drawable;
 final class FavoritesGlassDrawable extends Drawable {
 
     private static final int[] HOME_FILL = {
-            0x38FFFFFF, 0x4D141B28, 0x59101822
+            0x26FFFFFF, 0x0CFFFFFF, 0x18FFFFFF
     };
     private static final int[] GRID_FILL = {
             0x28FFFFFF, 0x33141B28, 0x3D101822
     };
     private static final float[] FILL_STOPS = {0f, 0.38f, 1f};
-    private static final int[] HOME_EDGE = {0x8AFFFFFF, 0x22FFFFFF};
+    private static final int[] HOME_EDGE = {0x29FFFFFF, 0x1AFFFFFF};
     private static final int[] GRID_EDGE = {0x70FFFFFF, 0x1AFFFFFF};
-    private static final int[] HOME_INNER_EDGE = {0x42FFFFFF, 0x08FFFFFF};
+    private static final int[] HOME_INNER_EDGE = {0x14FFFFFF, 0x05FFFFFF};
     private static final int[] GRID_INNER_EDGE = {0x30FFFFFF, 0x06FFFFFF};
 
     private final float cornerRadius;
@@ -82,9 +82,7 @@ final class FavoritesGlassDrawable extends Drawable {
 
             float innerInset = outerStrokeWidth + innerStrokeWidth;
             drawBounds.inset(innerInset, innerInset);
-            canvas.drawRoundRect(drawBounds,
-                    Math.max(0f, cornerRadius - outerInset - innerInset),
-                    Math.max(0f, cornerRadius - outerInset - innerInset), innerEdge);
+            // One quiet rim; no second concentric border.
         } finally {
             canvas.restoreToCount(save);
         }

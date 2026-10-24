@@ -64,6 +64,16 @@
          behind this normal-protection-level permission. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
+    <!-- AirPlay status (toolbar pill + failure banner). The monitor runs as a
+         minimum-priority foreground service in its own small process so it
+         keeps watching while other apps are open; it starts at boot and
+         draws a brief non-focusable banner over other apps when the AirPlay
+         receiver stops advertising while the TV is in use. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- HARDWARE FEATURES
          Both declared as NOT required so the APK installs on phones too
          (useful for sideloading / testing) -->
@@ -193,6 +203,33 @@
 
         </activity>
 
+        <!-- AirPlay receiver monitor. Not exported; started by the launcher
+             and by the boot receiver below. -->
+        <service
+            android:name=".AirPlayMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":airplay">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Hosts the local phone remote and monitors the AirPlay receiver" />
+        </service>
+
+        <receiver
+            android:name=".AirPlayBootReceiver"
+            android:exported="false"
+            android:process=":airplay">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <service android:name=".GlassRemoteInputMethod" android:label="Glass phone keyboard"
+            android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true" android:process=":airplay">
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/remote_input_method" />
+        </service>
     </application>
 
 </manifest>

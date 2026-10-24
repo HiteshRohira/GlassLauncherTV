@@ -59,12 +59,12 @@ final class ClockFormatter {
     private final Calendar               cal   = Calendar.getInstance();
     private final char[]                 chars = new char[8];
     private final SpannableStringBuilder ssb   = new SpannableStringBuilder();
-    private final RelativeSizeSpan       amPmSize  = new RelativeSizeSpan(0.42f);
+    private final RelativeSizeSpan       amPmSize  = new RelativeSizeSpan(0.28f);
     private final TypefaceSpan           amPmFace  = new TypefaceSpan("sans-serif-thin");
     private final StyleSpan              amPmStyle = new StyleSpan(Typeface.NORMAL);
     // Spans for the small, dim "day, date month" line rendered below the
     // time when showDate is on. Pre-built and re-applied per tick.
-    private final RelativeSizeSpan       dateSize  = new RelativeSizeSpan(0.40f);
+    private final RelativeSizeSpan       dateSize  = new RelativeSizeSpan(0.28f);
     private final TypefaceSpan           dateFace  = new TypefaceSpan("sans-serif");
     private final ForegroundColorSpan    dateColor = new ForegroundColorSpan(0xB3FFFFFF);
 

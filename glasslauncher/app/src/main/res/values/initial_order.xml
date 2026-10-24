@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="initial_app_order" translatable="false">
+        <item>com.edde746.plezy</item>
+        <item>com.apple.atve.androidtv.appletv</item>
+        <item>com.google.android.youtube.tv</item>
+        <item>com.amazon.amazonvideo.livingroom</item>
+        <item>com.jio.media.jiotvplus</item>
+        <item>tv.airtel.xstream.tvapp</item>
+        <item>com.tcl.browser</item>
+        <item>ch.protonvpn.android</item>
+        <item>com.viacom18.tv.voot</item>
+    </string-array>
+</resources>
