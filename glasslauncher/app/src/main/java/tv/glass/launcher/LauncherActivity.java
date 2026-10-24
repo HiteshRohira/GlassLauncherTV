@@ -720,6 +720,8 @@ public class LauncherActivity extends Activity {
      *
      *  <p>UI-thread only — no synchronisation needed. */
     private boolean uiPaused = false;
+    private static long lastMonitorStartAt;
+    private static final long MONITOR_START_THROTTLE_MS = 60_000L;
     /** v1.5.x: set in {@link #onPause} when the drawer was open at pause time,
      *  consumed in {@link #onResume}. We DEFER the drawer teardown (restore
      *  shelf + rebuild home row) to resume so that launching an app from the
@@ -2353,7 +2355,14 @@ public class LauncherActivity extends Activity {
         refreshBtState();            // pick up any change while we were away
         registerAirReceiver();       // live AirPlay state for the airBtn dot
         refreshAirState();
-        AirPlayMonitorService.start(this, AirPlayMonitorService.ACTION_IN_USE);
+        // Glass: at most once a minute. Each start is a binder call plus a
+        // health check in the receiver process; the keep-alive alarm renews
+        // TCL's freeze window anyway.
+        long nowUp = android.os.SystemClock.elapsedRealtime();
+        if (nowUp - lastMonitorStartAt > MONITOR_START_THROTTLE_MS || lastMonitorStartAt == 0) {
+            lastMonitorStartAt = nowUp;
+            AirPlayMonitorService.start(this, AirPlayMonitorService.ACTION_IN_USE);
+        }
         // Wallpaper slideshow: resume the foreground rotation timer, and (once
         // per process) roll to a new image in "each restart" mode. Both are
         // no-ops when slideshow is off / no folder is set. Done after the

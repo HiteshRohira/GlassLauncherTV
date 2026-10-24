@@ -99,6 +99,12 @@ public final class AirPlayMonitorService extends Service {
     private BroadcastReceiver screenReceiver;
     private boolean dreaming;
     private String publishedRecord;
+    /** When the status file was last written (elapsedRealtime). */
+    private long writtenAt;
+    /** Status writes run here, in order, never on the main thread. */
+    private final java.util.concurrent.ExecutorService writer = java.util.concurrent.Executors.newSingleThreadExecutor();
+    /** Rewrite an unchanged record this often so readers never see it stale. */
+    private static final long REWRITE_MS = 5 * 60_000L;
     private View banner;
     private GlassRemoteServer phoneRemote;
     /** When the last keep-alive tick ran, to spot ticks that came too late. */
@@ -236,6 +242,7 @@ public final class AirPlayMonitorService extends Service {
             screenReceiver = null;
         }
         hideBanner();
+        writer.shutdown();
         super.onDestroy();
     }
 
@@ -393,21 +400,30 @@ public final class AirPlayMonitorService extends Service {
         boolean debug = svc != null && svc.debugLogging();
         String record = status.state().name() + "\n%d\n" + session + "\n" + name.replace('\n', ' ')
                 + "\n" + diagnostics.replace('\n', ' ') + "\n" + (debug ? "1" : "0");
-        File dst = new File(getFilesDir(), STATUS_FILE);
-        File tmp = new File(getFilesDir(), STATUS_FILE + ".tmp");
-        try (FileOutputStream out = new FileOutputStream(tmp)) {
-            out.write(String.format(java.util.Locale.ROOT, record, System.currentTimeMillis())
-                    .getBytes(StandardCharsets.UTF_8));
-            out.getFD().sync();
-        } catch (Exception e) {
-            Log.w(TAG, "status write failed", e);
-            return;
-        }
-        if (!tmp.renameTo(dst)) { Log.w(TAG, "status rename failed"); return; }
-        if (record.equals(publishedRecord)) return;
+        // Glass: only the timestamp changed and the file is recent: skip the
+        // write and its fsync (this ran on every check, on the main thread).
+        long now = SystemClock.elapsedRealtime();
+        boolean changed = !record.equals(publishedRecord);
+        if (!changed && writtenAt != 0 && now - writtenAt < REWRITE_MS) return;
+        writtenAt = now;
         publishedRecord = record;
-        Log.i(TAG, "state " + status.state() + " session " + session);
-        sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName()));
+        if (changed) Log.i(TAG, "state " + status.state() + " session " + session);
+        final long wallClock = System.currentTimeMillis();
+        try {
+            writer.execute(() -> {
+                File dst = new File(getFilesDir(), STATUS_FILE);
+                File tmp = new File(getFilesDir(), STATUS_FILE + ".tmp");
+                try (FileOutputStream out = new FileOutputStream(tmp)) {
+                    out.write(String.format(java.util.Locale.ROOT, record, wallClock).getBytes(StandardCharsets.UTF_8));
+                    out.getFD().sync();
+                } catch (Exception e) {
+                    Log.w(TAG, "status write failed", e);
+                    return;
+                }
+                if (!tmp.renameTo(dst)) { Log.w(TAG, "status rename failed"); return; }
+                if (changed) sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName()));
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) { }
     }
 
     // ── Failure banner ────────────────────────────────────────────────────
