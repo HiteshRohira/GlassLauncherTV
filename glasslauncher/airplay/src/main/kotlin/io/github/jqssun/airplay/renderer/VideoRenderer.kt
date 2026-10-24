@@ -32,7 +32,9 @@ class VideoRenderer(ctx: Context) {
     private var codecThread: HandlerThread? = null
     private var codecHandler: Handler? = null
     private val freeInputs = ArrayDeque<Int>()
-    private val pending = MirrorFrameQueue()
+    /** Frame arrays shared with native code (see [obtainFrameBuffer]). */
+    val framePool = FrameBufferPool()
+    private val pending = MirrorFrameQueue(onRelease = framePool::recycle)
     /** True when the decoder renders straight into the display surface (no GL copy). */
     private var direct = false
     /** Surface the current codec renders into. */
@@ -183,23 +185,33 @@ class VideoRenderer(ctx: Context) {
         benchmarkLogCallback?.invoke(msg)
     }
 
-    fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
-        val idr = MirrorFrameQueue.isIdr(data, isH265)
+    /** Array for native code to fill with one frame; handed back via [feedFrame]. */
+    fun obtainFrameBuffer(size: Int): ByteArray = framePool.obtain(size)
+
+    fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) = feedFrame(data, data.size, ntpTimeNs, isH265)
+
+    /** Takes ownership of [data] (a pooled array; only the first [length] bytes count). */
+    fun feedFrame(data: ByteArray, length: Int, ntpTimeNs: Long, isH265: Boolean) {
+        var queued = false
+        try { queued = _feedFrame(data, length, ntpTimeNs, isH265) }
+        finally { if (!queued) framePool.recycle(data) }
+    }
+
+    /** Returns true once the queue owns [data]. */
+    private fun _feedFrame(data: ByteArray, length: Int, ntpTimeNs: Long, isH265: Boolean): Boolean {
+        val idr = MirrorFrameQueue.isIdr(data, length, isH265)
         val gen: Int
         val target: Surface
         val wasDirect: Boolean
         synchronized(lock) {
-            _updateStats(data.size)
-            if (videoWidth == 0 || videoHeight == 0) return
+            _updateStats(length)
+            if (videoWidth == 0 || videoHeight == 0) return false
 
-            if (codec != null && isH265 == currentH265) {
-                _enqueue(data, ntpTimeNs, isH265)
-                return
-            }
+            if (codec != null && isH265 == currentH265) return _enqueue(data, length, ntpTimeNs, isH265)
             // a stale reference frame decodes to corruption, so wait for a keyframe to (re)start
             if (!idr) {
                 if (codec != null) stopCodec()
-                return
+                return false
             }
             stopCodec()
             // The player activity starts with this first keyframe; give its
@@ -214,7 +226,7 @@ class VideoRenderer(ctx: Context) {
             target = if (display != null && display.isValid) display else {
                 pipeline.start()
                 pipeline.setVideoSize(videoWidth, videoHeight)
-                pipeline.inputSurface ?: return
+                pipeline.inputSurface ?: return false
             }
             wasDirect = target === display
             gen = ++startGeneration
@@ -227,13 +239,13 @@ class VideoRenderer(ctx: Context) {
             Log.w(TAG, "Codec start failed", e)
             onError?.invoke("video decoder failed to start")
             null
-        } ?: return
+        } ?: return false
         synchronized(lock) {
             if (gen != startGeneration || codec != null) {
                 // stopped or restarted meanwhile
                 if (startingCodec === created.first) startingCodec = null
                 try { created.first.release() } catch (_: Exception) {}
-                return
+                return false
             }
             startingCodec = null
             codec = created.first
@@ -243,10 +255,10 @@ class VideoRenderer(ctx: Context) {
             outSurface = target
             firstFrameQueued = false
             _reconcileSurface()
-            if (codec == null) return
+            if (codec == null) return false
             Log.i(TAG, "Video codec started: ${if (isH265) DecoderSelector.HEVC else DecoderSelector.AVC} " +
                 "${videoWidth}x${videoHeight} ($codecName) ${if (direct) "direct" else "via GL"}")
-            _enqueue(data, ntpTimeNs, isH265)
+            return _enqueue(data, length, ntpTimeNs, isH265)
         }
     }
 
@@ -270,9 +282,10 @@ class VideoRenderer(ctx: Context) {
         }
     }
 
-    private fun _enqueue(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+    /** Queue owns [data] once this returns true. */
+    private fun _enqueue(data: ByteArray, length: Int, ntpTimeNs: Long, isH265: Boolean): Boolean {
+        pending.add(data, length, ntpTimeNs / 1000, System.nanoTime(), isH265)
         try {
-            pending.add(data, ntpTimeNs / 1000, System.nanoTime(), isH265)
             overloads = pending.overloads
             droppedFrames = droppedBeforeSession + pending.dropped
             _submitPending()
@@ -280,6 +293,7 @@ class VideoRenderer(ctx: Context) {
             Log.w(TAG, "Codec error, resetting", e)
             stopCodec()
         }
+        return true
     }
 
     private fun _submitPending() {
@@ -288,12 +302,15 @@ class VideoRenderer(ctx: Context) {
             val idx = freeInputs.removeFirst()
             val frame = pending.poll() ?: run { freeInputs.addFirst(idx); return }
             val data = frame.data
+            val length = frame.length
             val ptsUs = frame.ptsUs
-            val buf = c.getInputBuffer(idx) ?: continue
+            val buf = c.getInputBuffer(idx)
+            if (buf == null) { framePool.recycle(data); continue }
             buf.clear()
-            if (data.size > buf.capacity()) { droppedFrames++; droppedBeforeSession++; freeInputs.addFirst(idx); continue }
-            buf.put(data)
-            c.queueInputBuffer(idx, 0, data.size, ptsUs, 0)
+            if (length > buf.capacity()) { framePool.recycle(data); droppedFrames++; droppedBeforeSession++; freeInputs.addFirst(idx); continue }
+            buf.put(data, 0, length)
+            framePool.recycle(data)
+            c.queueInputBuffer(idx, 0, length, ptsUs, 0)
             firstFrameQueued = true
         }
     }

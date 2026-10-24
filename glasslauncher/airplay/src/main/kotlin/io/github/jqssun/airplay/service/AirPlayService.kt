@@ -819,8 +819,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     // RaopCallbackHandler (called from native threads)
 
-    override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
-        videoRenderer.feedFrame(data, ntpTimeNs, isH265)
+    override fun obtainVideoBuffer(size: Int): ByteArray = videoRenderer.obtainFrameBuffer(size)
+
+    override fun onVideoData(data: ByteArray, length: Int, ntpTimeNs: Long, isH265: Boolean) {
+        videoRenderer.feedFrame(data, length, ntpTimeNs, isH265)
     }
 
     override fun onVideoSessionPoll() {

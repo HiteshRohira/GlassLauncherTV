@@ -101,7 +101,8 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->playback_paused = 0;
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
-    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
+    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BIJZ)V");
+    ctx->obtain_video_buffer = (*env)->GetMethodID(env, cls, "obtainVideoBuffer", "(I)[B");
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
     ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
     ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "(F)V");
@@ -172,10 +173,20 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
         return;
     }
 
-    jbyteArray arr = _new_bytes(env, data->data, data->data_len, "video frame");
-    if (!arr) return;
+    /* Glass: fill a pooled Java array instead of allocating one per frame;
+       Kotlin takes it back once the decoder has copied the frame. */
+    jbyteArray arr = (jbyteArray)(*env)->CallObjectMethod(env, ctx->callback_obj, ctx->obtain_video_buffer,
+                                                          (jint)data->data_len);
+    if (_check_exception(env, "obtainVideoBuffer") || !arr) return;
+    if ((*env)->GetArrayLength(env, arr) < data->data_len) {
+        LOGE("pooled frame buffer too small");
+        (*env)->DeleteLocalRef(env, arr);
+        return;
+    }
+    (*env)->SetByteArrayRegion(env, arr, 0, data->data_len, (jbyte *)data->data);
+    if (_check_exception(env, "video frame copy")) { (*env)->DeleteLocalRef(env, arr); return; }
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data,
-                           arr, (jlong)data->ntp_time_local, (jboolean)data->is_h265);
+                           arr, (jint)data->data_len, (jlong)data->ntp_time_local, (jboolean)data->is_h265);
     _check_exception(env, "onVideoData");
     (*env)->DeleteLocalRef(env, arr);
 }

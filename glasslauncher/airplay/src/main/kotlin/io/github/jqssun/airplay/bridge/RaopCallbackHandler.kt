@@ -1,7 +1,10 @@
 package io.github.jqssun.airplay.bridge
 
 interface RaopCallbackHandler {
-    fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean)
+    /** Pooled array of at least [size] bytes for the next mirror frame. */
+    fun obtainVideoBuffer(size: Int): ByteArray
+    /** [data] comes from [obtainVideoBuffer]; only [length] bytes count. */
+    fun onVideoData(data: ByteArray, length: Int, ntpTimeNs: Long, isH265: Boolean)
     fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean)
     fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float)
     // airplay volume in dB: -30..0, -144 = mute
