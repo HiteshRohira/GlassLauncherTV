@@ -650,6 +650,8 @@ public class LauncherActivity extends Activity {
      *  shelf renders icons in the very first frame. See {@link
      *  IconDiskCache} javadoc for the full pipeline. */
     private volatile IconDiskCache            iconDiskCache;
+    /** Glass: rendered banner tiles, so a cold start does not re-render every banner. */
+    private volatile IconDiskCache            bannerDiskCache;
     /** Durable source images selected by the user. Unlike IconDiskCache,
      *  these are user data rather than a disposable rendering cache. */
     private volatile CustomIconStore customIconStore;
@@ -1439,6 +1441,8 @@ public class LauncherActivity extends Activity {
                         // disk read of the stale bytes.
                         IconDiskCache dc = iconDiskCache;
                         if (dc != null) dc.delete(pkg);
+                        IconDiskCache bdc = bannerDiskCache;
+                        if (bdc != null) bdc.delete(pkg);
                         // A custom icon is user data, not a disposable cache.
                         // Keep it through the REMOVED/ADDED pair emitted by an
                         // app upgrade, but remove it after a real uninstall so
@@ -2554,17 +2558,20 @@ public class LauncherActivity extends Activity {
         if (iconExecutor   != null) try { iconExecutor.shutdown(); } catch (Throwable ignored) { /* best-effort */ }
         if (appExecutor    != null) try { appExecutor .shutdown(); } catch (Throwable ignored) { /* best-effort */ }
         if (iconDiskCache  != null) iconDiskCache.beginShutdown();
+        if (bannerDiskCache != null) bannerDiskCache.beginShutdown();
         if (wallpaperCtl   != null) wallpaperCtl .beginShutdown();
         long deadlineNs = System.nanoTime()
                 + TimeUnit.MILLISECONDS.toNanos(300);
         awaitOrSkip(iconExecutor,  deadlineNs);
         awaitOrSkip(appExecutor,   deadlineNs);
         if (iconDiskCache != null) iconDiskCache.awaitShutdown(remainingMs(deadlineNs));
+        if (bannerDiskCache != null) bannerDiskCache.awaitShutdown(remainingMs(deadlineNs));
         if (wallpaperCtl  != null) wallpaperCtl .awaitShutdown(remainingMs(deadlineNs));
         // Phase 3 — force-stop survivors and release wallpaper bitmaps.
         if (iconExecutor != null) try { iconExecutor.shutdownNow(); } catch (Throwable ignored) { /* best-effort */ }
         if (appExecutor  != null) try { appExecutor .shutdownNow(); } catch (Throwable ignored) { /* best-effort */ }
         if (iconDiskCache != null) iconDiskCache = null;
+        bannerDiskCache = null;
         customIconStore = null;
         pendingCustomIconPackage = null;
         pendingCustomIconLabel = null;
@@ -10581,13 +10588,26 @@ public class LauncherActivity extends Activity {
         if (app.tvInputId != null) {
             return IconRenderer.generateInputTile(w, h, corner, app.label, density);
         }
-        Drawable banner = resolveBannerDrawable(app);
-        if (banner != null) {
-            Bitmap b = IconRenderer.processBannerArt(banner, w, h, corner);
-            if (b != null) return b;
+        // Disk tier, only for artwork that comes from the installed APK. The
+        // key includes the APK path, which changes on every update, so a
+        // missed package broadcast cannot leave a stale banner behind.
+        IconDiskCache disk = bannerDiskCache;
+        String apk = app.ri != null && app.ri.activityInfo != null && app.ri.activityInfo.applicationInfo != null
+                ? app.ri.activityInfo.applicationInfo.sourceDir : null;
+        int diskKey = apk == null ? 0 : (((w * 31 + h) * 31 + corner) * 31 + apk.hashCode()) & 0x7FFFFFFF;
+        if (disk != null && diskKey > 0) {
+            Bitmap cached = disk.tryRead(app.packageName, diskKey);
+            if (cached != null) return cached;
         }
-        Drawable icon = resolveIconDrawable(app);
-        return IconRenderer.generateBannerTile(icon, w, h, corner);
+        Bitmap rendered = null;
+        Drawable banner = resolveBannerDrawable(app);
+        if (banner != null) rendered = IconRenderer.processBannerArt(banner, w, h, corner);
+        if (rendered == null) rendered = IconRenderer.generateBannerTile(resolveIconDrawable(app), w, h, corner);
+        if (disk != null && diskKey > 0 && rendered != null) {
+            disk.delete(app.packageName);  // drop older sizes/versions; same FIFO executor as the write
+            disk.writeAsync(app.packageName, diskKey, rendered);
+        }
+        return rendered;
     }
 
     private void preWarmBanner(AppInfo app) {
@@ -12412,6 +12432,7 @@ public class LauncherActivity extends Activity {
         // icon-load executor tasks can read from / write to it. Owns
         // its own write executor; shut down in onDestroy().
         iconDiskCache = new IconDiskCache(this);
+        bannerDiskCache = new IconDiskCache(this, "banners");
         // The in-memory icon cache. Pure LRU, no create() fallback —
         // the disk lookup is performed inside {@link #loadIconBlocking}
         // on the iconExecutor's worker thread. Earlier drafts wired the

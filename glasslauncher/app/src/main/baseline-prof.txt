@@ -1,0 +1,11 @@
+# Glass TV Baseline Profile. Packaged into the APK by AGP (rewritten for R8)
+# and installed on sideloaded builds by androidx.profileinstaller, so the
+# launcher and receiver start AOT-compiled instead of JIT-only until the next
+# idle dexopt. Glass is always resident (it is Home), so its own code is
+# listed wholesale; libraries keep their own profiles.
+HSPLtv/glass/launcher/**->**(**)**
+Ltv/glass/launcher/**;
+HSPLtv/glass/airplay/**->**(**)**
+Ltv/glass/airplay/**;
+HSPLio/github/jqssun/airplay/**->**(**)**
+Lio/github/jqssun/airplay/**;

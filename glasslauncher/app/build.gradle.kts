@@ -632,6 +632,10 @@ dependencies {
     // Local JVM unit tests (run on the host, no emulator). Tiny, only
     // the launcher's pure-Java helpers (e.g. AppOrder) are exercised here.
     implementation("com.google.zxing:core:3.5.3")
+
+    // Installs the Baseline Profile (src/main/baseline-prof.txt) on
+    // sideloaded builds, which get no Play cloud profile.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     testImplementation("junit:junit:4.13.2")
 
     // Instrumentation tests (require emulator/device). The smoke test
