@@ -7,6 +7,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- A TV-hosted, PIN-paired phone remote with navigation, playback, volume and
+  Unicode text input. Safari can save it to the iPhone Home Screen.
+
+### Changed
+
+- Native Feather home uses an app-colour ambient background and outline controls.
+- Control Center opens Android system settings separately from Appearance.
+  Appearance slides inside the same glass dialog; paired devices and the Pair
+  device button are removed from Control Center.
+- Bluetooth device rows toggle connect/disconnect directly.
+- The glass app menu contains Move, Hide and App info, with Move selected first.
+- This approved in-dialog Appearance flow supersedes the earlier unreleased
+  full-height settings sheet. Existing wallpaper, shortcuts and backup settings
+  remain available through the embedded Appearance categories.
+
 ## [1.0.6] — 2026-10-19
 
 ### Added
