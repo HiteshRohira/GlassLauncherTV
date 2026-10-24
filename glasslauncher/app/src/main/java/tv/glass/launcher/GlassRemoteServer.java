@@ -108,17 +108,25 @@ final class GlassRemoteServer implements AutoCloseable {
                 // A Home Screen web app has its own cookie jar on iOS, so the
                 // installed icon carries the pairing code in its start URL and
                 // pairs itself on first launch.
+                // Without a valid code, omit start_url: iOS then installs the
+                // page's current URL, which carries the code once paired.
                 String pin=queryValue(query,"pair");
-                String start=pin!=null&&constant(pin,access.pin)?"/?pair="+pin:"/";
-                JSONObject manifest=new JSONObject().put("id","/").put("name","Glass TV Remote").put("short_name","Glass Remote")
-                    .put("start_url",start).put("scope","/").put("display","standalone").put("orientation","portrait")
+                JSONObject manifest=new JSONObject().put("id","/").put("name","Glass TV Remote").put("short_name","Glass Remote");
+                if(pin!=null&&constant(pin,access.pin))manifest.put("start_url","/?pair="+pin);
+                manifest.put("scope","/").put("display","standalone").put("orientation","portrait")
                     .put("background_color","#121319").put("theme_color","#121319")
                     .put("icons",new org.json.JSONArray().put(new JSONObject().put("src","/icon.png").put("sizes","180x180").put("type","image/png")));
                 reply(out,200,type,manifest.toString().getBytes(StandardCharsets.UTF_8),"");return;
             }
             try(InputStream asset=context.getAssets().open("remote/"+file)){
                 ByteArrayOutputStream data=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=asset.read(buffer))!=-1)data.write(buffer,0,n);
-                reply(out,200,type,data.toByteArray(),"");
+                byte[] bytes=data.toByteArray();
+                // iOS reads the manifest link once, as the page loads; put the
+                // code in it server-side so Add to Home Screen keeps pairing.
+                String pin=queryValue(query,"pair");
+                if(file.equals("index.html")&&pin!=null&&constant(pin,access.pin))
+                    bytes=new String(bytes,StandardCharsets.UTF_8).replace("href=\"/manifest.webmanifest\"","href=\"/manifest.webmanifest?pair="+pin+"\"").getBytes(StandardCharsets.UTF_8);
+                reply(out,200,type,bytes,"");
             }
         }catch(Exception error){try{reply(socket.getOutputStream(),409,"application/json",new JSONObject().put("error",error instanceof IOException?error.getMessage():"Request could not be completed.").toString());}catch(Exception ignored){}
         }finally{sockets.remove(socket);try{socket.close();}catch(IOException ignored){}}
