@@ -110,6 +110,12 @@ struct AudioEngine {
         mDecoder = {};
     }
 
+    // any thread: drop buffered audio after a sender FLUSH (seek, pause)
+    void flush() {
+        std::lock_guard<std::mutex> lk(mRebuildLock);
+        if (mTimeline) mTimeline->requestFlush();
+    }
+
     void setClientGain(float g) {
         std::lock_guard<std::mutex> lk(mRebuildLock);
         mClientGain = g;
@@ -252,6 +258,10 @@ bool audio_engine_configure(AudioEngine *engine, int cushionMs, int percentilePc
     if (!engine) return false;
     return engine->configure({cushionMs, percentilePct, oboeBufferFrames, forceSwAlac, forceSwAac,
                               realtimePriority, lowLatency, benchmarkLog});
+}
+
+void audio_engine_flush(AudioEngine *engine) {
+    if (engine) engine->flush();
 }
 
 void audio_engine_set_client_gain(AudioEngine *engine, float gain) {

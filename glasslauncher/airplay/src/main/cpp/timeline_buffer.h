@@ -217,9 +217,21 @@ public:
 
     void noteOutputBufferFrames(int frames) { mTracker.noteOutputBufferFrames(frames); }
 
+    // any thread: the sender flushed (RTSP FLUSH on seek/pause). The consumer
+    // drops what is buffered and re-primes at its next read; the producer
+    // re-anchors its timeline at its next write. Each acts on its own thread,
+    // so the SPSC rules hold.
+    void requestFlush() { mFlushGen.fetch_add(1, std::memory_order_acq_rel); }
+
     // producer: push samples
     void write(const int16_t *pcm, size_t samples, int64_t ptsNs) {
         if (samples == 0) return;
+        const uint32_t gen = mFlushGen.load(std::memory_order_acquire);
+        if (gen != mWriterFlushGen) {
+            mWriterFlushGen = gen;
+            mTracker.reanchor();
+            mExpectedPtsNs = 0;  // next pts is a discontinuity: written at once
+        }
         // pts 0 = sender clock not NTP synced yet
         if (ptsNs == 0) {
             mRing.write(pcm, samples);
@@ -261,6 +273,14 @@ public:
     // consumer: pop frames*channels samples into out, silence-padded on underrun
     void read(int16_t *out, int32_t frames) {
         const size_t need = (size_t)frames * mChannels;
+        const uint32_t gen = mFlushGen.load(std::memory_order_acquire);
+        if (gen != mReaderFlushGen) {
+            mReaderFlushGen = gen;
+            mRing.skip(mRing.available());
+            mPriming = true;
+            mPrimeSilenceFrames = 0;
+            mAboveCapSinceNs = 0;
+        }
         const size_t tuned = mTracker.target();
         const int64_t now = monoNs();
 
@@ -380,6 +400,9 @@ private:
     int64_t mLastTrimBlockNs = 0;        // consumer-only: last trim/underrun time (trim throttle)
     int64_t mAboveCapSinceNs = 0;        // consumer-only: when backlog first exceeded cap (0 = under)
     std::atomic<bool> mUnderran{false};  // consumer->producer: underrun happened
+    std::atomic<uint32_t> mFlushGen{0};  // bumped by requestFlush(), any thread
+    uint32_t mWriterFlushGen = 0;        // producer-only: last flush seen by write()
+    uint32_t mReaderFlushGen = 0;        // consumer-only: last flush seen by read()
 
     int64_t mExpectedPtsNs = 0;          // presentation time expected at write head
 };

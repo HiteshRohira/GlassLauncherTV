@@ -279,7 +279,13 @@ static void _video_reset(void *cls, reset_type_t t) {
         raop_remove_hls_connections(ctx->raop);
     }
 }
-static void _audio_flush(void *cls) { LOGI("audio_flush"); }
+/* RTSP FLUSH (seek, pause, track change): without this the old tail in the
+   jitter buffer played before the new position. */
+static void _audio_flush(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("audio_flush");
+    if (ctx->audio_engine) audio_engine_flush(ctx->audio_engine);
+}
 
 static void _audio_stop_coverart_rendering(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
@@ -289,6 +295,9 @@ static void _audio_stop_coverart_rendering(void *cls) {
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_teardown);
     _check_exception(env, "on_audio_teardown");
 }
+/* UxPlay calls this whenever any connection is destroyed, including the
+   player's own HLS fetches, so it is not a mirroring discontinuity: acting on
+   it would empty a live decoder queue. Logged only. */
 static void _video_flush(void *cls) { LOGI("video_flush"); }
 static double _audio_set_client_volume(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;

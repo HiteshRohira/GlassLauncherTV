@@ -27,6 +27,9 @@ bool audio_engine_configure(AudioEngine *engine, int cushionMs, int percentilePc
                             int oboeBufferFrames, bool forceSwAlac, bool forceSwAac,
                             bool realtimePriority, bool lowLatency, bool benchmarkLog);
 
+/* sender flushed (seek/pause): drop buffered audio; any thread */
+void audio_engine_flush(AudioEngine *engine);
+
 /* sender volume as linear output gain, 1 = unity */
 void audio_engine_set_client_gain(AudioEngine *engine, float gain);
 

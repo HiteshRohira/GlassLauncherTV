@@ -18,7 +18,10 @@ cc $CFLAGS -o $WORK/test_hls $HERE/test_hls.c
 cc $CFLAGS -o $WORK/test_httpd $HERE/test_httpd.c $L/httpd.c $L/http_request.c $L/http_response.c \
    $L/logger.c $L/netutils.c $L/utils.c $L/compat.c $LL
 cc $CFLAGS -o $WORK/test_raop_buffer_nodata $HERE/test_raop_buffer_nodata.c
+c++ -std=c++17 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined \
+   -I$CPP -o $WORK/test_timeline_flush $HERE/test_timeline_flush.cpp
 $WORK/test_hls
 $WORK/test_httpd
 $WORK/test_raop_buffer_nodata
+$WORK/test_timeline_flush
 echo "native host tests: all passed"
