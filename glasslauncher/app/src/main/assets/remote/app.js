@@ -62,7 +62,11 @@ $('closeSettings').addEventListener('click',closeSheets);
 $('openSetup').addEventListener('click',()=>openSheet(authenticated?'nativePanel':'pairPanel'));
 $('keyboardButton').addEventListener('click',()=>{haptic();openSheet('keyboardPanel');});
 $('closeKeyboard').addEventListener('click',closeSheets);
-$('pairForm').addEventListener('submit',event=>{event.preventDefault();const pin=$('pin').value.trim();action(async()=>{await api('pair',{pin});rememberPin(pin);$('pin').value='';authenticated=true;closeSheets();await poll();});});
+$('pairForm').addEventListener('submit',event=>{event.preventDefault();const pin=$('pin').value.trim();action(async()=>{await api('pair',{pin});
+    // Reload with the code so the TV serves a manifest that carries it; iOS
+    // installs the address the page loaded with, not one changed in script.
+    if(!new URLSearchParams(location.search).get('pair')){location.replace('/?pair='+pin);return;}
+    rememberPin(pin);$('pin').value='';authenticated=true;closeSheets();await poll();});});
 $('pairButton').addEventListener('click',()=>openSheet('pairPanel'));
 $('startNative').addEventListener('click',()=>action(async()=>{await api('native/start',{});feedback('Approve the prompt on your TV.');setTimeout(poll,1500);}));
 $('reconnect').addEventListener('click',()=>action(async()=>{await api('reconnect',{});setTimeout(poll,800);}));
