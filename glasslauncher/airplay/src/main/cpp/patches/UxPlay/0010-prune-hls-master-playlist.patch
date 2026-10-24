@@ -1,0 +1,94 @@
+--- a/lib/airplay_video.c	2026-10-24 15:37:18
++++ b/lib/airplay_video.c	2026-10-24 15:37:18
+@@ -1063,4 +1063,70 @@
+     }  
+ 
+     return new_playlist;
++}
++
++/* Keep only variants the receiver will actually play: H.264 (or unspecified
++ * codec) at or below max_height. Drops I-frame-only playlists entirely. If
++ * nothing would survive, the playlist is returned unchanged. Takes ownership
++ * of master_playlist and returns a malloc'd string. */
++char *prune_master_playlist(char *master_playlist, int max_height) {
++    size_t len = strlen(master_playlist);
++    char *out = (char *) malloc(len + 1);
++    if (!out) return master_playlist;
++    size_t pos = 0;
++    int kept = 0, dropped = 0;
++    int skip_next_uri = 0;
++    char *line = master_playlist;
++    while (line && *line) {
++        char *end = strchr(line, '\n');
++        size_t line_len = end ? (size_t) (end - line + 1) : strlen(line);
++        int keep = 1;
++        if (skip_next_uri && line[0] != '#' && line[0] != '\r' && line[0] != '\n') {
++            keep = 0;
++            skip_next_uri = 0;
++        } else if (strncmp(line, "#EXT-X-I-FRAME-STREAM-INF:", 26) == 0) {
++            keep = 0;
++        } else if (strncmp(line, "#EXT-X-STREAM-INF:", 18) == 0) {
++            char attrs[2048];
++            size_t n = line_len < sizeof(attrs) - 1 ? line_len : sizeof(attrs) - 1;
++            memcpy(attrs, line, n);
++            attrs[n] = '\0';
++            int ok = 1;
++            char *codecs = strstr(attrs, "CODECS=\"");
++            if (codecs) {
++                codecs += 8;
++                char *q = strchr(codecs, '"');
++                if (q) *q = '\0';
++                if (!strstr(codecs, "avc1") && !strstr(codecs, "avc3")) ok = 0;
++                if (q) *q = '"';
++            }
++            char *res = strstr(attrs, "RESOLUTION=");
++            if (res) {
++                int w = 0, h = 0;
++                if (sscanf(res + 11, "%dx%d", &w, &h) == 2 && h > max_height) ok = 0;
++            }
++            if (!ok) {
++                keep = 0;
++                skip_next_uri = 1;
++                dropped++;
++            } else {
++                kept++;
++            }
++        }
++        if (keep) {
++            memcpy(out + pos, line, line_len);
++            pos += line_len;
++        }
++        line = end ? end + 1 : NULL;
++    }
++    out[pos] = '\0';
++    if (kept == 0) {
++        free(out);
++        return master_playlist;
++    }
++    if (dropped) {
++        printf("prune_master_playlist: kept %d variants, dropped %d\n", kept, dropped);
++    }
++    free(master_playlist);
++    return out;
+ }
+--- a/lib/airplay_video.h	2026-10-24 15:37:18
++++ b/lib/airplay_video.h	2026-10-24 15:37:18
+@@ -60,6 +60,7 @@
+                            int datalen, char ***media_uri_table, int *num_uri);
+ void store_master_playlist(airplay_video_t *airplay_video, char *master_playlist);
+ char *select_master_playlist_language(airplay_video_t *airplay_video, char *master_playlist);
++char *prune_master_playlist(char *master_playlist, int max_height);
+ int store_media_playlist(airplay_video_t *airplay_video, char *media_playlist, int *count, float *duration, bool*endlist, int num);
+ char *get_master_playlist(airplay_video_t *airplay_video);
+ char *get_media_playlist(airplay_video_t *airplay_video, int *count, float *duration, const char *uri, bool *should_fetch, const char **remote_uri);
+--- a/lib/http_handlers.h	2026-10-24 15:37:18
++++ b/lib/http_handlers.h	2026-10-24 15:37:18
+@@ -663,6 +663,8 @@
+             int num_uri = 0;
+             char *uri_local_prefix = get_uri_local_prefix(airplay_video);
+             playlist = select_master_playlist_language(airplay_video, playlist);
++            /* each kept variant costs one FCUP round trip to the sender before playback can start */
++            playlist = prune_master_playlist(playlist, 1080);
+             playlist_len = strlen(playlist);
+             create_media_uri_table(uri_prefix, playlist, playlist_len, &uri_list, &num_uri);	
+             char *new_master = adjust_master_playlist (playlist, playlist_len,  uri_prefix, uri_local_prefix);

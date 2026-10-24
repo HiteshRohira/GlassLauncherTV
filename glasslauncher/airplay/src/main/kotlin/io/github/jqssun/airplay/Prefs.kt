@@ -76,11 +76,15 @@ object Prefs {
     val AUTO_START = bool("auto_start", true)
     val BOOT_AUTO_START = bool("boot_auto_start", true)
     val RUN_IN_BACKGROUND = bool("run_in_background", true)
-    val H265 = tri("h265", restart = true)
+    // Glass: H.264 only. iOS mirrors 720p as H.264 anyway, and HEVC has known
+    // freeze reports on weak TV decoders (UxPlay #607).
+    val H265 = str("h265", OFF, restart = true) { it in setOf(AUTO, ON, OFF) }
     val ENFORCE_SDR = bool("enforce_sdr", true, restart = true)
     val KEY_ALLOW_FRAME_DROP = bool(MediaFormat.KEY_ALLOW_FRAME_DROP, true, restart = true)
     val KEY_PRIORITY = bool(MediaFormat.KEY_PRIORITY, true, restart = true)
-    val LOW_LATENCY = bool("low_latency", false)
+    // Glass: must match AudioConfig's default, otherwise the first decoded
+    // packet rebuilds the output stream mid-session (low-latency -> 144 ms).
+    val LOW_LATENCY = bool("low_latency", true)
     val OPERATING_RATE = tri("operating_rate", restart = true)
     val SCHEDULED_OUTPUT_BUFFER_RELEASE = bool("scheduled_output_buffer_release", false, restart = true)
     val AUDIO_AUTO_BUFFER = bool("audio_auto_buffer", true)
