@@ -134,6 +134,17 @@ function endTouch(e){
 pad.addEventListener('pointerup',endTouch);
 pad.addEventListener('pointercancel',()=>{clearTimeout(holdTimer);clearInterval(repeatTimer);touch=null;lit('');});
 
+// iOS overlays the keyboard on a fixed layout; lift sheets above it using the
+// visual viewport so the text field and Send stay visible while typing.
+function fitKeyboard(){
+  const vv=window.visualViewport;if(!vv)return;
+  const covered=Math.max(0,window.innerHeight-vv.height-vv.offsetTop);
+  document.documentElement.style.setProperty('--kb',covered+'px');
+  document.documentElement.style.setProperty('--vvh',vv.height+'px');
+  if(covered>0)window.scrollTo(0,0);
+}
+window.visualViewport?.addEventListener('resize',fitKeyboard);
+window.visualViewport?.addEventListener('scroll',fitKeyboard);
 // Fit the square pad to whatever height is left on this phone.
 function fitPad(){const wrap=pad.parentElement,hint=$('padHint');const h=wrap.clientHeight-(hint.offsetParent?hint.offsetHeight+10:0)-24;pad.style.setProperty('--pad-size',Math.max(180,Math.min(wrap.clientWidth,h))+'px');}
 addEventListener('resize',fitPad);

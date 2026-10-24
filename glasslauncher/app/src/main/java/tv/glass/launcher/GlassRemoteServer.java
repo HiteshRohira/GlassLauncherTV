@@ -56,9 +56,13 @@ final class GlassRemoteServer implements AutoCloseable {
             String host=headers.getOrDefault("host","");
             if(!allowedHost(host)){reply(out,403,"text/plain","Use the TV's local address.");return;}
             String origin=headers.get("origin");
-            if(origin!=null&&!origin.equals("http://"+host)){reply(out,403,"text/plain","Origin rejected");return;}
-            String fetchSite=headers.get("sec-fetch-site");
-            if("cross-site".equals(fetchSite)){reply(out,403,"text/plain","Origin rejected");return;}
+            // Cross-origin checks guard the API only. A Home Screen web app
+            // launch is a top-level navigation that iOS may label cross-site
+            // (or give a "null" origin); the static page itself is harmless.
+            if(path.startsWith("/api/")){
+                if(origin!=null&&!origin.equals("http://"+host)){reply(out,403,"text/plain","Origin rejected");return;}
+                if("cross-site".equals(headers.get("sec-fetch-site"))){reply(out,403,"text/plain","Origin rejected");return;}
+            }
             String ip=socket.getInetAddress().getHostAddress();
             if(limited(rates,ip,100,10000)){reply(out,429,"application/json","{\"error\":\"Too many requests. Try again shortly.\"}");return;}
             if(headers.containsKey("transfer-encoding")){reply(out,400,"text/plain","Unsupported request encoding");return;}

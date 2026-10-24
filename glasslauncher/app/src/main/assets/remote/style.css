@@ -55,7 +55,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;fl
 
 /* Bottom sheets */
 .scrim{position:fixed;inset:0;background:#0009;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:fade .2s ease}
-.sheet{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:460px;max-height:86%;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:linear-gradient(170deg,#2a2b35f7,#1b1c24fa);border:1px solid #ffffff1c;border-bottom:0;border-radius:28px 28px 0 0;padding:10px 22px calc(22px + env(safe-area-inset-bottom));box-shadow:0 -20px 50px #0008;animation:rise .26s cubic-bezier(.2,.8,.2,1)}
+.sheet{position:fixed;left:0;right:0;bottom:var(--kb,0px);transition:bottom .18s ease;margin:0 auto;max-width:460px;max-height:calc(var(--vvh,100%) - 24px);overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:linear-gradient(170deg,#2a2b35f7,#1b1c24fa);border:1px solid #ffffff1c;border-bottom:0;border-radius:28px 28px 0 0;padding:10px 22px calc(22px + env(safe-area-inset-bottom));box-shadow:0 -20px 50px #0008;animation:rise .26s cubic-bezier(.2,.8,.2,1)}
 @keyframes rise{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
 @keyframes fade{from{opacity:0}}
 .grab{width:38px;height:5px;border-radius:3px;background:#ffffff33;margin:0 auto 16px}

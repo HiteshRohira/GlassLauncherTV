@@ -183,6 +183,9 @@ final class ControlCenterPanel extends FrameLayout {
         if(sliding)return true;
         if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE){if(detailKey!=null)backToControls();else hide();return true;}
         if(detailKey!=null){
+            if(!"appearance".equals(detailKey) && (key==KeyEvent.KEYCODE_DPAD_CENTER || key==KeyEvent.KEYCODE_ENTER || key==KeyEvent.KEYCODE_BUTTON_A)){
+                View selected=findFocus();if(selected!=null && selected.isClickable())selected.performClick();return true;
+            }
             // Keep focus inside the sheet: LEFT/RIGHT never escape to the home row.
             return key==KeyEvent.KEYCODE_DPAD_LEFT || key==KeyEvent.KEYCODE_DPAD_RIGHT
                     ? !"appearance".equals(detailKey) : false;
