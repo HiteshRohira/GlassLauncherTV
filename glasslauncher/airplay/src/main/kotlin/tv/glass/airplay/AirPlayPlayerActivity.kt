@@ -214,9 +214,12 @@ class AirPlayPlayerActivity : Activity() {
 
         // Close shortly after the sender leaves; a brief gap is normal while
         // a sender switches between mirroring and video.
-        if (kind == "idle" && pin == null && !pending) {
+        // A connection with no stream (after mirroring stops, the sender may
+        // linger) gets longer, since a new stream may still be negotiating.
+        if ((kind == "idle" || kind == "connecting") && pin == null && !pending) {
+            val limit = if (kind == "idle") IDLE_CLOSE_MS else CONNECTING_CLOSE_MS
             if (idleSince == 0L) idleSince = SystemClock.elapsedRealtime()
-            else if (SystemClock.elapsedRealtime() - idleSince > IDLE_CLOSE_MS) finish()
+            else if (SystemClock.elapsedRealtime() - idleSince > limit) finish()
         } else idleSince = 0L
     }
 
@@ -356,6 +359,7 @@ class AirPlayPlayerActivity : Activity() {
 
     companion object {
         private const val IDLE_CLOSE_MS = 2_500L
+        private const val CONNECTING_CLOSE_MS = 10_000L
         private const val STOP_CONFIRM_MS = 3_000L
         private const val CONTROLS_MS = 4_000L
     }

@@ -64,11 +64,12 @@
          behind this normal-protection-level permission. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
-    <!-- AirPlay status (toolbar pill + failure banner). The monitor runs as a
-         minimum-priority foreground service in its own small process so it
-         keeps watching while other apps are open; it starts at boot and
-         draws a brief non-focusable banner over other apps when the AirPlay
-         receiver stops advertising while the TV is in use. -->
+    <!-- Built-in AirPlay receiver and phone remote. Their host runs as a
+         minimum-priority foreground service in the small ":airplay" process
+         so they stay available while other apps are open; it starts at boot
+         and draws a brief non-focusable banner over other apps if the
+         receiver cannot be advertised while the TV is in use. The engine's
+         network permissions come from the :airplay module manifest. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -203,8 +204,8 @@
 
         </activity>
 
-        <!-- AirPlay receiver monitor. Not exported; started by the launcher
-             and by the boot receiver below. -->
+        <!-- Background host for the AirPlay engine and phone remote. Not
+             exported; started by the launcher and the boot receiver below. -->
         <service
             android:name=".AirPlayMonitorService"
             android:exported="false"
@@ -212,7 +213,7 @@
             android:process=":airplay">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Hosts the local phone remote and monitors the AirPlay receiver" />
+                android:value="Hosts the built-in AirPlay receiver and the local phone remote" />
         </service>
 
         <receiver

@@ -437,7 +437,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_START_SERVER) {
+        // A null intent is a sticky restart after the process was killed.
+        if (intent == null || intent.action == ACTION_START_SERVER) {
             promoteToForeground()
             _startServer(ensureServiceStarted = false)
             if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
@@ -732,6 +733,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onVideoPlay(location: String, startPositionSeconds: Float) {
+        _showPlayerOnce()
         _videoLocation.value = location
         _videoPlaySeq.value++
         _videoPollSuppressed = false
@@ -757,6 +759,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     override fun onVideoStop() = _endVideoPlayback("AirPlay Video stopped")
 
     override fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean) {
+        if (!usingScreen) _showPlayerOnce()
         clearPin()
         audioRenderer.start()
         audioRenderer.setFormat(ct, spf)
@@ -877,7 +880,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val firstConnection = _connectionCount.value == 0
         _connectionCount.value++
         log("Sender connected (${_connectionCount.value})")
-        if (firstConnection && shouldLaunchOnConnect()) launchMainActivity()
+        if (firstConnection) _playerShown = false
     }
 
     override fun onConnectionDestroy() {
@@ -916,6 +919,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onDisplayPin(pin: String) {
+        _showPlayerOnce()
         if (_lastPin == pin) return
         _lastPin = pin
         pinCallback?.invoke(pin)
@@ -965,6 +969,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onMirrorRunning(running: Boolean) {
+        if (running) _showPlayerOnce()
         if (running) videoRenderer.startSession() else {
             videoRenderer.stopSession()
             _mirroringActive.value = false
@@ -1205,6 +1210,18 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             }
         }
         return builder.build()
+    }
+
+    // Senders open throwaway connections (e.g. while an iPhone lists
+    // receivers), so the player appears only once a real session starts:
+    // mirroring, video, music or a PIN prompt. Once per connection, so Back
+    // during music is respected for the rest of that session.
+    @Volatile private var _playerShown = false
+
+    private fun _showPlayerOnce() {
+        if (_playerShown || !shouldLaunchOnConnect()) return
+        _playerShown = true
+        launchMainActivity()
     }
 
     private fun launchMainActivity() {

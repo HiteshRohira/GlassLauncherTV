@@ -30,7 +30,7 @@ final class GlassRemotePanel {
                 int[] pixels=new int[256*256];for(int y=0;y<256;y++)for(int x=0;x<256;x++)pixels[y*256+x]=matrix.get(x,y)?Color.BLACK:Color.WHITE;
                 Bitmap image=Bitmap.createBitmap(pixels,256,256,Bitmap.Config.ARGB_8888);
                 ImageView qr=new ImageView(context);qr.setImageBitmap(image);qr.setContentDescription("QR code for the phone remote");
-                LinearLayout.LayoutParams qp=new LinearLayout.LayoutParams(NativeTheme.px(context,150),NativeTheme.px(context,150));qp.topMargin=NativeTheme.px(context,12);qp.bottomMargin=NativeTheme.px(context,10);content.addView(qr,qp);
+                LinearLayout.LayoutParams qp=new LinearLayout.LayoutParams(NativeTheme.px(context,200),NativeTheme.px(context,200));qp.topMargin=NativeTheme.px(context,16);qp.bottomMargin=NativeTheme.px(context,10);content.addView(qr,qp);
                 content.addView(text(context,url,15));
             }else content.addView(text(context,"Connect this TV to Wi-Fi first.",15));
             TextView pin=text(context,"Pairing code  ·  "+access.pin,24);LinearLayout.LayoutParams pp=new LinearLayout.LayoutParams(-2,-2);pp.topMargin=NativeTheme.px(context,14);content.addView(pin,pp);

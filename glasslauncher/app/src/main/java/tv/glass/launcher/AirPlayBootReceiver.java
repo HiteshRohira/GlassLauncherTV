@@ -4,9 +4,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 
-/** Starts the AirPlay monitor after boot and after Glass updates, so the
- *  failure banner works even before Home is first shown. No-op when the
- *  receiver app is not installed. */
+/** Starts Glass's background host (built-in AirPlay receiver and phone
+ *  remote) after boot and after Glass updates, before Home is first shown. */
 public final class AirPlayBootReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context ctx, Intent intent) {
         String a = intent.getAction();
