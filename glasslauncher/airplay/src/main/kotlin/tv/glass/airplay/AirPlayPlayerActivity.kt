@@ -196,7 +196,13 @@ class AirPlayPlayerActivity : Activity() {
 
         val showWaiting = pin != null || (!mirroring && !playing && !audio)
         show(waiting, showWaiting)
-        if (pin != null) {
+        // A failed video says why for a few seconds before the screen closes.
+        val error = service?.videoError?.value?.takeIf { SystemClock.elapsedRealtime() - it.second < ERROR_SHOW_MS }
+        if (pin == null && error != null && !mirroring && !playing && !audio) {
+            waitingTitle.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(26).toFloat())
+            waitingTitle.text = "Couldn’t play this video"
+            waitingBody.text = error.first
+        } else if (pin != null) {
             waitingTitle.text = pin.chunked(2).joinToString("  ")
             waitingTitle.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(44).toFloat())
             waitingBody.text = "Enter this code on your iPhone, iPad or Mac"
@@ -218,7 +224,7 @@ class AirPlayPlayerActivity : Activity() {
         // a sender switches between mirroring and video.
         // A connection with no stream (after mirroring stops, the sender may
         // linger) gets longer, since a new stream may still be negotiating.
-        if ((kind == "idle" || kind == "connecting") && pin == null && !pending) {
+        if ((kind == "idle" || kind == "connecting") && pin == null && !pending && error == null) {
             val limit = if (kind == "idle") IDLE_CLOSE_MS else CONNECTING_CLOSE_MS
             if (idleSince == 0L) idleSince = SystemClock.elapsedRealtime()
             else if (SystemClock.elapsedRealtime() - idleSince > limit) finish()
@@ -364,6 +370,7 @@ class AirPlayPlayerActivity : Activity() {
         private const val CONNECTING_CLOSE_MS = 10_000L
         private const val STOP_CONFIRM_MS = 3_000L
         private const val CONTROLS_MS = 4_000L
+        private const val ERROR_SHOW_MS = 4_500L
     }
 }
 

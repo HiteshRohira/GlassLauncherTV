@@ -351,11 +351,11 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeUpdatePlaybackInfo(
         JNIEnv *env, jobject thiz, jlong handle,
-        jfloat position, jfloat duration, jfloat rate, jboolean readyToPlay) {
+        jfloat position, jfloat duration, jfloat rate, jboolean readyToPlay, jboolean paused) {
 
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx) return;
-    android_callbacks_update_playback_info(&ctx->cb_ctx, position, duration, rate, readyToPlay ? 1 : 0);
+    android_callbacks_update_playback_info(&ctx->cb_ctx, position, duration, rate, readyToPlay ? 1 : 0, paused ? 1 : 0);
 }
 
 extern "C"

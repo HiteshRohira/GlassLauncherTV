@@ -126,6 +126,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private val _videoPlaybackSize = MutableStateFlow<Pair<Int, Int>?>(null)
     val videoPlaybackSize = _videoPlaybackSize.asStateFlow()
 
+    /** Why the last AirPlay video stopped, and when (elapsedRealtime), so the
+     *  player can say so instead of closing silently. */
+    private val _videoError = MutableStateFlow<Pair<String, Long>?>(null)
+    val videoError = _videoError.asStateFlow()
+
     // container/manifest metadata
     private val _videoTitle = MutableStateFlow("")
     val videoTitle = _videoTitle.asStateFlow()
@@ -476,9 +481,14 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         airPlayVideoPlayer.onTitle = { _videoTitle.value = it ?: "" }
         videoRenderer.onError = { noteError(it) }
         airPlayVideoPlayer.onEnded = { _endVideoPlayback("AirPlay Video stopped (player)") }
+        airPlayVideoPlayer.onFailed = { reason ->
+            _videoError.value = reason to SystemClock.elapsedRealtime()
+            noteError(reason)
+            _endVideoPlayback("AirPlay Video failed: $reason")
+        }
         airPlayVideoPlayer.onPlaybackInfo = { snapshot ->
             if (nativeHandle != 0L) {
-                NativeBridge.nativeUpdatePlaybackInfo(nativeHandle, snapshot.position, snapshot.duration, snapshot.rate, snapshot.ready)
+                NativeBridge.nativeUpdatePlaybackInfo(nativeHandle, snapshot.position, snapshot.duration, snapshot.rate, snapshot.ready, !snapshot.playWhenReady)
             }
             if (_videoPlaybackActive.value) {
                 _updateVideoPlaybackState(snapshot.position, snapshot.rate)
@@ -822,6 +832,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _videoLocation.value = location
         _videoPlaySeq.value++
         _videoPollSuppressed = false
+        _videoError.value = null
         _videoPlaybackInfo.value = VideoPlaybackInfo(positionMs = (startPositionSeconds * 1000).toLong())
         _videoPlaybackAspect.value = 16f / 9f
         _videoPlaybackSize.value = null

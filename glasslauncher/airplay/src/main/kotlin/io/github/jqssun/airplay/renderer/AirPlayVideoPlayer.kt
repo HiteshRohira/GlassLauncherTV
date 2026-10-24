@@ -41,6 +41,9 @@ class AirPlayVideoPlayer(private val context: Context) {
     var onVideoSize: ((width: Int, height: Int, aspect: Float) -> Unit)? = null
     var onTitle: ((String?) -> Unit)? = null
     var onEnded: (() -> Unit)? = null
+    /** Playback failed for good (after one retry when that made sense). */
+    var onFailed: ((String) -> Unit)? = null
+    private var retried = false
 
     private val _reportTick = object : Runnable {
         override fun run() {
@@ -51,8 +54,17 @@ class AirPlayVideoPlayer(private val context: Context) {
 
     private val _listener = object : Player.Listener {
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            Log.w(TAG, "playback error", error)
-            onEnded?.invoke()
+            Log.w(TAG, "playback error ${error.errorCodeName}", error)
+            val p = player
+            // One retry for errors that are usually momentary on a home network.
+            if (p != null && !retried && _retryable(error)) {
+                retried = true
+                Log.i(TAG, "retrying once after ${error.errorCodeName}")
+                if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) p.seekToDefaultPosition()
+                p.prepare()
+                return
+            }
+            onFailed?.invoke(describe(error)) ?: onEnded?.invoke()
         }
         override fun onPlaybackStateChanged(state: Int) {
             if (state == Player.STATE_ENDED) onEnded?.invoke()
@@ -75,13 +87,18 @@ class AirPlayVideoPlayer(private val context: Context) {
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
+        retried = false
         val p = ExoPlayer.Builder(context)
             // Start as soon as ~0.75 s is buffered (default 2.5 s): AirPlay
             // video comes from the phone on the same network, so a short
             // initial buffer is safe and makes the first frame much sooner.
+            // Glass: at most ~30 s / 24 MB ahead. The default kept loading to
+            // 50 s (about 50 MB at 8 Mb/s) in a long-lived process on a TV
+            // with 1.4 GiB of RAM.
             .setLoadControl(DefaultLoadControl.Builder()
-                .setBufferDurationsMs(15_000, 50_000, 750, 2_000)
-                .setPrioritizeTimeOverSizeThresholds(true)
+                .setBufferDurationsMs(15_000, 30_000, 750, 2_000)
+                .setTargetBufferBytes(TARGET_BUFFER_BYTES)
+                .setPrioritizeTimeOverSizeThresholds(false)
                 .build())
             .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true))
             .build().also {
@@ -198,8 +215,33 @@ class AirPlayVideoPlayer(private val context: Context) {
         )
     }
 
+    private fun _retryable(e: androidx.media3.common.PlaybackException): Boolean {
+        val c = e.errorCode
+        if (c == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) return true
+        if (c == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            c == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT) return true
+        val http = e.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
+        return http != null && http.responseCode >= 500
+    }
+
     companion object {
         private const val TAG = "AirPlayVideoPlayer"
+        private const val TARGET_BUFFER_BYTES = 24 * 1024 * 1024
+
+        /** Short reason for the TV screen. */
+        fun describe(e: androidx.media3.common.PlaybackException): String {
+            val c = e.errorCode
+            val http = e.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
+            return when {
+                http != null && (http.responseCode == 403 || http.responseCode == 404 || http.responseCode == 410) ->
+                    "The video link expired or was refused (${http.responseCode})"
+                c in 2000..2999 -> "The video stream couldn’t be reached"
+                c in 3000..3999 -> "The video data couldn’t be read"
+                c in 4000..4999 -> "This video format isn’t supported on this TV"
+                c in 6000..6999 -> "This video is protected and can’t play here"
+                else -> "The video stopped unexpectedly"
+            }
+        }
         private const val REPORT_INTERVAL_MS = 250L
     }
 }

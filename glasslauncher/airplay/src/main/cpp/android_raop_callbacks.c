@@ -98,6 +98,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->playback_duration = 0.0;
     ctx->playback_rate = 0.0f;
     ctx->playback_ready = 0;
+    ctx->playback_paused = 0;
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
@@ -138,8 +139,9 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
 }
 
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
-                                             double duration, float rate, int ready) {
+                                             double duration, float rate, int ready, int paused) {
     pthread_mutex_lock(&ctx->playback_info_lock);
+    ctx->playback_paused = paused;
     ctx->playback_position = position;
     ctx->playback_duration = duration;
     ctx->playback_rate = rate;
@@ -265,9 +267,9 @@ static void _video_reset(void *cls, reset_type_t t) {
         _video_stop(cls);
     }
     if (t == RESET_TYPE_HLS_CONN_CLOSED) {
-        /* abandoned only if paused and ready: rate alone is also 0 while buffering */
+        /* abandoned only if ready and actually paused: rate is also 0 while buffering */
         pthread_mutex_lock(&ctx->playback_info_lock);
-        int paused = ctx->playback_ready && ctx->playback_rate <= 0.0f;
+        int paused = ctx->playback_ready && ctx->playback_paused;
         pthread_mutex_unlock(&ctx->playback_info_lock);
         if (paused) {
             _video_stop(cls);
@@ -374,7 +376,7 @@ static void _video_play(void *cls, const char *location, const float start_posit
     pthread_mutex_lock(&ctx->playback_info_lock);
     ctx->play_ready = 0;
     pthread_mutex_unlock(&ctx->playback_info_lock);
-    android_callbacks_update_playback_info(ctx, start_position, 0.0, 0.0f, 0);
+    android_callbacks_update_playback_info(ctx, start_position, 0.0, 0.0f, 0, 0);
     JNIEnv *env = _get_env(ctx);
     if (!env || !location) return;
     jstring jloc = (*env)->NewStringUTF(env, location);
@@ -430,7 +432,7 @@ static void _video_rate(void *cls, const float rate) {
 
 static void _video_stop(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    android_callbacks_update_playback_info(ctx, 0.0, -1.0, 0.0f, 0);
+    android_callbacks_update_playback_info(ctx, 0.0, -1.0, 0.0f, 0, 0);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_stop);
