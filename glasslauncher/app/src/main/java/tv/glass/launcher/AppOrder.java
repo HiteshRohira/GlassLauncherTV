@@ -68,4 +68,15 @@ final class AppOrder {
         }
         return sb.toString();
     }
+
+    /** Glass: when apps were added or removed, keep focus on the same app
+     *  rather than the same position (removing an earlier tile used to move
+     *  focus to its neighbour). Same-size refreshes keep the index, because
+     *  reorders set the intended index themselves. */
+    static int keepIndexFor(List<AppInfo> now, String keepPkg, int keepIdx, int oldSize) {
+        if (keepPkg != null && now.size() != oldSize) {
+            for (int i = 0; i < now.size(); i++) if (keepPkg.equals(now.get(i).packageName)) return i;
+        }
+        return Math.min(Math.max(keepIdx, 0), now.size() - 1);
+    }
 }

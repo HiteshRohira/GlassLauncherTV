@@ -689,6 +689,11 @@ public class LauncherActivity extends Activity {
     private final ArrayList<AppInfo> visibleScratch = new ArrayList<>();
 
     private boolean pkgChangedWhilePaused = false;
+    /** Glass: bumped on every package event; a scan that started before the
+     *  latest event runs again when it finishes, so an install/remove that
+     *  lands mid-scan is never lost (loadApps returns early while one runs). */
+    private final java.util.concurrent.atomic.AtomicInteger pkgRequestedGen = new java.util.concurrent.atomic.AtomicInteger();
+    private int pkgScanGen;
     /** Packages flagged by {@link #packageReceiver} as REPLACED / CHANGED
      *  whose icons must be re-decoded on the next reconcile. Cleared after
      *  the reconcile consumes it. UI-thread only — no synchronisation. */
@@ -1448,6 +1453,7 @@ public class LauncherActivity extends Activity {
                 }
             }
             pkgChangedWhilePaused = true;
+            pkgRequestedGen.incrementAndGet();
             // Invalidate cached picker chip strip — its identities can no
             // longer be trusted to match the in-memory appList after a
             // package install / remove / replace. Same applies to the
@@ -1520,13 +1526,12 @@ public class LauncherActivity extends Activity {
         // would render in the OLD cached order for ~200 ms before the
         // PM-scan reconcile detects the order change and re-renders —
         // visible as a transient flicker after every reorder + reboot.
-        // Best-effort write on a background thread: appExecutor uses a
-        // DiscardPolicy, so a saturated (or shut-down) executor silently
-        // drops the task rather than throwing — the cache then converges
-        // on the next loadApps reconcile that detects the new order.
+        // Best-effort write on a background thread: if the executor is full or
+        // shut down the cache converges on the next loadApps reconcile.
         final ArrayList<AppInfo> snapshot = new ArrayList<>(appList);
         final Context appCtx = getApplicationContext();
-        appExecutor.execute(() -> AppListCache.writeFileFromAppInfo(appCtx, snapshot));
+        try { appExecutor.execute(() -> AppListCache.writeFileFromAppInfo(appCtx, snapshot)); }
+        catch (java.util.concurrent.RejectedExecutionException ignored) { }
     }
 
     /** Persist the home/drawer boundary. Cheap and synchronous — written only
@@ -4862,10 +4867,12 @@ public class LauncherActivity extends Activity {
             // (the activity may rebuild appList during a package broadcast
             // without re-calling setApps; we want stable rendering until
             // applyShelfApps is invoked again).
+            final String keepPkg = keepIdx >= 0 && keepIdx < displayed.size() ? displayed.get(keepIdx).packageName : null;
+            final int oldSize = displayed.size();
             displayed.clear();
             if (apps != null && !apps.isEmpty()) displayed.addAll(apps);
             if (displayed.isEmpty()) { focusedIndex = 0; scrollX = 0; }
-            else                     focusedIndex = Math.min(keepIdx, displayed.size() - 1);
+            else                     focusedIndex = AppOrder.keepIndexFor(displayed, keepPkg, keepIdx, oldSize);
             totalW = displayed.size() * stride; centerX = 0; needsRefill = true;
             requestLayout();
             for (AppInfo app : displayed) preWarmBanner(app);
@@ -6069,10 +6076,12 @@ public class LauncherActivity extends Activity {
             // apps — nothing will ever reach the posted branch to clear it,
             // so there is no gap left to protect and leaving it true would
             // wedge every future DrawerCell focus/label update).
+            final String keepPkg = keepIdx >= 0 && keepIdx < displayed.size() ? displayed.get(keepIdx).packageName : null;
+            final int oldSize = displayed.size();
             displayed.clear();
             if (apps != null && !apps.isEmpty()) displayed.addAll(apps);
             if (displayed.isEmpty()) { focusedIndex = 0; scrollY = 0; }
-            else focusedIndex = Math.min(keepIdx, displayed.size() - 1);
+            else focusedIndex = AppOrder.keepIndexFor(displayed, keepPkg, keepIdx, oldSize);
             recomputeContentHeight();
             requestLayout();
             // No eager pre-warm of the whole list: banner tiles are heavier
@@ -7041,6 +7050,7 @@ public class LauncherActivity extends Activity {
 
     private void loadApps() {
         if (!appsLoading.compareAndSet(false, true)) return;
+        pkgScanGen = pkgRequestedGen.get();
         // A5 fix: bail before any work if the activity was already torn
         // down. A package broadcast can post pkgReloadRunnable to the
         // shelf's looper just before {@link #onDestroy} nulls the shelf,
@@ -7370,6 +7380,7 @@ public class LauncherActivity extends Activity {
                         }
                     } finally {
                         appsLoading.set(false);
+                        rescanIfPackagesChanged();
                     }
                 });
             });
@@ -7394,6 +7405,15 @@ public class LauncherActivity extends Activity {
             // deferred reloads share one cancellable Runnable.
             uiHandler.postDelayed(pkgReloadRunnable, 400);
         }
+    }
+
+    /** A package event arrived while the last scan ran: scan again (now, or on
+     *  resume when paused). */
+    private void rescanIfPackagesChanged() {
+        if (destroyed || pkgRequestedGen.get() == pkgScanGen) return;
+        if (uiPaused) { pkgChangedWhilePaused = true; return; }
+        uiHandler.removeCallbacks(pkgReloadRunnable);
+        uiHandler.postDelayed(pkgReloadRunnable, 400);
     }
 
     /** Count of apps in {@code list} that survive the hidden-apps
@@ -10329,7 +10349,7 @@ public class LauncherActivity extends Activity {
         List<IconTarget> waiters = new ArrayList<>(2);
         iconInflight.put(key, waiters);
         try {
-            iconExecutor.execute(() -> {
+            iconExecutor.execute(new DiscardOldestWithCleanup.Task(() -> {
                 if (destroyed) return;
                 Bitmap bmp = null;
                 boolean sourceCurrent = false;
@@ -10365,7 +10385,7 @@ public class LauncherActivity extends Activity {
                         onIconLoaded(key, fb);
                     }
                 });
-            });
+            }, () -> { if (iconInflight.get(key) == waiters) iconInflight.remove(key); }));
         } catch (java.util.concurrent.RejectedExecutionException e) { iconInflight.remove(key); }
     }
 
@@ -10578,7 +10598,7 @@ public class LauncherActivity extends Activity {
         List<IconTarget> waiters = new ArrayList<>(2);
         bannerInflight.put(key, waiters);
         try {
-            iconExecutor.execute(() -> {
+            iconExecutor.execute(new DiscardOldestWithCleanup.Task(() -> {
                 if (destroyed) return;
                 Bitmap bmp = null;
                 boolean sourceCurrent = false;
@@ -10611,7 +10631,7 @@ public class LauncherActivity extends Activity {
                         }
                     }
                 });
-            });
+            }, () -> { if (bannerInflight.get(key) == waiters) bannerInflight.remove(key); }));
         } catch (java.util.concurrent.RejectedExecutionException e) { bannerInflight.remove(key); }
     }
 
@@ -10630,7 +10650,7 @@ public class LauncherActivity extends Activity {
         bannerInflight.put(key, waiters);
         final List<IconTarget> fw = waiters;
         try {
-            iconExecutor.execute(() -> {
+            iconExecutor.execute(new DiscardOldestWithCleanup.Task(() -> {
                 if (destroyed) return;
                 Bitmap bmp = null;
                 boolean sourceCurrent = false;
@@ -10664,7 +10684,7 @@ public class LauncherActivity extends Activity {
                             cell.setIconBitmap(fb);
                     }
                 });
-            });
+            }, () -> { if (bannerInflight.get(key) == fw) bannerInflight.remove(key); }));
         } catch (java.util.concurrent.RejectedExecutionException e) { bannerInflight.remove(key); }
     }
 
@@ -12466,8 +12486,11 @@ public class LauncherActivity extends Activity {
         // discard path is no longer reachable in practice while still
         // keeping the queue bounded against a genuinely runaway producer.
         int iconWorkers = Math.max(2, cores);
+        // Glass: DiscardOldestWithCleanup instead of DiscardOldestPolicy, so a
+        // dropped artwork task clears its in-flight entry (and user actions
+        // such as saving a custom icon are never dropped silently).
         iconExecutor = new ThreadPoolExecutor(iconWorkers, iconWorkers, 30L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(1024), new ThreadPoolExecutor.DiscardOldestPolicy());
+                new ArrayBlockingQueue<>(1024), new DiscardOldestWithCleanup());
         iconExecutor.allowCoreThreadTimeOut(true);
         // Wallpaper executor is now owned by {@link WallpaperController}
         // (constructed later inside {@link #buildLayout()}). The activity
@@ -12478,8 +12501,13 @@ public class LauncherActivity extends Activity {
         // meant the thread, once spawned, lived forever even though
         // it's idle for 99.99 % of the session. 30 s + core-thread-
         // timeout matches the icon executor's discipline.
+        // Glass: a full queue throws (AbortPolicy) instead of silently dropping:
+        // loadApps sets appsLoading before submitting and relies on the
+        // RejectedExecutionException path to clear it and retry. A silently
+        // discarded scan left the app list stuck "loading". Cache writes share
+        // this queue, hence room for a few.
         ThreadPoolExecutor app = new ThreadPoolExecutor(1, 1, 30L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(1), new ThreadPoolExecutor.DiscardPolicy());
+                new ArrayBlockingQueue<>(8), new ThreadPoolExecutor.AbortPolicy());
         app.allowCoreThreadTimeOut(true);
         appExecutor = app;
 
