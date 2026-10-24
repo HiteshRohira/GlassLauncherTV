@@ -513,7 +513,9 @@ android {
         // Apple-silicon Android TV emulator). Each extra ABI rebuilds
         // OpenSSL and FFmpeg, so x86 emulators are intentionally omitted.
         ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            // Glass: -PtvAbiOnly builds ARMv7 only (this TV's 32-bit userspace) for a
+            // smaller APK and faster build; the default keeps ARM64 for emulators.
+            abiFilters += if (project.hasProperty("tvAbiOnly")) listOf("armeabi-v7a") else listOf("armeabi-v7a", "arm64-v8a")
         }
     }
 

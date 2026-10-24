@@ -12560,12 +12560,22 @@ public class LauncherActivity extends Activity {
         // cost of the higher bound is negligible and transient) — so the
         // discard path is no longer reachable in practice while still
         // keeping the queue bounded against a genuinely runaway producer.
-        int iconWorkers = Math.max(2, cores);
+        // Glass: two decode threads at background priority. One per core at
+        // default priority competed with the UI thread on this quad-core TV
+        // during cold start (and with AirPlay when it runs).
+        int iconWorkers = Math.min(2, Math.max(1, cores));
         // Glass: DiscardOldestWithCleanup instead of DiscardOldestPolicy, so a
         // dropped artwork task clears its in-flight entry (and user actions
         // such as saving a custom icon are never dropped silently).
         iconExecutor = new ThreadPoolExecutor(iconWorkers, iconWorkers, 30L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(1024), new DiscardOldestWithCleanup());
+                new ArrayBlockingQueue<>(1024), r -> {
+                    Thread t = new Thread(() -> {
+                        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                        r.run();
+                    }, "glass-art");
+                    t.setDaemon(true);
+                    return t;
+                }, new DiscardOldestWithCleanup());
         iconExecutor.allowCoreThreadTimeOut(true);
         // Wallpaper executor is now owned by {@link WallpaperController}
         // (constructed later inside {@link #buildLayout()}). The activity
