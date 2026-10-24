@@ -1,0 +1,209 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Glass TV <noreply@glass.tv>
+Date: Sat, 24 Oct 2026 21:03:01 +0530
+Subject: [PATCH] glass: keep at most three HLS variants and referenced
+ renditions
+
+---
+ lib/airplay_video.c | 138 +++++++++++++++++++++++++++++++++-----------
+ lib/airplay_video.h |   2 +-
+ lib/http_handlers.h |   5 +-
+ 3 files changed, 108 insertions(+), 37 deletions(-)
+
+diff --git a/lib/airplay_video.c b/lib/airplay_video.c
+index 50b265b..1cac43f 100644
+--- a/lib/airplay_video.c
++++ b/lib/airplay_video.c
+@@ -1170,15 +1170,97 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
+  * codec) at or below max_height. Drops I-frame-only playlists entirely. If
+  * nothing would survive, the playlist is returned unchanged. Takes ownership
+  * of master_playlist and returns a malloc'd string. */
+-char *prune_master_playlist(char *master_playlist, int max_height) {
++/* Glass: each kept variant and rendition costs one FCUP round trip to the
++ * sender before playback can start. Keep at most three H.264 variants no
++ * taller than max_height (the best up to max_height, the best up to 720p and
++ * the lowest bitrate as a fallback for weak Wi-Fi), and only the audio and
++ * subtitle renditions those variants reference. Returns the input unchanged
++ * when nothing would survive. *kept / *dropped report variant counts. */
++#define PRUNE_MAX_VARIANTS 3
++
++static int _attr_int(const char *attrs, const char *key, int fallback) {
++    const char *p = strstr(attrs, key);
++    return p ? atoi(p + strlen(key)) : fallback;
++}
++
++/* Copies a quoted attribute value (e.g. AUDIO="aac") into out; "" if absent. */
++static void _attr_quoted(const char *attrs, const char *key, char *out, size_t outlen) {
++    out[0] = '\0';
++    const char *p = strstr(attrs, key);
++    if (!p) return;
++    p += strlen(key);
++    const char *q = strchr(p, '"');
++    if (!q) return;
++    size_t n = (size_t) (q - p) < outlen - 1 ? (size_t) (q - p) : outlen - 1;
++    memcpy(out, p, n);
++    out[n] = '\0';
++}
++
++typedef struct {
++    int height, bandwidth, eligible, keep;
++    char audio[64], subs[64];
++} _variant_t;
++
++char *prune_master_playlist(char *master_playlist, int max_height, int *kept_out, int *dropped_out) {
++    if (kept_out) *kept_out = 0;
++    if (dropped_out) *dropped_out = 0;
++    /* pass 1: collect variants */
++    int count = 0, cap = 16;
++    _variant_t *v = calloc(cap, sizeof(_variant_t));
++    if (!v) return master_playlist;
++    for (char *line = master_playlist; line && *line; ) {
++        char *end = strchr(line, '\n');
++        size_t line_len = end ? (size_t) (end - line) : strlen(line);
++        if (strncmp(line, "#EXT-X-STREAM-INF:", 18) == 0) {
++            if (count == cap) {
++                _variant_t *grown = realloc(v, 2 * cap * sizeof(_variant_t));
++                if (!grown) { free(v); return master_playlist; }
++                v = grown;
++                memset(v + cap, 0, cap * sizeof(_variant_t));
++                cap *= 2;
++            }
++            char attrs[2048];
++            size_t n = line_len < sizeof(attrs) - 1 ? line_len : sizeof(attrs) - 1;
++            memcpy(attrs, line, n);
++            attrs[n] = '\0';
++            _variant_t *x = &v[count++];
++            char codecs[256];
++            _attr_quoted(attrs, "CODECS=\"", codecs, sizeof(codecs));
++            int avc = codecs[0] == '\0' || strstr(codecs, "avc1") || strstr(codecs, "avc3");
++            int w = 0, h = 0;
++            const char *res = strstr(attrs, "RESOLUTION=");
++            if (!res || sscanf(res + 11, "%dx%d", &w, &h) != 2) h = 0;
++            x->height = h;
++            x->bandwidth = _attr_int(attrs, "BANDWIDTH=", 0);
++            x->eligible = avc && h <= max_height;
++            _attr_quoted(attrs, "AUDIO=\"", x->audio, sizeof(x->audio));
++            _attr_quoted(attrs, "SUBTITLES=\"", x->subs, sizeof(x->subs));
++        }
++        line = end ? end + 1 : NULL;
++    }
++    /* choose: best <= max_height, best <= 720, lowest bitrate */
++    int best = -1, best720 = -1, lowest = -1, eligible = 0;
++    for (int i = 0; i < count; i++) {
++        if (!v[i].eligible) continue;
++        eligible++;
++        if (best < 0 || v[i].height > v[best].height ||
++            (v[i].height == v[best].height && v[i].bandwidth > v[best].bandwidth)) best = i;
++        if (v[i].height <= 720 && (best720 < 0 || v[i].height > v[best720].height ||
++            (v[i].height == v[best720].height && v[i].bandwidth > v[best720].bandwidth))) best720 = i;
++        if (lowest < 0 || v[i].bandwidth < v[lowest].bandwidth) lowest = i;
++    }
++    if (eligible == 0) { free(v); return master_playlist; }
++    int picks[PRUNE_MAX_VARIANTS] = { best, best720, lowest };
++    int kept = 0;
++    for (int k = 0; k < PRUNE_MAX_VARIANTS; k++) if (picks[k] >= 0 && !v[picks[k]].keep) { v[picks[k]].keep = 1; kept++; }
++
++    /* pass 2: write kept variants and referenced renditions */
+     size_t len = strlen(master_playlist);
+-    char *out = (char *) malloc(len + 1);
+-    if (!out) return master_playlist;
++    char *out = malloc(len + 1);
++    if (!out) { free(v); return master_playlist; }
+     size_t pos = 0;
+-    int kept = 0, dropped = 0;
+-    int skip_next_uri = 0;
+-    char *line = master_playlist;
+-    while (line && *line) {
++    int vi = -1, skip_next_uri = 0;
++    for (char *line = master_playlist; line && *line; ) {
+         char *end = strchr(line, '\n');
+         size_t line_len = end ? (size_t) (end - line + 1) : strlen(line);
+         int keep = 1;
+@@ -1188,30 +1270,20 @@ char *prune_master_playlist(char *master_playlist, int max_height) {
+         } else if (strncmp(line, "#EXT-X-I-FRAME-STREAM-INF:", 26) == 0) {
+             keep = 0;
+         } else if (strncmp(line, "#EXT-X-STREAM-INF:", 18) == 0) {
+-            char attrs[2048];
++            vi++;
++            if (!v[vi].keep) { keep = 0; skip_next_uri = 1; }
++        } else if (strncmp(line, "#EXT-X-MEDIA:", 13) == 0) {
++            char attrs[2048], group[64];
+             size_t n = line_len < sizeof(attrs) - 1 ? line_len : sizeof(attrs) - 1;
+             memcpy(attrs, line, n);
+             attrs[n] = '\0';
+-            int ok = 1;
+-            char *codecs = strstr(attrs, "CODECS=\"");
+-            if (codecs) {
+-                codecs += 8;
+-                char *q = strchr(codecs, '"');
+-                if (q) *q = '\0';
+-                if (!strstr(codecs, "avc1") && !strstr(codecs, "avc3")) ok = 0;
+-                if (q) *q = '"';
+-            }
+-            char *res = strstr(attrs, "RESOLUTION=");
+-            if (res) {
+-                int w = 0, h = 0;
+-                if (sscanf(res + 11, "%dx%d", &w, &h) == 2 && h > max_height) ok = 0;
+-            }
+-            if (!ok) {
+-                keep = 0;
+-                skip_next_uri = 1;
+-                dropped++;
+-            } else {
+-                kept++;
++            _attr_quoted(attrs, "GROUP-ID=\"", group, sizeof(group));
++            int audio = strstr(attrs, "TYPE=AUDIO") != NULL, subs = strstr(attrs, "TYPE=SUBTITLES") != NULL;
++            if (group[0] && (audio || subs)) {
++                int used = 0;
++                for (int i = 0; i < count && !used; i++)
++                    if (v[i].keep && !strcmp(audio ? v[i].audio : v[i].subs, group)) used = 1;
++                keep = used;
+             }
+         }
+         if (keep) {
+@@ -1221,13 +1293,9 @@ char *prune_master_playlist(char *master_playlist, int max_height) {
+         line = end ? end + 1 : NULL;
+     }
+     out[pos] = '\0';
+-    if (kept == 0) {
+-        free(out);
+-        return master_playlist;
+-    }
+-    if (dropped) {
+-        printf("prune_master_playlist: kept %d variants, dropped %d\n", kept, dropped);
+-    }
++    free(v);
++    if (kept_out) *kept_out = kept;
++    if (dropped_out) *dropped_out = count - kept;
+     free(master_playlist);
+     return out;
+ }
+diff --git a/lib/airplay_video.h b/lib/airplay_video.h
+index c08b0ad..ce4097d 100644
+--- a/lib/airplay_video.h
++++ b/lib/airplay_video.h
+@@ -60,7 +60,7 @@ int create_media_uri_table(const char *url_prefix, const char *master_playlist_d
+                            int datalen, char ***media_uri_table, int *num_uri);
+ void store_master_playlist(airplay_video_t *airplay_video, char *master_playlist);
+ char *select_master_playlist_language(airplay_video_t *airplay_video, char *master_playlist);
+-char *prune_master_playlist(char *master_playlist, int max_height);
++char *prune_master_playlist(char *master_playlist, int max_height, int *kept, int *dropped);
+ int store_media_playlist(airplay_video_t *airplay_video, char *media_playlist, int *count, float *duration, bool*endlist, int num);
+ char *get_master_playlist(airplay_video_t *airplay_video);
+ char *get_media_playlist(airplay_video_t *airplay_video, int *count, float *duration, const char *uri, bool *should_fetch, const char **remote_uri);
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index fe1e350..af947d7 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -671,7 +671,10 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t
+             }
+             playlist = select_master_playlist_language(airplay_video, playlist);
+             /* each kept variant costs one FCUP round trip to the sender before playback can start */
+-            playlist = prune_master_playlist(playlist, 1080);
++            int variants_kept = 0, variants_dropped = 0;
++            playlist = prune_master_playlist(playlist, 1080, &variants_kept, &variants_dropped);
++            logger_log(raop->logger, LOGGER_INFO, "HLS master: kept %d variants, dropped %d",
++                       variants_kept, variants_dropped);
+             playlist_len = strlen(playlist);
+             if (create_media_uri_table(uri_prefix, playlist, playlist_len, &uri_list, &num_uri) < 0) {
+                 logger_log(raop->logger, LOGGER_ERR, "master playlist lists no %s media playlists", uri_prefix);

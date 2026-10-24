@@ -59,6 +59,48 @@ static void test_resolve(void) {
     expect_resolve("#EXT-X-MEDIA:URI=\"unterminated\n", base, "#EXT-X-MEDIA:URI=\"unterminated\n");
 }
 
+static int count_lines_with(const char *s, const char *needle) {
+    int n = 0;
+    for (const char *p = strstr(s, needle); p; p = strstr(p + 1, needle)) n++;
+    return n;
+}
+
+static void test_prune(void) {
+    const char *yt =
+        "#EXTM3U\n"
+        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a1\",NAME=\"en\",URI=\"mlhls://localhost/a1.m3u8\"\n"
+        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a2\",NAME=\"en-hi\",URI=\"mlhls://localhost/a2.m3u8\"\n"
+        "#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID=\"cc\",NAME=\"cc\",INSTREAM-ID=\"CC1\"\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=9000000,CODECS=\"vp09.00.40.08,mp4a.40.2\",RESOLUTION=1920x1080,AUDIO=\"a2\"\nmlhls://localhost/vp9.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=5000000,CODECS=\"avc1.640028,mp4a.40.2\",RESOLUTION=1920x1080,AUDIO=\"a1\"\nmlhls://localhost/1080.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=8000000,CODECS=\"avc1.640033,mp4a.40.2\",RESOLUTION=2560x1440,AUDIO=\"a1\"\nmlhls://localhost/1440.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=2500000,CODECS=\"avc1.4d401f,mp4a.40.2\",RESOLUTION=1280x720,AUDIO=\"a1\"\nmlhls://localhost/720.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=1200000,CODECS=\"avc1.4d401e,mp4a.40.2\",RESOLUTION=854x480,AUDIO=\"a1\"\nmlhls://localhost/480.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=600000,CODECS=\"avc1.4d4015,mp4a.40.2\",RESOLUTION=640x360,AUDIO=\"a1\"\nmlhls://localhost/360.m3u8\n"
+        "#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=100000,URI=\"mlhls://localhost/if.m3u8\"\n";
+    int kept = -1, dropped = -1;
+    char *out = prune_master_playlist(strdup(yt), 1080, &kept, &dropped);
+    CHECK(kept == 3 && dropped == 3, "kept %d dropped %d", kept, dropped);
+    CHECK(count_lines_with(out, "#EXT-X-STREAM-INF") == 3, "variant lines: %d", count_lines_with(out, "#EXT-X-STREAM-INF"));
+    CHECK(strstr(out, "1080.m3u8") && strstr(out, "720.m3u8") && strstr(out, "360.m3u8"), "wrong picks:\n%s", out);
+    CHECK(!strstr(out, "1440.m3u8") && !strstr(out, "vp9.m3u8") && !strstr(out, "480.m3u8"), "kept a dropped variant:\n%s", out);
+    CHECK(strstr(out, "a1.m3u8") && !strstr(out, "a2.m3u8"), "audio rendition filter:\n%s", out);
+    CHECK(strstr(out, "CLOSED-CAPTIONS") != NULL, "closed captions must stay");
+    CHECK(!strstr(out, "I-FRAME"), "i-frame playlists must go");
+    free(out);
+
+    const char *vp9 = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS=\"vp09\",RESOLUTION=3840x2160\nmlhls://localhost/v.m3u8\n";
+    char *in = strdup(vp9);
+    out = prune_master_playlist(in, 1080, &kept, &dropped);
+    CHECK(out == in && !strcmp(out, vp9), "nothing playable: return unchanged");
+    free(out);
+
+    const char *noinfo = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=300\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=900\nb.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=600\nc.m3u8\n";
+    out = prune_master_playlist(strdup(noinfo), 1080, &kept, &dropped);
+    CHECK(strstr(out, "b.m3u8") && strstr(out, "a.m3u8") && !strstr(out, "c.m3u8"), "no resolution: highest and lowest bandwidth:\n%s", out);
+    free(out);
+}
+
 /* Random and mutated playlists: no crashes, leaks or out-of-bounds access. */
 static void fuzz(void) {
     static const char *atoms[] = { "#EXTM3U", "#EXT-X-STREAM-INF:BANDWIDTH=5", "URI=\"", "\"", "mlhls://localhost",
@@ -82,6 +124,8 @@ static void fuzz(void) {
             char *out = adjust(r, "mlhls://localhost", i % 3 ? "http://localhost:7000" : "L");
             CHECK(out != NULL, "adjust returned NULL");
             free(out);
+            int k, d;
+            r = prune_master_playlist(r, 1080, &k, &d);
             char **table = NULL;
             int num = 0;
             if (create_media_uri_table("mlhls://localhost", r, (int) strlen(r), &table, &num) == 0) {
@@ -96,6 +140,7 @@ static void fuzz(void) {
 int main(void) {
     test_adjust();
     test_resolve();
+    test_prune();
     fuzz();
     if (failures) { fprintf(stderr, "test_hls: %d failure(s)\n", failures); return 1; }
     printf("test_hls: ok\n");
