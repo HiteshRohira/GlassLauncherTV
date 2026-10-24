@@ -14,8 +14,14 @@ function haptic(){
 }
 
 // ── Network ──
-async function api(path,data){
-  const response=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),credentials:'same-origin',cache:'no-store'});
+// Every request has a deadline, so a dropped connection (phone or TV asleep,
+// Wi-Fi change) fails and recovers instead of holding the key queue forever.
+async function api(path,data,timeoutMs=8000){
+  const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),timeoutMs);
+  let response;
+  try{response=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),credentials:'same-origin',cache:'no-store',signal:abort.signal});}
+  catch(e){throw new Error(e?.name==='AbortError'?'The TV did not answer. Check it is on and on the same Wi‑Fi.':'TV is unreachable. Keep it on and use the same Wi‑Fi.');}
+  finally{clearTimeout(timer);}
   let result;try{result=await response.json();}catch{throw new Error('The TV could not complete that request.');}
   if(response.status===401){authenticated=false;render();throw new Error('Enter the pairing code from your TV.');}
   if(!response.ok)throw new Error(result.error||'The TV could not complete that request.');return result;
@@ -37,13 +43,17 @@ function render(){
   else if(ready&&(isOpen('pairPanel')||isOpen('nativePanel'))){closeSheets();offerInstall();}
   else if(ready&&!sheetOpen())offerInstall();
 }
+let polling=false;
 async function poll(){
   clearTimeout(pollTimer);
+  if(polling)return;   // visibility changes can ask again while one is in flight
+  polling=true;
   try{const was=connected;lastStatus=await api('status');authenticated=true;connected=lastStatus.connected;if(connected&&!was)feedback('');
     if(!connected&&lastStatus.message)$('nativeHint').textContent=lastStatus.message;
     // A paired phone reconnects on its own after the TV restarts.
     if(!connected&&lastStatus.paired&&!lastStatus.pairing&&!busy&&Date.now()-lastReconnect>10000){lastReconnect=Date.now();api('reconnect',{}).catch(()=>{});}
   }catch(error){connected=false;if(authenticated)feedback('TV is unreachable. Keep it on and use the same Wi‑Fi.');}
+  polling=false;
   polled=true;
   render();
   pollTimer=setTimeout(poll,document.hidden?15000:connected?4000:2000);
@@ -70,7 +80,7 @@ $('pairForm').addEventListener('submit',event=>{event.preventDefault();const pin
 $('pairButton').addEventListener('click',()=>openSheet('pairPanel'));
 $('startNative').addEventListener('click',()=>action(async()=>{await api('native/start',{});feedback('Approve the prompt on your TV.');setTimeout(poll,1500);}));
 $('reconnect').addEventListener('click',()=>action(async()=>{await api('reconnect',{});setTimeout(poll,800);}));
-$('textForm').addEventListener('submit',event=>{event.preventDefault();const text=$('tvText').value;if(!text)return;action(async()=>{await api('text',{text});$('tvText').value='';haptic();feedback('Sent to the TV.');});});
+$('textForm').addEventListener('submit',event=>{event.preventDefault();const text=$('tvText').value;if(!text)return;action(async()=>{await api('text',{text},20000);$('tvText').value='';haptic();feedback('Sent to the TV.');});});
 $('tvText').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();$('textForm').requestSubmit();}});
 
 // Settings toggles
@@ -78,18 +88,22 @@ function paintSettings(){
   document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-checked',String(b.dataset.mode===navMode)));
   document.querySelectorAll('[data-haptics]').forEach(b=>b.setAttribute('aria-checked',String((b.dataset.haptics==='on')===haptics)));
   $('pad').classList.toggle('dpad',navMode==='dpad');
-  $('padHint').textContent=navMode==='dpad'?'Tap the arrows · centre to select':'Swipe to move · tap to select';
+  $('padHint').textContent=navMode==='dpad'?'Tap the arrows · centre to select · hold it for options':'Swipe to move · tap to select · hold for options';
 }
 document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{navMode=b.dataset.mode;store.set('glass.nav',navMode);paintSettings();haptic();}));
 document.querySelectorAll('[data-haptics]').forEach(b=>b.addEventListener('click',()=>{haptics=b.dataset.haptics==='on';store.set('glass.haptics',haptics?'on':'off');paintSettings();haptic();}));
 
 // ── Keys: one in-flight queue so presses arrive in order; drop floods.
+// The TV accepts a key at once and presses it in order, so this queue drains
+// quickly; it only backs up when the TV is unreachable.
 let commandQueue=Promise.resolve(),queued=0;
-function sendKey(key){
-  if(!connected||queued>5)return;
+function sendKey(key,long=false){
+  if(!connected||queued>12)return;
   queued++;haptic();
-  commandQueue=commandQueue.then(()=>api('key',{key})).catch(e=>feedback(e.message)).finally(()=>queued--);
+  const body=long?{key,long:true}:{key};
+  commandQueue=commandQueue.then(()=>api('key',body,4000)).catch(e=>feedback(e.message)).finally(()=>queued--);
 }
+const LONG_PRESS_MS=600;
 const repeatable=new Set(['volumeUp','volumeDown','delete','rewind','forward']);
 let holdTimer,repeatTimer,heldButton;
 function stopHold(){clearTimeout(holdTimer);clearInterval(repeatTimer);heldButton?.classList.remove('pressed');heldButton=null;}
@@ -121,8 +135,14 @@ function step(dir){lit(dir);sendKey(dir);unlit();}
 pad.addEventListener('pointerdown',e=>{
   if(!connected)return;e.preventDefault();pad.setPointerCapture?.(e.pointerId);
   touch={x:e.clientX,y:e.clientY,ax:e.clientX,ay:e.clientY,moved:false,dir:null,t:performance.now()};
-  if(navMode==='dpad'){const z=zoneAt(e.clientX,e.clientY);showRipple(e.clientX,e.clientY);step(z);touch.dir=z;
-    if(z!=='ok')holdTimer=setTimeout(()=>{repeatTimer=setInterval(()=>step(z),140);},420);}
+  if(navMode==='dpad'){const z=zoneAt(e.clientX,e.clientY);showRipple(e.clientX,e.clientY);touch.dir=z;
+    if(z!=='ok'){step(z);holdTimer=setTimeout(()=>{repeatTimer=setInterval(()=>step(z),140);},420);}
+    // Centre: a tap selects on release; holding it is a long press (options menus).
+    else{lit('ok');holdTimer=setTimeout(()=>{touch.long=true;sendKey('ok',true);feedback('Long press');unlit();},LONG_PRESS_MS);}
+  }else{
+    // Touchpad: resting a finger without moving is a long press.
+    holdTimer=setTimeout(()=>{if(touch&&!touch.moved){touch.long=true;showRipple(touch.x,touch.y);lit('ok');sendKey('ok',true);feedback('Long press');unlit();}},LONG_PRESS_MS);
+  }
 });
 pad.addEventListener('pointermove',e=>{
   if(!touch||navMode==='dpad')return;
@@ -130,6 +150,7 @@ pad.addEventListener('pointermove',e=>{
   if(Math.hypot(e.clientX-touch.x,e.clientY-touch.y)>TAP_SLOP)touch.moved=true;
   if(Math.max(Math.abs(dx),Math.abs(dy))<STEP)return;
   const dir=Math.abs(dx)>Math.abs(dy)?(dx>0?'right':'left'):(dy>0?'down':'up');
+  if(touch.long)return;
   step(dir);touch.dir=dir;touch.ax=e.clientX;touch.ay=e.clientY;
   // Keep moving while the finger rests after a swipe.
   clearTimeout(holdTimer);clearInterval(repeatTimer);
@@ -137,7 +158,10 @@ pad.addEventListener('pointermove',e=>{
 });
 function endTouch(e){
   if(!touch)return;clearTimeout(holdTimer);clearInterval(repeatTimer);
-  if(navMode==='pad'&&!touch.moved&&performance.now()-touch.t<600){showRipple(e.clientX,e.clientY);step('ok');}
+  if(!touch.long){
+    if(navMode==='pad'&&!touch.moved&&performance.now()-touch.t<LONG_PRESS_MS){showRipple(e.clientX,e.clientY);step('ok');}
+    else if(navMode==='dpad'&&touch.dir==='ok'){step('ok');}
+  }
   touch=null;
 }
 pad.addEventListener('pointerup',endTouch);

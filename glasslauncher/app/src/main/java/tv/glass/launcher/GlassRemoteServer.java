@@ -21,6 +21,15 @@ final class GlassRemoteServer implements AutoCloseable {
     private final Runnable onLockout;
     private final ThreadPoolExecutor requests=new ThreadPoolExecutor(2,4,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
     private final ThreadPoolExecutor nativeWork=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(3));
+    /** Keys and text run here, one at a time and in arrival order, so request
+     *  threads stay free and two phones cannot reorder each other's presses. */
+    private final ThreadPoolExecutor commands=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(COMMAND_QUEUE));
+    private final Map<String,Integer> peers=new ConcurrentHashMap<>();
+    private static final int COMMAND_QUEUE=24;
+    /** Whole request (line, headers, body) must arrive within this, not just each read. */
+    private static final long REQUEST_DEADLINE_MS=10_000;
+    private static final int MAX_CONNECTIONS_PER_PEER=6;
+    private static final long TEXT_WAIT_MS=15_000;
     private final PairGuard guard=new PairGuard(SystemClock::elapsedRealtime);
     private final Map<String,long[]> rates=new ConcurrentHashMap<>();
     private final Set<Socket> sockets=ConcurrentHashMap.newKeySet();
@@ -48,8 +57,11 @@ final class GlassRemoteServer implements AutoCloseable {
     void start()throws IOException{
         server=new ServerSocket();server.setReuseAddress(true);server.bind(new InetSocketAddress(PORT),16);
         Thread accept=new Thread(()->{
-            while(!closed)try{Socket socket=server.accept();socket.setSoTimeout(5000);sockets.add(socket);
-                try{requests.execute(()->serve(socket));}catch(RejectedExecutionException full){sockets.remove(socket);socket.close();}
+            while(!closed)try{Socket socket=server.accept();socket.setSoTimeout(5000);
+                String peer=socket.getInetAddress().getHostAddress();
+                if(peers.merge(peer,1,Integer::sum)>MAX_CONNECTIONS_PER_PEER){release(peer);socket.close();continue;}
+                sockets.add(socket);
+                try{requests.execute(()->serve(socket));}catch(RejectedExecutionException full){sockets.remove(socket);release(peer);socket.close();}
             }catch(IOException error){if(!closed)Log.w("GlassRemote","Remote listener stopped");}
         },"glass-web-remote");accept.setDaemon(true);accept.start();
         if(tv.isPaired())runNative(tv::connect);
@@ -60,9 +72,10 @@ final class GlassRemoteServer implements AutoCloseable {
             long[] entry=map.computeIfAbsent(ip,k->new long[]{now,0});if(now-entry[0]>window){entry[0]=now;entry[1]=0;}return ++entry[1]>limit;
         }
     }
+    private void release(String peer){peers.computeIfPresent(peer,(k,n)->n>1?n-1:null);}
     private void serve(Socket socket){
         try{
-            InputStream in=new BufferedInputStream(socket.getInputStream());OutputStream out=socket.getOutputStream();
+            InputStream in=new BufferedInputStream(new DeadlineInputStream(socket,SystemClock.elapsedRealtime()+REQUEST_DEADLINE_MS));OutputStream out=socket.getOutputStream();
             String line=readLine(in,2048);String[] request=line.split(" ");
             if(request.length!=3){reply(out,400,"text/plain","Bad request");return;}
             String method=request[0],target=request[1];int q=target.indexOf('?');String path=q<0?target:target.substring(0,q),query=q<0?"":target.substring(q+1);Map<String,String> headers=new HashMap<>();int total=0;
@@ -108,8 +121,23 @@ final class GlassRemoteServer implements AutoCloseable {
                 if(path.equals("/api/native/start")||path.equals("/api/reconnect")){
                     if(!runNative(path.endsWith("start")?tv::startPairing:tv::connect)){reply(out,503,"application/json","{\"error\":\"The TV is busy. Try again shortly.\"}");return;}
                 }
-                else if(path.equals("/api/key")){Integer code=KEYS.get(data.optString("key"));if(code==null){reply(out,400,"text/plain","Unknown button");return;}tv.key(code);}
-                else if(path.equals("/api/text")){tv.sendText(data.optString("text"));}
+                else if(path.equals("/api/key")){
+                    Integer code=KEYS.get(data.optString("key"));if(code==null){reply(out,400,"text/plain","Unknown button");return;}
+                    boolean hold=data.optBoolean("long")&&(code==23||code==66);
+                    // Accepted is not done: the reply goes out at once and the
+                    // key follows in order; failures show up in /api/status.
+                    if(!runCommand(()->{if(hold)tv.longPress(code);else tv.key(code);})){reply(out,503,"application/json","{\"error\":\"The TV is busy. Try again shortly.\"}");return;}
+                    reply(out,202,"application/json","{\"ok\":true}");return;
+                }
+                else if(path.equals("/api/text")){
+                    String text=data.optString("text");
+                    Future<?> done;
+                    try{done=commands.submit(()->{tv.sendText(text);return null;});}
+                    catch(RejectedExecutionException busy){reply(out,503,"application/json","{\"error\":\"The TV is busy. Try again shortly.\"}");return;}
+                    try{done.get(TEXT_WAIT_MS,TimeUnit.MILLISECONDS);}
+                    catch(TimeoutException slow){reply(out,504,"application/json","{\"error\":\"The TV is taking too long. Try again.\"}");return;}
+                    catch(ExecutionException failed){Throwable c=failed.getCause();throw c instanceof IOException?(IOException)c:new IOException("Text could not be sent.");}
+                }
                 else{reply(out,404,"text/plain","Not found");return;}
                 reply(out,200,"application/json","{\"ok\":true}");return;
             }
@@ -148,7 +176,7 @@ final class GlassRemoteServer implements AutoCloseable {
                 reply(out,200,type,bytes,"");
             }
         }catch(Exception error){try{reply(socket.getOutputStream(),409,"application/json",new JSONObject().put("error",error instanceof IOException?error.getMessage():"Request could not be completed.").toString());}catch(Exception ignored){}
-        }finally{sockets.remove(socket);try{socket.close();}catch(IOException ignored){}}
+        }finally{sockets.remove(socket);release(socket.getInetAddress().getHostAddress());try{socket.close();}catch(IOException ignored){}}
     }
     private static String queryValue(String query,String key){
         for(String part:query.split("&")){int eq=part.indexOf('=');if(eq>0&&part.substring(0,eq).equals(key))return part.substring(eq+1);}
@@ -162,6 +190,19 @@ final class GlassRemoteServer implements AutoCloseable {
         try{Enumeration<NetworkInterface> interfaces=NetworkInterface.getNetworkInterfaces();while(interfaces.hasMoreElements()){Enumeration<InetAddress> addresses=interfaces.nextElement().getInetAddresses();while(addresses.hasMoreElements())if(name.equals(addresses.nextElement().getHostAddress()))return true;}}catch(Exception ignored){}return false;
     }
     private interface Work{void run()throws Exception;}
+    private boolean runCommand(Work work){
+        try{commands.execute(()->{try{work.run();operationError="";}catch(Exception e){Log.w("GlassRemote","Key failed",e);operationError=e.getMessage()==null?"The TV could not complete that action.":e.getMessage();}});return true;}
+        catch(RejectedExecutionException full){return false;}
+    }
+    /** Socket input with one deadline for the whole request: a client that
+     *  trickles bytes just under the per-read timeout cannot hold a worker. */
+    private static final class DeadlineInputStream extends FilterInputStream{
+        private final Socket socket;private final long deadline;
+        DeadlineInputStream(Socket socket,long deadline)throws IOException{super(socket.getInputStream());this.socket=socket;this.deadline=deadline;}
+        private void arm()throws IOException{long left=deadline-SystemClock.elapsedRealtime();if(left<=0)throw new SocketTimeoutException("Request took too long");socket.setSoTimeout((int)Math.min(left,5000));}
+        @Override public int read()throws IOException{arm();return super.read();}
+        @Override public int read(byte[] b,int off,int len)throws IOException{arm();return super.read(b,off,len);}
+    }
     private boolean runNative(Work work){
         try{nativeWork.execute(()->{operationError="";try{work.run();}catch(Exception e){Log.w("GlassRemote","TV control operation failed",e);operationError=e instanceof javax.net.ssl.SSLException || e instanceof java.net.SocketException || e instanceof java.net.SocketTimeoutException || e.getMessage()==null ? "TV controls are unavailable. Try connecting again." : e.getMessage();}});return true;}
         catch(RejectedExecutionException full){return false;}
@@ -171,8 +212,8 @@ final class GlassRemoteServer implements AutoCloseable {
     private static void reply(OutputStream out,int code,String type,String body,String extra)throws IOException{reply(out,code,type,body.getBytes(StandardCharsets.UTF_8),extra);}
     private static void reply(OutputStream out,int code,String type,byte[] body,String extra)throws IOException{
         String csp="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-        String header="HTTP/1.1 "+code+" "+(code==200?"OK":"Error")+"\r\nContent-Type: "+type+"\r\nContent-Length: "+body.length+"\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: "+csp+"\r\n"+extra+"\r\n";
+        String header="HTTP/1.1 "+code+" "+(code==200?"OK":code==202?"Accepted":"Error")+"\r\nContent-Type: "+type+"\r\nContent-Length: "+body.length+"\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: "+csp+"\r\n"+extra+"\r\n";
         out.write(header.getBytes(StandardCharsets.US_ASCII));out.write(body);out.flush();
     }
-    @Override public void close(){closed=true;if(server!=null)try{server.close();}catch(IOException ignored){}for(Socket s:sockets)try{s.close();}catch(IOException ignored){}requests.shutdownNow();nativeWork.shutdownNow();tv.close();}
+    @Override public void close(){closed=true;if(server!=null)try{server.close();}catch(IOException ignored){}for(Socket s:sockets)try{s.close();}catch(IOException ignored){}requests.shutdownNow();nativeWork.shutdownNow();commands.shutdownNow();tv.close();}
 }
