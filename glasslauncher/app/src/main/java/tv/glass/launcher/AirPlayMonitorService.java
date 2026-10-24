@@ -71,6 +71,8 @@ public final class AirPlayMonitorService extends Service {
     static final String ACTION_RESTART = "tv.glass.launcher.AIRPLAY_RESTART";
     /** The phone remote was switched on/off or its pairing was replaced. */
     static final String ACTION_REMOTE_CHANGED = "tv.glass.launcher.REMOTE_CHANGED";
+    /** Switch detailed AirPlay logging ({@link #EXTRA_ENABLED}). */
+    static final String ACTION_SET_DEBUG = "tv.glass.launcher.AIRPLAY_SET_DEBUG";
     static final String EXTRA_ENABLED = "enabled";
     private static final String ACTION_TICK = "tv.glass.launcher.REMOTE_CHECK";
     private static final String STATUS_FILE = "airplay_status";
@@ -108,6 +110,11 @@ public final class AirPlayMonitorService extends Service {
         send(ctx, new Intent(ctx, AirPlayMonitorService.class).setAction(action));
     }
 
+    static void setDebug(Context ctx, boolean enabled) {
+        send(ctx, new Intent(ctx, AirPlayMonitorService.class).setAction(ACTION_SET_DEBUG)
+                .putExtra(EXTRA_ENABLED, enabled));
+    }
+
     static void setEnabled(Context ctx, boolean enabled) {
         send(ctx, new Intent(ctx, AirPlayMonitorService.class).setAction(ACTION_SET_ENABLED)
                 .putExtra(EXTRA_ENABLED, enabled));
@@ -141,8 +148,14 @@ public final class AirPlayMonitorService extends Service {
         final String session;
         /** Name iPhones see, or empty before the first start. */
         final String name;
-        Snapshot(AirPlayStatus.State state, String session, String name) {
+        /** Decoder and counters of the last mirroring session, last error. */
+        final String diagnostics;
+        /** Detailed native logging is on. */
+        final boolean debug;
+        Snapshot(AirPlayStatus.State state, String session, String name) { this(state, session, name, "", false); }
+        Snapshot(AirPlayStatus.State state, String session, String name, String diagnostics, boolean debug) {
             this.state = state; this.session = session; this.name = name;
+            this.diagnostics = diagnostics; this.debug = debug;
         }
         boolean inSession() { return !"idle".equals(session); }
     }
@@ -157,9 +170,11 @@ public final class AirPlayMonitorService extends Service {
             long at = parts.length > 1 ? Long.parseLong(parts[1].trim()) : 0L;
             String session = parts.length > 2 ? parts[2] : "idle";
             String name = parts.length > 3 ? parts[3] : "";
+            String diagnostics = parts.length > 4 ? parts[4] : "";
+            boolean debug = parts.length > 5 && "1".equals(parts[5]);
             AirPlayStatus.State s = Math.abs(System.currentTimeMillis() - at) > STALE_MS
                     ? AirPlayStatus.State.STARTING : AirPlayStatus.parse(parts[0]);
-            return new Snapshot(s, session, name);
+            return new Snapshot(s, session, name, diagnostics, debug);
         } catch (Exception e) {
             return new Snapshot(AirPlayStatus.State.STARTING, "idle", "");
         }
@@ -199,6 +214,9 @@ public final class AirPlayMonitorService extends Service {
             status.onInUse(now, WAKE_GRACE_MS);
         } else if (ACTION_BOOT.equals(action)) {
             if (isInteractive()) status.onInUse(now, BOOT_GRACE_MS);
+        } else if (ACTION_SET_DEBUG.equals(action)) {
+            AirPlayService svc = AirPlayService.getInstance();
+            if (svc != null) svc.setDebugLogging(intent.getBooleanExtra(EXTRA_ENABLED, false));
         } else if (ACTION_REMOTE_CHANGED.equals(action)) {
             syncPhoneRemote();
         } else if (ACTION_IN_USE.equals(action)) {
@@ -370,7 +388,10 @@ public final class AirPlayMonitorService extends Service {
     private void publish(AirPlayService svc) {
         String session = svc != null ? svc.sessionKind() : "idle";
         String name = svc != null ? svc.advertisedName() : "";
-        String record = status.state().name() + "\n%d\n" + session + "\n" + name.replace('\n', ' ');
+        String diagnostics = svc != null ? svc.diagnostics() : "";
+        boolean debug = svc != null && svc.debugLogging();
+        String record = status.state().name() + "\n%d\n" + session + "\n" + name.replace('\n', ' ')
+                + "\n" + diagnostics.replace('\n', ' ') + "\n" + (debug ? "1" : "0");
         File dst = new File(getFilesDir(), STATUS_FILE);
         File tmp = new File(getFilesDir(), STATUS_FILE + ".tmp");
         try (FileOutputStream out = new FileOutputStream(tmp)) {

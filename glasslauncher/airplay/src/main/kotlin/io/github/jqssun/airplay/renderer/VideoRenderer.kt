@@ -58,6 +58,8 @@ class VideoRenderer(ctx: Context) {
     var scheduledOutputBufferRelease = true
     var benchmarkLog = false
     var benchmarkLogCallback: ((String) -> Unit)? = null
+    /** Failures worth showing in diagnostics. */
+    var onError: ((String) -> Unit)? = null
     private var _framesThisSec = 0
     private var _bytesThisSec = 0L
     private var _lastStatReset = 0L
@@ -223,6 +225,7 @@ class VideoRenderer(ctx: Context) {
             _createCodec(isH265, target, gen)
         } catch (e: Exception) {
             Log.w(TAG, "Codec start failed", e)
+            onError?.invoke("video decoder failed to start")
             null
         } ?: return
         synchronized(lock) {
@@ -319,7 +322,7 @@ class VideoRenderer(ctx: Context) {
         }
         override fun onError(c: MediaCodec, e: MediaCodec.CodecException) {
             Log.w(TAG, "decoder error (transient=${e.isTransient})", e)
-            synchronized(lock) { if (c === codec && !e.isTransient) stopCodec() }
+            synchronized(lock) { if (c === codec && !e.isTransient) { stopCodec(); onError?.invoke("video decoder error ${e.diagnosticInfo}") } }
         }
         override fun onOutputFormatChanged(c: MediaCodec, format: MediaFormat) {
             Log.i(TAG, "decoder output format: $format")

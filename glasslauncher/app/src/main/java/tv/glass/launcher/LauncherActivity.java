@@ -392,6 +392,7 @@ public class LauncherActivity extends Activity {
                 public String bluetoothSummary() {return bluetoothTileSummary();}
                 public String remoteSummary() {return GlassRemoteAccess.enabled(LauncherActivity.this)?"Use your iPhone":"Off";}
                 public void setAirEnabled(boolean on) {AirPlayMonitorService.setEnabled(LauncherActivity.this,on);uiHandler.postDelayed(LauncherActivity.this::refreshAirState,400);}
+                public void setAirDebug(boolean on) {AirPlayMonitorService.setDebug(LauncherActivity.this,on);uiHandler.postDelayed(LauncherActivity.this::refreshAirState,400);}
                 public void restartAir() {AirPlayMonitorService.start(LauncherActivity.this,AirPlayMonitorService.ACTION_RESTART);showToast("Restarting AirPlay…");}
                 public void showAirPlayer() {controlCenter.hide();openAirPlayPlayer();}
                 public void network() {openNetSettings();}

@@ -24,6 +24,8 @@ object NativeBridge {
     external fun nativeSetDisplaySize(handle: Long, w: Int, h: Int, fps: Int)
     external fun nativeSetPlist(handle: Long, key: String, value: Int)
     external fun nativeSetH265Enabled(handle: Long, enabled: Boolean)
+    /** UxPlay log level: 3 = errors only (default), 7 = debug. */
+    external fun nativeSetLogLevel(handle: Long, level: Int)
     external fun nativeSetCodecs(handle: Long, alac: Boolean, aac: Boolean)
     external fun nativeSetHlsEnabled(handle: Long, enabled: Boolean)
     external fun nativeSetLang(handle: Long, lang: String)

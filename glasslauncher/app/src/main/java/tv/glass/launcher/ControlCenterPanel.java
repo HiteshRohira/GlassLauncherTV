@@ -28,7 +28,7 @@ final class ControlCenterPanel extends FrameLayout {
         AirPlayMonitorService.Snapshot air(); boolean airLegacyInstalled();
         String bluetoothSummary(); String remoteSummary();
         void network(); void inputs(); void bluetooth(); void settings();
-        void setAirEnabled(boolean on); void restartAir(); void showAirPlayer();
+        void setAirEnabled(boolean on); void restartAir(); void showAirPlayer(); void setAirDebug(boolean on);
         View appearance(); View remote(); void shown(boolean visible);
     }
     static final int SHEET_W = 440;
@@ -113,7 +113,12 @@ final class ControlCenterPanel extends FrameLayout {
         rows.add(toggleRow("air-toggle","AirPlay receiver",on?"On · visible to Apple devices":"Off · hidden from Apple devices",on,()->host.setAirEnabled(!on)));
         if(on)rows.add(row("air-restart","Restart receiver",s.inSession()?"Ends the current session":"Use if your iPhone can’t find this TV",R.drawable.ic_feather_refresh,host::restartAir,false,false));
         if(host.airLegacyInstalled())rows.add(row("air-legacy","Old AirPlay app installed","Remove it so this TV isn’t listed twice",R.drawable.ic_feather_warning,()->{},false,false));
+        if(on)rows.add(toggleRow("air-debug","Detailed logging",s.debug?"On · for diagnosing a problem; turn off after":"Off",s.debug,()->host.setAirDebug(!s.debug)));
         for(View r:rows){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,px(64));lp.topMargin=px(10);page.addView(r,lp);}
+        if(on&&!s.diagnostics.isEmpty()){
+            TextView diag=text("Diagnostics · "+s.diagnostics,12,true);diag.setLineSpacing(px(2),1f);diag.setFocusable(false);
+            LinearLayout.LayoutParams gp=new LinearLayout.LayoutParams(-1,-2);gp.topMargin=px(14);gp.setMarginStart(px(6));gp.setMarginEnd(px(6));page.addView(diag,gp);
+        }
         View target=null;
         for(View r:rows)if(keep!=null&&keep.equals(r.getTag()))target=r;
         if(target==null && !rows.isEmpty())target=rows.get(0);

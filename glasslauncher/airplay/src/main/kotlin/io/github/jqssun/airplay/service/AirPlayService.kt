@@ -274,6 +274,33 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     /** True when registration was refused by the system (not merely pending). */
     fun advertisingFailed(): Boolean = nsdManager?.anyFailed() == true
 
+    @Volatile private var _lastError = ""
+    @Volatile private var _lastSession = ""
+
+    /** Records a failure for the Control Center diagnostics row. */
+    fun noteError(message: String) {
+        val clock = java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT).format(java.util.Date())
+        _lastError = "$clock $message"
+        Log.w(TAG, message)
+        _notifyChanged()
+    }
+
+    /** One line for the AirPlay page: decoder, path and counters of the
+     *  current or last mirroring session, plus the last error. */
+    fun diagnostics(): String {
+        val r = videoRenderer
+        val now = if (r.codecName.isNotEmpty())
+            "${r.codecName} · ${_videoResolution.value} · ${r.fps} fps · ${r.droppedFrames} dropped · ${r.overloads} overloads"
+        else ""
+        if (now.isNotEmpty()) _lastSession = now
+        val parts = listOf(_lastSession, _lastError.takeIf { it.isNotEmpty() }?.let { "last error $it" }).filterNotNull().filter { it.isNotEmpty() }
+        return parts.joinToString(" · ").ifEmpty { "No sessions since the receiver started" }
+    }
+
+    fun debugLogging(): Boolean = prefs[Prefs.DEBUG_ENABLED]
+
+    fun setDebugLogging(on: Boolean) { Prefs.DEBUG_ENABLED.write(prefs, on) }
+
     /** "mirroring", "video", "audio", "connecting" or "idle". */
     fun sessionKind(): String = when {
         _mirroringActive.value -> "mirroring"
@@ -447,6 +474,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _videoPlaybackSize.value = width to height
         }
         airPlayVideoPlayer.onTitle = { _videoTitle.value = it ?: "" }
+        videoRenderer.onError = { noteError(it) }
         airPlayVideoPlayer.onEnded = { _endVideoPlayback("AirPlay Video stopped (player)") }
         airPlayVideoPlayer.onPlaybackInfo = { snapshot ->
             if (nativeHandle != 0L) {
@@ -468,6 +496,14 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             prefs.audioConfigFlow()
                 .debounce(AUDIO_CONFIG_DEBOUNCE_MS)
                 .collect { audioRenderer.updateConfig(it) }
+        }
+        lifecycleScope.launch {
+            // Glass: detailed native logging, switchable from Control Center
+            // without restarting the receiver.
+            prefs.observe { this[Prefs.DEBUG_ENABLED] }.collect { on ->
+                if (nativeHandle != 0L) NativeBridge.nativeSetLogLevel(nativeHandle, if (on) LOG_DEBUG else LOG_ERR)
+                Log.i(TAG, "native logging ${if (on) "detailed" else "errors only"}")
+            }
         }
         lifecycleScope.launch {
             prefs.observe { this[Prefs.SYNC_CLIENT_VOLUME] }.collect {
@@ -545,6 +581,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoRenderer.benchmarkLogCallback = { msg -> logCallback?.invoke(msg) }
         videoRenderer.scheduledOutputBufferRelease = prefs[Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE]
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
+        NativeBridge.nativeSetLogLevel(nativeHandle, if (prefs[Prefs.DEBUG_ENABLED]) LOG_DEBUG else LOG_ERR)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
         val advertiseVideo = prefs[Prefs.ADVERTISE_VIDEO]
         val advertiseMirroring = prefs[Prefs.ADVERTISE_MIRRORING]
@@ -570,7 +607,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val requestedPort = prefs[Prefs.SERVER_PORT]
         val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
         if (port < 0) {
-            log("Failed to start on port $requestedPort")
+            noteError("Receiver could not start on port $requestedPort")
             _failStart()
             return
         }
@@ -1356,6 +1393,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
         private const val COVER_ART_MAX_PX = 1024
         private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
+        private const val LOG_ERR = 3
+        private const val LOG_DEBUG = 7
         private const val SERVER_RESTART_DEBOUNCE_MS = 500L
 
         // airplay volume is linear in dB along sender slider
