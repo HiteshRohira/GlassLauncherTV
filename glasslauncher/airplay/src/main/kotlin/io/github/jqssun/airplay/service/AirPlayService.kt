@@ -65,6 +65,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 
 data class VideoPlaybackInfo(
@@ -876,16 +877,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _clientVolDir = 0
     }
 
+    // Called concurrently from several UxPlay threads (ExoPlayer's own HLS
+    // fetches count too): update with compare-and-set so no change is lost.
     override fun onConnectionInit() {
-        val firstConnection = _connectionCount.value == 0
-        _connectionCount.value++
-        log("Sender connected (${_connectionCount.value})")
-        if (firstConnection) _playerShown = false
+        val count = _connectionCount.updateAndGet { it + 1 }
+        log("Sender connected ($count)")
+        if (count == 1) _playerShown = false
     }
 
     override fun onConnectionDestroy() {
-        _connectionCount.value = (_connectionCount.value - 1).coerceAtLeast(0)
-        if (_connectionCount.value == 0) {
+        val count = _connectionCount.updateAndGet { (it - 1).coerceAtLeast(0) }
+        if (count == 0) {
             // clients may drop without POST /stop; must run before the poll-state reset
             _endVideoPlayback("AirPlay Video stopped (disconnect)")
             // last client gone: release audio output devices to save power
@@ -911,7 +913,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _refreshDacpPlayer()
             _updateMediaNotification()
         }
-        log("Sender disconnected (${_connectionCount.value})")
+        log("Sender disconnected ($count)")
     }
 
     override fun onConnectionReset(reason: Int) {
