@@ -7407,6 +7407,7 @@ public class LauncherActivity extends Activity {
                         }
                     } finally {
                         appsLoading.set(false);
+                        try { logHomeRowOnce(); } catch (RuntimeException ignored) { }
                         rescanIfPackagesChanged();
                     }
                 });
@@ -7432,6 +7433,31 @@ public class LauncherActivity extends Activity {
             // deferred reloads share one cancellable Runnable.
             uiHandler.postDelayed(pkgReloadRunnable, 400);
         }
+    }
+
+    private static boolean homeRowLogged;
+
+    /** Glass: once per process, after the first real scan, log what the home
+     *  row shows and why ordered apps are absent (not installed, hidden), to
+     *  diagnose favourites that silently changed. Package names only. */
+    private void logHomeRowOnce() {
+        if (homeRowLogged || appList.isEmpty() || appList.get(0).ri == null) return;
+        homeRowLogged = true;
+        List<AppInfo> visible = buildVisibleList();
+        int hc = effectiveHomeCount(visible.size());
+        StringBuilder row = new StringBuilder();
+        for (int i = 0; i < hc && i < visible.size(); i++) row.append(i == 0 ? "" : ", ").append(visible.get(i).packageName);
+        StringBuilder missing = new StringBuilder();
+        String order = prefs.getString(KEY_APP_ORDER, "");
+        if (order != null) for (String pkg : order.split(",")) {
+            if (pkg.isEmpty() || appByPackage.containsKey(pkg)) continue;
+            missing.append(missing.length() == 0 ? "" : ", ").append(pkg);
+        }
+        StringBuilder hidden = new StringBuilder();
+        for (String pkg : hiddenApps) hidden.append(hidden.length() == 0 ? "" : ", ").append(pkg);
+        android.util.Log.i("GlassHome", "home row (" + hc + "): " + row
+                + " | ordered but not installed/launchable: " + (missing.length() == 0 ? "none" : missing)
+                + " | hidden: " + (hidden.length() == 0 ? "none" : hidden));
     }
 
     /** A package event arrived while the last scan ran: scan again (now, or on
