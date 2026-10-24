@@ -69,6 +69,8 @@ public final class AirPlayMonitorService extends Service {
     static final String ACTION_SET_ENABLED = "tv.glass.launcher.AIRPLAY_SET_ENABLED";
     /** Restart the receiver now (drops any active session). */
     static final String ACTION_RESTART = "tv.glass.launcher.AIRPLAY_RESTART";
+    /** The phone remote was switched on/off or its pairing was replaced. */
+    static final String ACTION_REMOTE_CHANGED = "tv.glass.launcher.REMOTE_CHANGED";
     static final String EXTRA_ENABLED = "enabled";
     private static final String ACTION_TICK = "tv.glass.launcher.REMOTE_CHECK";
     private static final String STATUS_FILE = "airplay_status";
@@ -169,8 +171,7 @@ public final class AirPlayMonitorService extends Service {
         goForeground();
         registerScreenReceiver();
         AirPlayService.addListener(engineChanged);
-        try { phoneRemote = new GlassRemoteServer(this); phoneRemote.start(); }
-        catch (Exception e) { Log.w(TAG, "Phone remote could not start", e); }
+        syncPhoneRemote();
         if (isInteractive()) status.onInUse(SystemClock.elapsedRealtime(), BOOT_GRACE_MS);
         else status.onNotInUse();
     }
@@ -188,6 +189,8 @@ public final class AirPlayMonitorService extends Service {
             status.onInUse(now, WAKE_GRACE_MS);
         } else if (ACTION_BOOT.equals(action)) {
             if (isInteractive()) status.onInUse(now, BOOT_GRACE_MS);
+        } else if (ACTION_REMOTE_CHANGED.equals(action)) {
+            syncPhoneRemote();
         } else if (ACTION_IN_USE.equals(action)) {
             if (!status.inUse()) status.onInUse(now, WAKE_GRACE_MS);
         }
@@ -208,6 +211,23 @@ public final class AirPlayMonitorService extends Service {
     }
 
     @Override public IBinder onBind(Intent intent) { return null; }
+
+    /** Run the phone remote's web server only while it is switched on. */
+    private void syncPhoneRemote() {
+        boolean want = GlassRemoteAccess.enabled(this);
+        if (!want && phoneRemote != null) { phoneRemote.close(); phoneRemote = null; Log.i(TAG, "Phone remote off"); }
+        if (want && phoneRemote == null) {
+            try {
+                phoneRemote = new GlassRemoteServer(this, () -> handler.post(() ->
+                        Toast.makeText(this, R.string.remote_lockout, Toast.LENGTH_LONG).show()));
+                phoneRemote.start();
+            } catch (Exception e) {
+                Log.w(TAG, "Phone remote could not start", e);
+                if (phoneRemote != null) phoneRemote.close();
+                phoneRemote = null;
+            }
+        }
+    }
 
     private void setEnabledInternal(boolean on) {
         File flag = new File(getFilesDir(), DISABLED_FILE);

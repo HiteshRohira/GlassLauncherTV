@@ -16,10 +16,12 @@ final class GlassRemoteServer implements AutoCloseable {
     static final int PORT=48633;
     private final Context context;
     private final TvRemoteClient tv;
-    private final GlassRemoteAccess access;
+    private volatile GlassRemoteAccess access;
+    private volatile long accessVersion;
+    private final Runnable onLockout;
     private final ThreadPoolExecutor requests=new ThreadPoolExecutor(2,4,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
     private final ThreadPoolExecutor nativeWork=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(3));
-    private final Map<String,long[]> attempts=new ConcurrentHashMap<>();
+    private final PairGuard guard=new PairGuard(SystemClock::elapsedRealtime);
     private final Map<String,long[]> rates=new ConcurrentHashMap<>();
     private final Set<Socket> sockets=ConcurrentHashMap.newKeySet();
     private volatile boolean closed;
@@ -27,7 +29,22 @@ final class GlassRemoteServer implements AutoCloseable {
     private ServerSocket server;
     private static final Map<String,Integer> KEYS;
     static{Map<String,Integer> keys=new HashMap<>();keys.put("up",19);keys.put("down",20);keys.put("left",21);keys.put("right",22);keys.put("ok",23);keys.put("back",4);keys.put("home",3);keys.put("playPause",85);keys.put("volumeUp",24);keys.put("volumeDown",25);keys.put("mute",164);keys.put("rewind",89);keys.put("forward",90);keys.put("delete",67);keys.put("enter",66);KEYS=Collections.unmodifiableMap(keys);}
-    GlassRemoteServer(Context context)throws Exception{this.context=context.getApplicationContext();access=GlassRemoteAccess.load(context);tv=new TvRemoteClient(context);}
+    /** @param onLockout runs (on a request thread) when repeated wrong codes close pairing. */
+    GlassRemoteServer(Context context,Runnable onLockout)throws Exception{this.context=context.getApplicationContext();this.onLockout=onLockout;access=GlassRemoteAccess.load(context);accessVersion=GlassRemoteAccess.version(context);tv=new TvRemoteClient(context);}
+    /** Current pairing material; picks up "Forget paired phones" from the launcher process. */
+    private GlassRemoteAccess access()throws Exception{
+        long version=GlassRemoteAccess.version(context);
+        if(version!=accessVersion){synchronized(this){if(version!=accessVersion){access=GlassRemoteAccess.load(context);accessVersion=version;guard.reset();}}}
+        return access;
+    }
+    /** Checks a code against the shared brute-force budget. Never reveals
+     *  anything while blocked; only distinct wrong codes count. */
+    private boolean pinMatches(String pin,String ip)throws Exception{
+        if(pin==null||!pin.matches("[0-9]{6}")||guard.blocked(ip))return false;
+        if(constant(pin,access().pin)){guard.succeed(ip);return true;}
+        if(guard.fail(ip,pin)){Log.w("GlassRemote","Pairing locked after repeated wrong codes");if(onLockout!=null)onLockout.run();}
+        return false;
+    }
     void start()throws IOException{
         server=new ServerSocket();server.setReuseAddress(true);server.bind(new InetSocketAddress(PORT),16);
         Thread accept=new Thread(()->{
@@ -35,7 +52,7 @@ final class GlassRemoteServer implements AutoCloseable {
                 try{requests.execute(()->serve(socket));}catch(RejectedExecutionException full){sockets.remove(socket);socket.close();}
             }catch(IOException error){if(!closed)Log.w("GlassRemote","Remote listener stopped");}
         },"glass-web-remote");accept.setDaemon(true);accept.start();
-        if(tv.isPaired())runNative(()->tv.connect());
+        if(tv.isPaired())runNative(tv::connect);
     }
     private static boolean limited(Map<String,long[]> map,String ip,int limit,long window){
         synchronized(map){long now=SystemClock.elapsedRealtime();if(map.size()>128)map.entrySet().removeIf(e->now-e.getValue()[0]>window);
@@ -73,10 +90,11 @@ final class GlassRemoteServer implements AutoCloseable {
             boolean authenticated=hasCookie(headers.getOrDefault("cookie",""));
             if(method.equals("POST")&&path.equals("/api/pair")){
                 if(origin==null || !headers.getOrDefault("content-type","").startsWith("application/json")){reply(out,403,"text/plain","Open the remote page to pair.");return;}
-                if(limited(attempts,ip,5,60000)){reply(out,429,"application/json","{\"error\":\"Wait a minute before trying another code.\"}");return;}
+                if(guard.lockedOut()){reply(out,429,"application/json","{\"error\":\"Pairing is paused after too many wrong codes. Try again in 15 minutes.\"}");return;}
+                if(guard.blocked(ip)){reply(out,429,"application/json","{\"error\":\"Wait a minute before trying another code.\"}");return;}
                 JSONObject data=new JSONObject(new String(body,StandardCharsets.UTF_8));
-                if(!constant(data.optString("pin"),access.pin)){reply(out,401,"application/json","{\"error\":\"That code does not match the code in Glass.\"}");return;}
-                reply(out,200,"application/json","{\"ok\":true}","Set-Cookie: glass_remote="+access.token+"; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000\r\n");return;
+                if(!pinMatches(data.optString("pin"),ip)){reply(out,401,"application/json","{\"error\":\"That code does not match the code in Glass.\"}");return;}
+                reply(out,200,"application/json","{\"ok\":true}","Set-Cookie: glass_remote="+access().token+"; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000\r\n");return;
             }
             if(path.startsWith("/api/")){
                 if(!authenticated){reply(out,401,"application/json","{\"authenticated\":false}");return;}
@@ -87,8 +105,9 @@ final class GlassRemoteServer implements AutoCloseable {
                 }
                 if(!method.equals("POST")||origin==null||!headers.getOrDefault("content-type","").startsWith("application/json")){reply(out,403,"text/plain","Use the remote page.");return;}
                 JSONObject data=new JSONObject(new String(body,StandardCharsets.UTF_8));
-                if(path.equals("/api/native/start")){runNative(()->tv.startPairing());}
-                else if(path.equals("/api/reconnect")){runNative(()->tv.connect());}
+                if(path.equals("/api/native/start")||path.equals("/api/reconnect")){
+                    if(!runNative(path.endsWith("start")?tv::startPairing:tv::connect)){reply(out,503,"application/json","{\"error\":\"The TV is busy. Try again shortly.\"}");return;}
+                }
                 else if(path.equals("/api/key")){Integer code=KEYS.get(data.optString("key"));if(code==null){reply(out,400,"text/plain","Unknown button");return;}tv.key(code);}
                 else if(path.equals("/api/text")){tv.sendText(data.optString("text"));}
                 else{reply(out,404,"text/plain","Not found");return;}
@@ -112,7 +131,7 @@ final class GlassRemoteServer implements AutoCloseable {
                 // page's current URL, which carries the code once paired.
                 String pin=queryValue(query,"pair");
                 JSONObject manifest=new JSONObject().put("id","/").put("name","Glass TV Remote").put("short_name","Glass Remote");
-                if(pin!=null&&constant(pin,access.pin))manifest.put("start_url","/?pair="+pin);
+                if(pinMatches(pin,ip))manifest.put("start_url","/?pair="+pin);
                 manifest.put("scope","/").put("display","standalone").put("orientation","portrait")
                     .put("background_color","#121319").put("theme_color","#121319")
                     .put("icons",new org.json.JSONArray().put(new JSONObject().put("src","/icon.png").put("sizes","180x180").put("type","image/png")));
@@ -124,7 +143,7 @@ final class GlassRemoteServer implements AutoCloseable {
                 // iOS reads the manifest link once, as the page loads; put the
                 // code in it server-side so Add to Home Screen keeps pairing.
                 String pin=queryValue(query,"pair");
-                if(file.equals("index.html")&&pin!=null&&constant(pin,access.pin))
+                if(file.equals("index.html")&&pinMatches(pin,ip))
                     bytes=new String(bytes,StandardCharsets.UTF_8).replace("href=\"/manifest.webmanifest\"","href=\"/manifest.webmanifest?pair="+pin+"\"").getBytes(StandardCharsets.UTF_8);
                 reply(out,200,type,bytes,"");
             }
@@ -135,7 +154,7 @@ final class GlassRemoteServer implements AutoCloseable {
         for(String part:query.split("&")){int eq=part.indexOf('=');if(eq>0&&part.substring(0,eq).equals(key))return part.substring(eq+1);}
         return null;
     }
-    private boolean hasCookie(String cookies){for(String cookie:cookies.split(";")){String value=cookie.trim();if(value.startsWith("glass_remote=")&&constant(value.substring(13),access.token))return true;}return false;}
+    private boolean hasCookie(String cookies)throws Exception{String token=access().token;for(String cookie:cookies.split(";")){String value=cookie.trim();if(value.startsWith("glass_remote=")&&constant(value.substring(13),token))return true;}return false;}
     private static boolean constant(String a,String b){return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),b.getBytes(StandardCharsets.UTF_8));}
     private static boolean allowedHost(String host){
         if(!host.endsWith(":"+PORT))return false;String name=host.substring(0,host.length()-(":"+PORT).length());
@@ -143,7 +162,10 @@ final class GlassRemoteServer implements AutoCloseable {
         try{Enumeration<NetworkInterface> interfaces=NetworkInterface.getNetworkInterfaces();while(interfaces.hasMoreElements()){Enumeration<InetAddress> addresses=interfaces.nextElement().getInetAddresses();while(addresses.hasMoreElements())if(name.equals(addresses.nextElement().getHostAddress()))return true;}}catch(Exception ignored){}return false;
     }
     private interface Work{void run()throws Exception;}
-    private void runNative(Work work){if(nativeWork.getQueue().size()>2)return;nativeWork.execute(()->{operationError="";try{work.run();}catch(Exception e){Log.w("GlassRemote","TV control operation failed",e);operationError=e instanceof javax.net.ssl.SSLException || e instanceof java.net.SocketException || e instanceof java.net.SocketTimeoutException || e.getMessage()==null ? "TV controls are unavailable. Try connecting again." : e.getMessage();}});}
+    private boolean runNative(Work work){
+        try{nativeWork.execute(()->{operationError="";try{work.run();}catch(Exception e){Log.w("GlassRemote","TV control operation failed",e);operationError=e instanceof javax.net.ssl.SSLException || e instanceof java.net.SocketException || e instanceof java.net.SocketTimeoutException || e.getMessage()==null ? "TV controls are unavailable. Try connecting again." : e.getMessage();}});return true;}
+        catch(RejectedExecutionException full){return false;}
+    }
     private static String readLine(InputStream in,int limit)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();int prev=-1;for(int i=0;i<limit;i++){int b=in.read();if(b<0)throw new EOFException();if(b=='\n'){if(prev!='\r')throw new IOException("Invalid line");byte[] data=out.toByteArray();return new String(data,0,data.length-1,StandardCharsets.US_ASCII);}out.write(b);prev=b;}throw new IOException("Line too long");}
     private static void reply(OutputStream out,int code,String type,String body)throws IOException{reply(out,code,type,body.getBytes(StandardCharsets.UTF_8),"");}
     private static void reply(OutputStream out,int code,String type,String body,String extra)throws IOException{reply(out,code,type,body.getBytes(StandardCharsets.UTF_8),extra);}

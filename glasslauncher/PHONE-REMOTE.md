@@ -13,6 +13,8 @@ The remote supports directions, OK, Home, Back, playback and volume. Select a te
 
 - The existing foreground monitor process hosts a small bounded HTTP server; it also runs when the optional AirPlay receiver is absent. Assets ship inside the APK. There is no cloud service, telemetry, service worker, or offline cache.
 - A private TV-generated PIN grants an HttpOnly, SameSite cookie. Requests require the TV's host/origin; commands are fixed and authenticated. There is no arbitrary shell endpoint. HTTP traffic stays unencrypted on the home network.
+- Every place that can confirm a code (`POST /api/pair`, `/?pair=` and `/manifest.webmanifest?pair=`) shares one brute-force budget (`PairGuard`): five distinct wrong codes per address per minute, and ten distinct wrong codes from anywhere in ten minutes pause pairing for 15 minutes with a toast on the TV. Repeating the same retired code counts once, so an old Home Screen icon cannot lock the household out.
+- Control Center → Phone remote has an on/off switch (the TV stops listening on port 48633 when off) and **Forget paired phones**, which replaces both the code and the cookie token: every phone, including Home Screen installs, must scan the new code.
 - Controls use an app-owned local ADB identity through the existing Dadb integration. Android TV Remote Service rejects connections originating on its own device, so that protocol cannot provide this embedded bridge.
 - Unicode text travels through an Android input method in the same process, never through shell interpolation. Glass briefly selects its input method and restores the previous default after delivery. Its input method remains enabled for subsequent sends.
 
