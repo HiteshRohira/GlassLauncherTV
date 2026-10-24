@@ -125,6 +125,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStart(
     if (!ctx || !ctx->raop) return -1;
 
     unsigned short port = (unsigned short)(requestedPort > 0 ? requestedPort : 7000);
+    android_callbacks_set_stopping(&ctx->cb_ctx, 0);
     int ret = raop_start_httpd(ctx->raop, &port);
     if (ret < 0) {
         LOGE("raop_start_httpd failed: %d", ret);
@@ -153,6 +154,8 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStop(
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->raop) return;
 
+    /* wake a /play hold first: httpd_stop joins the thread that runs it */
+    android_callbacks_set_stopping(&ctx->cb_ctx, 1);
     raop_stop_httpd(ctx->raop);
     LOGI("AirPlay server stopped");
 
@@ -171,6 +174,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeDestroy(
     if (!ctx) return;
 
     if (ctx->raop) {
+        android_callbacks_set_stopping(&ctx->cb_ctx, 1);
         raop_destroy(ctx->raop);
         ctx->raop = NULL;
     }

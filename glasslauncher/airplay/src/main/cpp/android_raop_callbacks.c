@@ -42,6 +42,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     pthread_mutex_init(&ctx->playback_info_lock, NULL);
     pthread_cond_init(&ctx->play_ready_cond, NULL);
     ctx->play_ready = 0;
+    ctx->stopping = 0;
     ctx->playback_position = 0.0;
     /* -1.0 is the video finished sentinel, reserved for _video_stop */
     ctx->playback_duration = 0.0;
@@ -316,16 +317,31 @@ static void _video_play(void *cls, const char *location, const float start_posit
 }
 
 /* self-driven senders (macOS) latch their scrubber timeline at /play; hold the response
-   until the player reports ready so that read must carry the real duration */
+   until the player reports ready so that read must carry the real duration.
+   This runs on UxPlay's only httpd thread, so every other request (other senders,
+   /playback-info polls) waits too: keep the hold short. */
+#define PLAY_HOLD_SEC 3
 static void _video_wait_ready(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 10; // hold for max 10s
+    ts.tv_sec += PLAY_HOLD_SEC;
+    int timed_out = 0;
     pthread_mutex_lock(&ctx->playback_info_lock);
-    while (!ctx->play_ready) {
-        if (pthread_cond_timedwait(&ctx->play_ready_cond, &ctx->playback_info_lock, &ts) == ETIMEDOUT) break;
+    while (!ctx->play_ready && !ctx->stopping) {
+        if (pthread_cond_timedwait(&ctx->play_ready_cond, &ctx->playback_info_lock, &ts) == ETIMEDOUT) {
+            timed_out = 1;
+            break;
+        }
     }
+    pthread_mutex_unlock(&ctx->playback_info_lock);
+    if (timed_out) LOGI("video_wait_ready: player not ready after %ds, answering /play", PLAY_HOLD_SEC);
+}
+
+void android_callbacks_set_stopping(android_callback_ctx_t *ctx, int stopping) {
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    ctx->stopping = stopping;
+    pthread_cond_broadcast(&ctx->play_ready_cond);
     pthread_mutex_unlock(&ctx->playback_info_lock);
 }
 

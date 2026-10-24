@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Glass TV <noreply@glass.tv>
+Date: Sat, 24 Oct 2026 20:32:06 +0530
+Subject: [PATCH] glass: bound HTTP and mirror allocations
+
+---
+ lib/http_request.c    | 111 ++++++++++++++++++++++++++++++++++--------
+ lib/raop_rtp_mirror.c |  21 +++++++-
+ 2 files changed, 112 insertions(+), 20 deletions(-)
+
+diff --git a/lib/http_request.c b/lib/http_request.c
+index ec030c4..024b082 100644
+--- a/lib/http_request.c
++++ b/lib/http_request.c
+@@ -42,20 +42,60 @@ struct http_request_s {
+     int complete;
+ };
+ 
++/* Glass: bounds for untrusted LAN input. A non-zero callback return makes
++ * llhttp report an error, and httpd then drops the connection. Bodies must
++ * fit legitimate cover art and large HLS master playlists. */
++#define HTTP_MAX_URL      8192
++#define HTTP_MAX_HEADERS  128     /* field + value entries */
++#define HTTP_MAX_HEADER   16384
++#define HTTP_MAX_BODY     (16 * 1024 * 1024)
++
+ static int
+ on_url(llhttp_t *parser, const char *at, size_t length)
+ {
+     http_request_t *request = parser->data;
+     int urllen = request->url ? strlen(request->url) : 0;
+-
+-    request->url = realloc(request->url, urllen+length+1);
+-    assert(request->url);
++    if (length > HTTP_MAX_URL || urllen + length > HTTP_MAX_URL) {
++        return -1;
++    }
++    char *url = realloc(request->url, urllen+length+1);
++    if (!url) {
++        return -1;
++    }
++    request->url = url;
+ 
+     request->url[urllen] = '\0';
+     strncat(request->url, at, length);
+ 
+-    strncpy(request->protocol, at + length + 1, 8);
++    /* Glass: the protocol used to be copied from the 8 bytes after the URL,
++     * which can lie beyond the received data; on_protocol/on_version below
++     * build it from what llhttp actually parsed. */
++    return 0;
++}
+ 
++static void
++append_protocol(http_request_t *request, const char *at, size_t length)
++{
++    size_t have = strlen(request->protocol);
++    size_t room = sizeof(request->protocol) - 1 - have;
++    if (length > room) length = room;
++    memcpy(request->protocol + have, at, length);
++    request->protocol[have + length] = '\0';
++}
++
++static int
++on_protocol(llhttp_t *parser, const char *at, size_t length)
++{
++    append_protocol(parser->data, at, length);
++    return 0;
++}
++
++static int
++on_version(llhttp_t *parser, const char *at, size_t length)
++{
++    http_request_t *request = parser->data;
++    if (!strchr(request->protocol, '/')) append_protocol(request, "/", 1);
++    append_protocol(request, at, length);
+     return 0;
+ }
+ 
+@@ -71,24 +111,39 @@ on_header_field(llhttp_t *parser, const char *at, size_t length)
+ 
+     /* Allocate space for new field-value pair */
+     if (request->headers_index == request->headers_size) {
++        if (request->headers_size >= HTTP_MAX_HEADERS) {
++            return -1;
++        }
++        char **headers = realloc(request->headers, (request->headers_size + 2)*sizeof(char*));
++        if (!headers) {
++            return -1;
++        }
++        request->headers = headers;
+         request->headers_size += 2;
+-        request->headers = realloc(request->headers,
+-                                   request->headers_size*sizeof(char*));
+-        assert(request->headers);
+         request->headers[request->headers_index] = NULL;
+         request->headers[request->headers_index+1] = NULL;
+     }
+ 
+     /* Allocate space in the current header string */
+     if (request->headers[request->headers_index] == NULL) {
++        if (length > HTTP_MAX_HEADER) {
++            return -1;
++        }
+         request->headers[request->headers_index] = calloc(1, length + 1);
+     } else {
+-        request->headers[request->headers_index] = realloc(
+-                request->headers[request->headers_index],
+-                strlen(request->headers[request->headers_index]) + length + 1
+-        );
++        size_t have = strlen(request->headers[request->headers_index]);
++        if (length > HTTP_MAX_HEADER || have + length > HTTP_MAX_HEADER) {
++            return -1;
++        }
++        char *grown = realloc(request->headers[request->headers_index], have + length + 1);
++        if (!grown) {
++            return -1;
++        }
++        request->headers[request->headers_index] = grown;
++    }
++    if (!request->headers[request->headers_index]) {
++        return -1;
+     }
+-    assert(request->headers[request->headers_index]);
+ 
+     strncat(request->headers[request->headers_index], at, length);
+     return 0;
+@@ -106,14 +161,24 @@ on_header_value(llhttp_t *parser, const char *at, size_t length)
+ 
+     /* Allocate space in the current header string */
+     if (request->headers[request->headers_index] == NULL) {
++        if (length > HTTP_MAX_HEADER) {
++            return -1;
++        }
+         request->headers[request->headers_index] = calloc(1, length + 1);
+     } else {
+-        request->headers[request->headers_index] = realloc(
+-                request->headers[request->headers_index],
+-                strlen(request->headers[request->headers_index]) + length + 1
+-        );
++        size_t have = strlen(request->headers[request->headers_index]);
++        if (length > HTTP_MAX_HEADER || have + length > HTTP_MAX_HEADER) {
++            return -1;
++        }
++        char *grown = realloc(request->headers[request->headers_index], have + length + 1);
++        if (!grown) {
++            return -1;
++        }
++        request->headers[request->headers_index] = grown;
++    }
++    if (!request->headers[request->headers_index]) {
++        return -1;
+     }
+-    assert(request->headers[request->headers_index]);
+ 
+     strncat(request->headers[request->headers_index], at, length);
+     return 0;
+@@ -124,8 +189,14 @@ on_body(llhttp_t *parser, const char *at, size_t length)
+ {
+     http_request_t *request = parser->data;
+ 
+-    request->data = realloc(request->data, request->datalen + length);
+-    assert(request->data);
++    if (length > HTTP_MAX_BODY || (size_t) request->datalen + length > HTTP_MAX_BODY) {
++        return -1;
++    }
++    char *data = realloc(request->data, request->datalen + length);
++    if (!data) {
++        return -1;
++    }
++    request->data = data;
+ 
+     memcpy(request->data+request->datalen, at, length);
+     request->datalen += length;
+@@ -152,6 +223,8 @@ http_request_init(void)
+ 
+     llhttp_settings_init(&request->parser_settings);
+     request->parser_settings.on_url = &on_url;
++    request->parser_settings.on_protocol = &on_protocol;
++    request->parser_settings.on_version = &on_version;
+     request->parser_settings.on_header_field = &on_header_field;
+     request->parser_settings.on_header_value = &on_header_value;
+     request->parser_settings.on_body = &on_body;
+diff --git a/lib/raop_rtp_mirror.c b/lib/raop_rtp_mirror.c
+index 2efee1b..7b3d2d3 100644
+--- a/lib/raop_rtp_mirror.c
++++ b/lib/raop_rtp_mirror.c
+@@ -17,6 +17,9 @@
+ 
+ #include "raop_rtp_mirror.h"
+ 
++/* Glass: upper bound for one compressed mirror frame. */
++#define MIRROR_MAX_PAYLOAD (8 * 1024 * 1024)
++
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
+@@ -366,8 +369,21 @@ raop_rtp_mirror_thread(void *arg)
+ 
+             /* "streaming report" packets have no timestamp in packet[8:15] */
+ 
++            /* Glass: the size is sender-controlled; a 1080p IDR is well under
++             * 2 MB, so reject anything negative or absurd instead of letting
++             * it exhaust the 32-bit address space. Ends this mirror session. */
++            if (payload_size < 0 || payload_size > MIRROR_MAX_PAYLOAD) {
++                logger_log(raop_rtp_mirror->logger, LOGGER_ERR,
++                           "raop_rtp_mirror: rejecting payload of %d bytes", payload_size);
++                break;
++            }
+             if (payload == NULL) {
+-                payload = malloc(payload_size);
++                payload = malloc(payload_size > 0 ? payload_size : 1);
++                if (!payload) {
++                    logger_log(raop_rtp_mirror->logger, LOGGER_ERR,
++                               "raop_rtp_mirror: out of memory for %d byte payload", payload_size);
++                    break;
++                }
+                 readstart = 0;
+             }
+ 
+@@ -835,6 +851,9 @@ raop_rtp_mirror_thread(void *arg)
+             }
+         }
+     }
++    /* Glass: a session that ends mid-payload must not leak it. */
++    free(payload);
++    payload = NULL;
+     /* Close the stream file descriptor */
+     if (stream_fd != -1) {
+         CLOSESOCKET(stream_fd);

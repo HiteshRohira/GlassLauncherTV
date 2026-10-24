@@ -1,0 +1,293 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Glass TV <noreply@glass.tv>
+Date: Sat, 24 Oct 2026 20:34:44 +0530
+Subject: [PATCH] glass: initialize HLS master rewrite; resolve relative URIs
+
+---
+ lib/airplay_video.c | 183 ++++++++++++++++++++++++++++++++++----------
+ lib/airplay_video.h |   1 +
+ lib/http_handlers.h |  19 ++++-
+ 3 files changed, 160 insertions(+), 43 deletions(-)
+
+diff --git a/lib/airplay_video.c b/lib/airplay_video.c
+index 4718d59..50b265b 100644
+--- a/lib/airplay_video.c
++++ b/lib/airplay_video.c
+@@ -20,6 +20,8 @@
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
++#include <ctype.h>
++#include <stdint.h>
+ #include <stdbool.h>
+ #include <assert.h>
+ #include <pthread.h>
+@@ -581,7 +583,7 @@ void destroy_media_data_store(airplay_video_t *airplay_video) {
+ void create_media_data_store(airplay_video_t * airplay_video, char ** uri_list, int num_uri) {  
+     pthread_mutex_lock(&airplay_video->media_data_store_lock);
+     destroy_media_data_store(airplay_video);
+-    media_item_t *media_data_store = calloc(num_uri, sizeof(media_item_t));
++    media_item_t *media_data_store = calloc(num_uri > 0 ? num_uri : 1, sizeof(media_item_t));  /* Glass: calloc(0) may be NULL */
+     if (!media_data_store) {
+         printf("Memory allocation failure (media_data_store)\n");
+         exit(1);
+@@ -787,7 +789,7 @@ int create_media_uri_table(const char *url_prefix, const char *master_playlist_d
+         if (end == NULL) {
+             return 1;
+         }
+-        end += sizeof("m3u8");
++        end += strlen("m3u8");  /* Glass: sizeof() stepped past the NUL at end of data */
+         count++;
+         ptr = strstr(end, url_prefix);
+     }
+@@ -806,8 +808,8 @@ int create_media_uri_table(const char *url_prefix, const char *master_playlist_d
+         if (end == NULL) {
+             return 0;
+         }
+-        end += sizeof("m3u8");
+-        size_t len = end - ptr - 1;
++        end += strlen("m3u8");
++        size_t len = end - ptr;
+ 	    uri  = (char *) calloc(len + 1, sizeof(char));
+         if (!uri) {
+             printf("Memory allocation failure (uri)\n");
+@@ -825,56 +827,155 @@ int create_media_uri_table(const char *url_prefix, const char *master_playlist_d
+     return 0;
+ }
+ 
+-/* Adjust uri prefixes in the Master Playlist, for sending to the Media Player */
++/* Adjust uri prefixes in the Master Playlist, for sending to the Media Player.
++ * Glass: always returns a fully initialized copy (the original returned an
++ * uninitialized buffer when the prefix never occurred), with checked sizes. */
+ char *adjust_master_playlist (char *fcup_response_data, int fcup_response_datalen,
+                               const char *uri_prefix, char *uri_local_prefix) {
+     size_t uri_prefix_len = strlen(uri_prefix);
+     size_t uri_local_prefix_len = strlen(uri_local_prefix);
+-    int counter = 0;
+-    char *ptr = strstr(fcup_response_data, uri_prefix);
+-    while (ptr != NULL) {
+-        counter++;
+-        ptr++;
+-        ptr = strstr(ptr, uri_prefix);
++    size_t datalen = fcup_response_datalen > 0 ? (size_t) fcup_response_datalen : 0;
++    size_t counter = 0;
++    if (uri_prefix_len) {
++        for (const char *ptr = strstr(fcup_response_data, uri_prefix); ptr; ptr = strstr(ptr + uri_prefix_len, uri_prefix)) {
++            counter++;
++        }
++    }
++    size_t new_len = datalen;
++    if (uri_local_prefix_len >= uri_prefix_len) {
++        size_t grow = uri_local_prefix_len - uri_prefix_len;
++        if (counter && grow > (SIZE_MAX - datalen - 1) / counter) return NULL;
++        new_len += grow * counter;
++    } else {
++        new_len -= (uri_prefix_len - uri_local_prefix_len) * counter;
+     }
+-
+-    size_t len = uri_local_prefix_len - uri_prefix_len;
+-    len *= counter;
+-    len += fcup_response_datalen;
+-    int byte_count = 0;
+-    int new_len = (int) len;
+     char *new_master = (char *) malloc(new_len + 1);
+     if (!new_master) {
+-        printf("Memory allocation failure (new_master)\n");
+-        exit(1);
++        return NULL;
+     }
+-    new_master[new_len] = '\0';
+-    char *first = fcup_response_data;
+-    char *new = new_master;
+-    char *last = strstr(first, uri_prefix);
+-    counter  = 0;
+-    while (last != NULL) {
+-        counter++;
+-        len = last - first;
+-        memcpy(new, first, len);
+-        byte_count += len;
++    char *out = new_master;
++    const char *first = fcup_response_data;
++    const char *end = fcup_response_data + datalen;
++    const char *last = uri_prefix_len ? strstr(first, uri_prefix) : NULL;
++    while (last != NULL && last < end) {
++        memcpy(out, first, last - first);
++        out += last - first;
++        memcpy(out, uri_local_prefix, uri_local_prefix_len);
++        out += uri_local_prefix_len;
+         first = last + uri_prefix_len;
+-        new += len;
+-        memcpy(new, uri_local_prefix, uri_local_prefix_len);
+-        byte_count += uri_local_prefix_len;
+-        new += uri_local_prefix_len;
+-        last = strstr(last + uri_prefix_len, uri_prefix);
+-        if (last  == NULL) {
+-            len = fcup_response_data  + fcup_response_datalen  - first;
+-            memcpy(new, first, len);
+-            byte_count += len;
+-            break;
+-        }
++        last = strstr(first, uri_prefix);
+     }
+-    assert(byte_count == new_len); 
++    memcpy(out, first, end - first);
++    out += end - first;
++    *out = '\0';
++    assert((size_t) (out - new_master) == new_len);
+     return new_master;
+ }
+ 
++/* Glass: growable string for resolve_relative_uris */
++typedef struct { char *buf; size_t len, cap; int failed; } _sbuf_t;
++static void _sbuf_put(_sbuf_t *b, const char *s, size_t n) {
++    if (b->failed) return;
++    if (b->len + n + 1 > b->cap) {
++        size_t cap = b->cap ? b->cap : 256;
++        while (cap < b->len + n + 1) {
++            if (cap > SIZE_MAX / 2) { b->failed = 1; return; }
++            cap *= 2;
++        }
++        char *grown = realloc(b->buf, cap);
++        if (!grown) { b->failed = 1; return; }
++        b->buf = grown;
++        b->cap = cap;
++    }
++    memcpy(b->buf + b->len, s, n);
++    b->len += n;
++    b->buf[b->len] = '\0';
++}
++
++static int _is_absolute_uri(const char *uri, size_t len) {
++    for (size_t i = 0; i + 2 < len; i++) {
++        char c = uri[i];
++        if (c == ':') return uri[i + 1] == '/' && uri[i + 2] == '/';
++        if (!(isalnum((unsigned char) c) || c == '+' || c == '-' || c == '.')) return 0;
++    }
++    return 0;
++}
++
++static void _put_resolved(_sbuf_t *b, const char *uri, size_t len, const char *base_url) {
++    if (len == 0 || _is_absolute_uri(uri, len)) {
++        _sbuf_put(b, uri, len);
++        return;
++    }
++    /* base_url without its query or fragment */
++    size_t base_len = strcspn(base_url, "?#");
++    const char *scheme_end = strstr(base_url, "://");
++    size_t authority_end = base_len;
++    if (scheme_end && (size_t) (scheme_end - base_url) < base_len) {
++        const char *path = memchr(scheme_end + 3, '/', base_len - (scheme_end + 3 - base_url));
++        authority_end = path ? (size_t) (path - base_url) : base_len;
++    }
++    if (len > 1 && uri[0] == '/' && uri[1] == '/') {
++        if (scheme_end) _sbuf_put(b, base_url, scheme_end - base_url + 1);  /* scheme-relative */
++    } else if (uri[0] == '/') {
++        _sbuf_put(b, base_url, authority_end);                 /* root-relative */
++    } else {
++        size_t dir = base_len;
++        while (dir > authority_end && base_url[dir - 1] != '/') dir--;
++        if (dir <= authority_end) {
++            _sbuf_put(b, base_url, authority_end);
++            _sbuf_put(b, "/", 1);
++        } else {
++            _sbuf_put(b, base_url, dir);                       /* directory-relative */
++        }
++    }
++    _sbuf_put(b, uri, len);
++}
++
++/* Glass: make every playlist and rendition URI in a master playlist absolute,
++ * resolved against the master's own URL, so that relative variants go through
++ * the same uri_prefix table and rewrite as absolute ones. Returns a new string
++ * (caller frees) or NULL on allocation failure. */
++char *resolve_relative_uris(const char *playlist, const char *base_url) {
++    _sbuf_t b = { 0 };
++    _sbuf_put(&b, "", 0);
++    const char *line = playlist;
++    while (*line) {
++        const char *eol = strchr(line, '\n');
++        size_t line_len = eol ? (size_t) (eol - line) : strlen(line);
++        size_t content_len = line_len;
++        if (content_len && line[content_len - 1] == '\r') content_len--;
++        if (content_len && line[0] != '#') {
++            size_t lead = 0;
++            while (lead < content_len && (line[lead] == ' ' || line[lead] == '\t')) lead++;
++            _sbuf_put(&b, line, lead);
++            _put_resolved(&b, line + lead, content_len - lead, base_url);
++        } else if (content_len > 4 && !strncmp(line, "#EXT", 4)) {
++            const char *p = line, *stop = line + content_len;
++            const char *attr;
++            while ((attr = strstr(p, "URI=\"")) && attr < stop) {
++                const char *value = attr + 5;
++                const char *close = memchr(value, '"', stop - value);
++                if (!close) break;
++                _sbuf_put(&b, p, value - p);
++                _put_resolved(&b, value, close - value, base_url);
++                p = close;
++            }
++            _sbuf_put(&b, p, stop - p);
++        } else {
++            _sbuf_put(&b, line, content_len);
++        }
++        _sbuf_put(&b, line + content_len, line_len - content_len);  /* keep any \r */
++        if (!eol) break;
++        _sbuf_put(&b, "\n", 1);
++        line = eol + 1;
++    }
++    if (b.failed) {
++        free(b.buf);
++        return NULL;
++    }
++    return b.buf;
++}
++
+ static char *_quoted_field(const char *hay, const char *key, size_t *len) {
+     const char *begin = strstr(hay, key);
+     if (begin) begin = strchr(begin, '"');
+diff --git a/lib/airplay_video.h b/lib/airplay_video.h
+index 5635ea7..c08b0ad 100644
+--- a/lib/airplay_video.h
++++ b/lib/airplay_video.h
+@@ -79,6 +79,7 @@ void media_data_store_destroy(void *media_data_store);
+ 
+ // called by the POST /action handler:
+ char *process_media_data(void *media_data_store, const char *url, const char *data, int datalen);
++char *resolve_relative_uris(const char *playlist, const char *base_url);
+ char *adjust_master_playlist (char *fcup_response_data, int fcup_response_datalen,
+                               const char *uri_prefix, char *uri_local_prefix);
+ char *adjust_yt_condensed_playlist(const char *media_playlist);
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index a5e10f3..fe1e350 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -662,13 +662,28 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t
+             char ** uri_list = NULL;
+             int num_uri = 0;
+             char *uri_local_prefix = get_uri_local_prefix(airplay_video);
++            /* Glass: relative variant/rendition URIs become absolute so the
++             * uri_prefix table and rewrite below cover them too */
++            char *resolved = resolve_relative_uris(playlist, fcup_response_url);
++            if (resolved) {
++                free(playlist);
++                playlist = resolved;
++            }
+             playlist = select_master_playlist_language(airplay_video, playlist);
+             /* each kept variant costs one FCUP round trip to the sender before playback can start */
+             playlist = prune_master_playlist(playlist, 1080);
+             playlist_len = strlen(playlist);
+-            create_media_uri_table(uri_prefix, playlist, playlist_len, &uri_list, &num_uri);	
++            if (create_media_uri_table(uri_prefix, playlist, playlist_len, &uri_list, &num_uri) < 0) {
++                logger_log(raop->logger, LOGGER_ERR, "master playlist lists no %s media playlists", uri_prefix);
++                uri_list = NULL;
++                num_uri = 0;
++            }
+             char *new_master = adjust_master_playlist (playlist, playlist_len,  uri_prefix, uri_local_prefix);
+-            free(playlist);
++            if (new_master) {
++                free(playlist);
++            } else {
++                new_master = playlist;
++            }
+             store_master_playlist(airplay_video, new_master);
+             create_media_data_store(airplay_video, uri_list, num_uri);
+             free (uri_list);
