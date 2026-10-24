@@ -17,6 +17,8 @@ LL=($L/llhttp/llhttp.c $L/llhttp/api.c $L/llhttp/http.c)
 cc $CFLAGS -o $WORK/test_hls $HERE/test_hls.c
 cc $CFLAGS -o $WORK/test_httpd $HERE/test_httpd.c $L/httpd.c $L/http_request.c $L/http_response.c \
    $L/logger.c $L/netutils.c $L/utils.c $L/compat.c $LL
+cc $CFLAGS -o $WORK/test_raop_buffer_nodata $HERE/test_raop_buffer_nodata.c
 $WORK/test_hls
 $WORK/test_httpd
+$WORK/test_raop_buffer_nodata
 echo "native host tests: all passed"

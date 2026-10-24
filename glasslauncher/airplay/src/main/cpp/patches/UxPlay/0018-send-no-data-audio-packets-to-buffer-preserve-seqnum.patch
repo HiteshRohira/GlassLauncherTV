@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "F. Duncanh" <fduncanh@gmail.com>
+Date: Sun, 11 Oct 2026 00:42:58 -0400
+Subject: [PATCH] send no-data audio packets to buffer (preserve seqnum
+ sequence)
+
+a seqnum sequence with gaps was generating resend requests for
+the "missing" non-data packets.
+fixes #597
+
+(cherry picked from commit ec203121355220dd90278a369eeabb0b8ba4f14a)
+---
+ lib/raop_buffer.c | 13 +++++++++----
+ lib/raop_rtp.c    | 17 ++++++++++++-----
+ 2 files changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/lib/raop_buffer.c b/lib/raop_buffer.c
+index 45a3e4c..b513f52 100644
+--- a/lib/raop_buffer.c
++++ b/lib/raop_buffer.c
+@@ -173,7 +173,7 @@ raop_buffer_enqueue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned sh
+         return -1;
+     }
+     /* before time is synchronized, some empty data packets are sent */
+-    if (datalen == 12 || (datalen == 16 && !memcmp(&data[12], empty_packet_marker, 4))) {
++    if (datalen == 12 ) {
+         return 0;
+     }
+     int payload_size = datalen - 12;
+@@ -209,9 +209,14 @@ raop_buffer_enqueue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned sh
+     entry->filled = 1;
+ 
+     entry->payload_data = malloc(payload_size);
+-    int decrypt_ret = raop_buffer_decrypt(raop_buffer, data, entry->payload_data, payload_size, &entry->payload_size);
+-    assert(decrypt_ret >= 0);
+-    assert((int) entry->payload_size <= payload_size);
++    if (datalen == 16 && !memcmp(&data[12], empty_packet_marker, 4)) {
++        memcpy(entry->payload_data, &data[12], payload_size);
++        entry->payload_size = payload_size;
++    } else {
++        int decrypt_ret = raop_buffer_decrypt(raop_buffer, data, entry->payload_data, payload_size, &entry->payload_size);
++        assert(decrypt_ret >= 0);
++        assert((int) entry->payload_size <= payload_size);
++    }
+ 
+     /* Update the raop_buffer seqnums */
+     if (raop_buffer->is_empty) {
+diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
+index 64eb7fb..9b7930b 100644
+--- a/lib/raop_rtp.c
++++ b/lib/raop_rtp.c
+@@ -588,12 +588,15 @@ raop_rtp_thread_udp(void *arg)
+                  raop_rtp->initial_sync = true;
+             }	    
+ 
+-            if (packetlen == 12 ||(packetlen == 16 && memcmp(packet + 12, no_data_marker, 4) == 0)) {
+-                /* this is a "no data" packet */
+-	        /* the first such packet could be used to provide the initial rtptime and seqnum formerly given in the RECORD request */
+-                continue;
++
++            /* the first no-data  packet (len 12 or len 16 (12 + 4 byte marker) could be used to provide the initial rtptime and seqnum
++	       formerly given in the RECORD request */	    
++            if (packetlen == 12) {
++                /* this is an empty packet, without the 4-byte "no-data" marker (add the Marker, it appears to be an older protocal AirMyPC variant */
++                memcpy(packet + 12, no_data_marker, 4);
++                packetlen = 16;
+             }
+-	    
++
+             if (raop_rtp->ct == 2 && packetlen == 44)  continue;   /* ignore the ALAC packets with format information only. */
+ 
+             int result = raop_buffer_enqueue(raop_rtp->buffer, packet, packetlen, 1);
+@@ -610,6 +613,10 @@ raop_rtp_thread_udp(void *arg)
+                 uint32_t rtp_timestamp = 0;
+ 
+                 while ((payload = raop_buffer_dequeue(raop_rtp->buffer, &payload_size, &rtp_timestamp, &seqnum, no_resend))) {
++                    if (payload_size == 4 && memcmp(payload, no_data_marker, 4) == 0) {
++                        free (payload);
++                        continue;
++                    }
+                     audio_decode_struct audio_data; 
+                     audio_data.rtp_time = rtp_timestamp;
+                     audio_data.seqnum = seqnum;

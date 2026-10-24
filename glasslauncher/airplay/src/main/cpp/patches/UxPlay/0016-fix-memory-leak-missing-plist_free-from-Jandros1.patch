@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "F. Duncanh" <fduncanh@gmail.com>
+Date: Sat, 26 Sep 2026 12:46:15 -0400
+Subject: [PATCH] fix memory leak: missing plist_free (from @Jandros1 )
+
+fixes #585
+
+(cherry picked from commit ba2bd19ad440fde14455dc84c5902d3c4fa08716)
+---
+ lib/raop_rtp_mirror.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/lib/raop_rtp_mirror.c b/lib/raop_rtp_mirror.c
+index 7b3d2d3..28df14c 100644
+--- a/lib/raop_rtp_mirror.c
++++ b/lib/raop_rtp_mirror.c
+@@ -824,14 +824,15 @@ raop_rtp_mirror_thread(void *arg)
+                         }
+                     }
+                     if (plist_size) {
+-                        char *plist_xml = NULL;
+-                        uint32_t plist_len = 0;
+-                        plist_t root_node = NULL;
+-                        plist_from_bin((char *) payload, plist_size, &root_node);
+                         if (raop_rtp_mirror->show_client_FPS_data) {
++                            char *plist_xml = NULL;
++                            uint32_t plist_len = 0;
++                            plist_t root_node = NULL;
++                            plist_from_bin((char *) payload, plist_size, &root_node);
+                             plist_to_xml(root_node, &plist_xml, &plist_len);
+                             logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "%s", plist_xml);
+                             free(plist_xml);
++                            plist_free(root_node);
+                         }
+                     }
+                 }
