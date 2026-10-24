@@ -2673,14 +2673,16 @@ public class LauncherActivity extends Activity {
             // stale AppInfo whose backing identity the user just trimmed.
             // The next loadApps() (1 s post) repopulates both atomically.
             appByPackage.clear();
-            // Reuse the cached {@link #pkgReloadRunnable} instead of a
-            // fresh {@code this::loadApps} method-reference. Same effect
-            // (clears the changed-while-paused flag and runs loadApps),
-            // saves one Runnable allocation, and lets a future
-            // {@code uiHandler.removeCallbacks(pkgReloadRunnable)} call
-            // cancel this delayed reload alongside any pending receiver
-            // post.
-            uiHandler.postDelayed(pkgReloadRunnable, 1000);
+            // Glass: drawer cells kept their bitmaps outside the caches.
+            AppDrawer dr = drawer;
+            if (dr != null && dr.getVisibility() != View.VISIBLE) {
+                dr.setApps(Collections.emptyList(), 0);
+                for (int i = 0; i < dr.pool.size(); i++) dr.pool.get(i).iconBitmap = null;
+            }
+            // Glass: refilling right away while in the background undoes the
+            // trim; reload on resume instead (or now, if Home is showing).
+            if (uiPaused) pkgChangedWhilePaused = true;
+            else uiHandler.postDelayed(pkgReloadRunnable, 1000);
         }
         // MODERATE / BACKGROUND: trim the in-memory bitmap cache only.
         // The {@code iconInflight} map is intentionally left untouched —
@@ -2696,6 +2698,14 @@ public class LauncherActivity extends Activity {
             if (bannerCache != null) bannerCache.trimToSize(bannerCache.maxSize() / 2); }
         else if (level >= TRIM_MEMORY_BACKGROUND) { iconCache.trimToSize(iconCache.maxSize() * 3 / 4);
             if (bannerCache != null) bannerCache.trimToSize(bannerCache.maxSize() * 3 / 4); }
+        // Glass: the system is short of memory while Home is in use (a big
+        // streaming app or the AirPlay receiver is running too). Visible cells
+        // hold their own bitmaps, so trimming the caches keeps what is on
+        // screen and gives back only off-screen art.
+        else if (level >= TRIM_MEMORY_RUNNING_CRITICAL) { iconCache.trimToSize(iconCache.maxSize() / 4);
+            if (bannerCache != null) bannerCache.trimToSize(bannerCache.maxSize() / 4); }
+        else if (level >= TRIM_MEMORY_RUNNING_LOW) { iconCache.trimToSize(iconCache.maxSize() / 2);
+            if (bannerCache != null) bannerCache.trimToSize(bannerCache.maxSize() / 2); }
     }
 
     @Override public void onWindowFocusChanged(boolean h) { super.onWindowFocusChanged(h); if (h) hideSystemUI(); }
