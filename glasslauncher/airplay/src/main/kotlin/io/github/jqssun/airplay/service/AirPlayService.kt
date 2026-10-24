@@ -24,7 +24,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.os.PowerManager
 import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
@@ -81,7 +80,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private var nativeHandle = 0L
     private var nsdManager: NsdServiceManager? = null
-    private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
     private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
 
@@ -218,12 +216,43 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     @Volatile private var _startedAt = 0L
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var _lastNetworkKey: String? = null
+    /** A network change arrived during a session; re-advertise once it ends. */
+    @Volatile private var _networkRestartPending = false
     private val _networkRestart = Runnable {
-        if (_serverState.value == ServerState.RUNNING && _connectionCount.value == 0) {
+        if (_serverState.value != ServerState.RUNNING) return@Runnable
+        if (_connectionCount.value == 0) {
+            _networkRestartPending = false
             log("Network changed; re-advertising")
             _restartServer()
+        } else if (!_networkRestartPending) {
+            _networkRestartPending = true
+            log("Network changed during a session; re-advertising when it ends")
         }
     }
+
+    // Glass: wake lock, Wi-Fi low-latency lock and audio focus, held only for real sessions.
+    private var _pausedForFocus = false
+    private val session by lazy {
+        SessionResources(this, _mainHandler, object : SessionResources.Listener {
+            override fun onFocusLost(transient: Boolean) {
+                // mirroring cannot be paused from here; video and music can
+                when {
+                    _videoPlaybackActive.value -> { airPlayVideoPlayer.setPlaying(false); _pausedForFocus = transient }
+                    _audioOnly.value && _playing.value -> { _setPlaying(false); dacpController?.pause(); _pausedForFocus = transient }
+                }
+                log("Audio focus lost${if (transient) " (transient)" else ""}")
+            }
+            override fun onFocusRegained() {
+                if (!_pausedForFocus) return
+                _pausedForFocus = false
+                when {
+                    _videoPlaybackActive.value -> airPlayVideoPlayer.setPlaying(true)
+                    _audioOnly.value -> { _setPlaying(true); dacpController?.play() }
+                }
+            }
+        })
+    }
+    private fun _sessionActive() = _mirroringActive.value || _videoPlaybackActive.value || _audioOnly.value
 
     /** PIN the sender asked us to display, if pairing is in progress. */
     fun currentPin(): String? = _lastPin
@@ -233,8 +262,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _mainHandler.post { _restartServer() }
     }
 
-    /** Name senders see; empty until the server has started once. */
-    fun advertisedName(): String = _advertisedName
+    /** Name senders see; empty until the server has started once. If another
+     *  device already used the name, mDNS renamed ours (e.g. "Bedroom TV (2)")
+     *  and this reports the name actually registered. */
+    fun advertisedName(): String = nsdManager?.registeredName("_airplay._tcp") ?: _advertisedName
 
     /** True when the server is running and every mDNS record is registered. */
     fun isAdvertised(): Boolean =
@@ -276,23 +307,36 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private fun _registerNetworkCallback() {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) {
-                val key = lp.interfaceName + lp.linkAddresses
-                    .filter { it.address is java.net.Inet4Address }.joinToString { it.toString() }
-                _mainHandler.post {
-                    val previous = _lastNetworkKey
-                    _lastNetworkKey = key
-                    if (previous != null && previous != key) {
-                        _mainHandler.removeCallbacks(_networkRestart)
-                        _mainHandler.postDelayed(_networkRestart, NETWORK_RESTART_DEBOUNCE_MS)
-                    }
-                }
+        // Glass: one key per network (Wi-Fi and Ethernet can both match), and
+        // losing a network counts as a change too.
+        val keys = HashMap<Network, String>()
+        val registeredAt = SystemClock.elapsedRealtime()
+        fun changed(network: Network, key: String?) = _mainHandler.post {
+            val previous = keys[network]
+            if (key == null) keys.remove(network) else keys[network] = key
+            _lastNetworkKey = keys.values.sorted().joinToString("|")
+            // A known network changed address or went away, or a new one came
+            // up later (the initial callbacks for existing networks are not changes).
+            val trigger = if (previous != null) previous != key
+                else key != null && SystemClock.elapsedRealtime() - registeredAt > INITIAL_NETWORK_GRACE_MS
+            if (trigger) {
+                _mainHandler.removeCallbacks(_networkRestart)
+                _mainHandler.postDelayed(_networkRestart, NETWORK_RESTART_DEBOUNCE_MS)
             }
         }
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) {
+                changed(network, lp.interfaceName + lp.linkAddresses
+                    .filter { it.address is java.net.Inet4Address }.joinToString { it.toString() })
+            }
+            override fun onLost(network: Network) = changed(network, null).let { }
+        }
         try {
+            // Wi-Fi or Ethernet, with or without internet access: AirPlay only needs the LAN.
             cm.registerNetworkCallback(NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), cb)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET).build(), cb)
             networkCallback = cb
         } catch (e: RuntimeException) {
             Log.w(TAG, "network callback refused", e)
@@ -305,7 +349,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _registerNetworkCallback()
         lifecycleScope.launch {
             kotlinx.coroutines.flow.merge(_serverState, _connectionCount, _mirroringActive,
-                _videoPlaybackActive, _audioOnly).collect { _notifyChanged() }
+                _videoPlaybackActive, _audioOnly).collect {
+                _notifyChanged()
+                session.update(_serverState.value == ServerState.RUNNING && _sessionActive())
+            }
         }
         createNotificationChannel()
         dacpController = DacpController(this)
@@ -455,9 +502,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (_serverState.value == ServerState.RUNNING) return
         val effectiveName = prefs[Prefs.SERVER_NAME].ifBlank { deviceName() }
 
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
-
         nsdManager = NsdServiceManager(this) { _notifyChanged() }.apply { acquireMulticastLock() }
 
         val hwAddr = getHwAddr()
@@ -594,8 +638,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         }
         nsdManager?.release()
         nsdManager = null
-        wakeLock?.release()
-        wakeLock = null
+        session.release()
         _serverState.value = ServerState.ERROR
         if (foregroundStarted) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -627,8 +670,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         dacpController?.reset()
         nsdManager?.release()
         nsdManager = null
-        wakeLock?.release()
-        wakeLock = null
+        session.release()
+        _pausedForFocus = false
         videoRenderer.release()
         airPlayVideoPlayer.stop()
         mediaSession?.isActive = false
@@ -916,6 +959,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             mediaSession?.isActive = false
             _refreshDacpPlayer()
             _updateMediaNotification()
+            if (_networkRestartPending) {
+                _mainHandler.removeCallbacks(_networkRestart)
+                _mainHandler.postDelayed(_networkRestart, NETWORK_RESTART_DEBOUNCE_MS)
+            }
         }
         log("Sender disconnected ($count)")
     }
@@ -1294,6 +1341,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         /** Implicit, package-scoped action the host app's player activity handles. */
         const val ACTION_SHOW_PLAYER = "io.github.jqssun.airplay.SHOW_PLAYER"
         private const val NETWORK_RESTART_DEBOUNCE_MS = 1_500L
+        private const val INITIAL_NETWORK_GRACE_MS = 3_000L
 
         /** The running service, for same-process hosts (status, player UI). */
         @Volatile @JvmStatic var instance: AirPlayService? = null

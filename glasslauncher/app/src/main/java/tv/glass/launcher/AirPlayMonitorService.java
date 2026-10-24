@@ -83,6 +83,7 @@ public final class AirPlayMonitorService extends Service {
     private static final long WAKE_GRACE_MS = 20_000L;
     /** Inside TCL's ~200 s freeze window. */
     private static final long KEEPALIVE_MS = 120_000L;
+    private static final long FREEZE_WINDOW_MS = 190_000L;
     /** Re-check cadence while starting or failed. */
     private static final long RETRY_MS = 15_000L;
     /** Status older than this is shown as unknown (amber) by the launcher. */
@@ -98,6 +99,8 @@ public final class AirPlayMonitorService extends Service {
     private String publishedRecord;
     private View banner;
     private GlassRemoteServer phoneRemote;
+    /** When the last keep-alive tick ran, to spot ticks that came too late. */
+    private long lastTickAt;
 
     // ── Entry points used by the launcher ─────────────────────────────────
 
@@ -181,6 +184,13 @@ public final class AirPlayMonitorService extends Service {
         scheduleKeepAlive();
         String action = intent != null ? intent.getAction() : null;
         long now = SystemClock.elapsedRealtime();
+        if (ACTION_TICK.equals(action)) {
+            // TCL freezes us ~200 s after the last service start; a tick later
+            // than that means the receiver may have been unreachable.
+            if (lastTickAt > 0 && isInteractive() && now - lastTickAt > FREEZE_WINDOW_MS)
+                Log.w(TAG, "keep-alive tick late: " + (now - lastTickAt) / 1000 + " s since the last one");
+            lastTickAt = now;
+        }
         if (ACTION_SET_ENABLED.equals(action)) {
             setEnabledInternal(intent.getBooleanExtra(EXTRA_ENABLED, true));
         } else if (ACTION_RESTART.equals(action)) {
@@ -280,10 +290,19 @@ public final class AirPlayMonitorService extends Service {
     }
 
     /** Non-wakeup: a sleeping TV defers the tick, and nothing needs the
-     *  receiver until the screen is back. */
+     *  receiver until the screen is back. Exact where allowed: an inexact
+     *  alarm may be batched past TCL's ~200 s freeze window. */
     private void scheduleKeepAlive() {
         AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
-        if (am != null) am.set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + KEEPALIVE_MS, tick());
+        if (am == null) return;
+        long at = SystemClock.elapsedRealtime() + KEEPALIVE_MS;
+        boolean exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms();
+        try {
+            if (exact) am.setExact(AlarmManager.ELAPSED_REALTIME, at, tick());
+            else am.set(AlarmManager.ELAPSED_REALTIME, at, tick());
+        } catch (SecurityException e) {
+            am.set(AlarmManager.ELAPSED_REALTIME, at, tick());
+        }
     }
 
     private boolean isInteractive() {

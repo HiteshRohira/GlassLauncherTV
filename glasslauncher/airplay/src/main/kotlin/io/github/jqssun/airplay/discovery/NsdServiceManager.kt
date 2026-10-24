@@ -15,7 +15,13 @@ class NsdServiceManager(private val ctx: Context, private val onChange: () -> Un
     private val registrations = mutableListOf<NsdManager.RegistrationListener>()
     private val registered = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val failed = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    /** Name actually registered per type; mDNS renames on a conflict. */
+    private val names = java.util.concurrent.ConcurrentHashMap<String, String>()
     @Volatile private var expected = 0
+    @Volatile private var released = false
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    fun registeredName(type: String): String? = names[type]
 
     fun allRegistered() = expected > 0 && registered.size >= expected
     fun anyFailed() = failed.isNotEmpty()
@@ -36,7 +42,11 @@ class NsdServiceManager(private val ctx: Context, private val onChange: () -> Un
 
     fun register(services: List<MdnsService>) {
         expected = services.size
-        services.forEach(::_register)
+        // Unregistering is asynchronous in mdnsd; registering the same name at
+        // once can collide with our own old record and get renamed "(2)".
+        val wait = lastReleaseAt + REREGISTER_GAP_MS - android.os.SystemClock.elapsedRealtime()
+        if (wait <= 0) services.forEach(::_register)
+        else handler.postDelayed({ if (!released) services.forEach(::_register) }, wait)
     }
 
     private fun _register(s: MdnsService) {
@@ -49,6 +59,8 @@ class NsdServiceManager(private val ctx: Context, private val onChange: () -> Un
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
                 Log.i(TAG, "${s.type} registered: ${info.serviceName}")
+                if (info.serviceName != s.name) Log.w(TAG, "${s.type} name taken on the network; registered as ${info.serviceName}")
+                names[s.type] = info.serviceName
                 failed -= s.type; registered += s.type; onChange()
             }
             override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
@@ -67,6 +79,10 @@ class NsdServiceManager(private val ctx: Context, private val onChange: () -> Un
     }
 
     fun release() {
+        released = true
+        handler.removeCallbacksAndMessages(null)
+        if (registrations.isNotEmpty()) lastReleaseAt = android.os.SystemClock.elapsedRealtime()
+        names.clear()
         registrations.forEach {
             try { nsdManager.unregisterService(it) } catch (_: Exception) {}
         }
@@ -78,5 +94,7 @@ class NsdServiceManager(private val ctx: Context, private val onChange: () -> Un
 
     companion object {
         private const val TAG = "NsdServiceManager"
+        private const val REREGISTER_GAP_MS = 400L
+        @Volatile private var lastReleaseAt = -REREGISTER_GAP_MS
     }
 }
