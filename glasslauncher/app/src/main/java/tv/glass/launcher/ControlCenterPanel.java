@@ -36,6 +36,8 @@ final class ControlCenterPanel extends FrameLayout {
     private final Host host;
     private final List<List<View>> groups=new ArrayList<>();
     private final List<View> actions=new ArrayList<>();
+    /** key -> {title, status, dot or null, tile} for in-place updates. */
+    private final java.util.Map<String,View[]> tileParts=new java.util.HashMap<>();
     private FrameLayout card;
     private LinearLayout controls, detail;
     private View returnFocus;
@@ -71,8 +73,24 @@ final class ControlCenterPanel extends FrameLayout {
     }
     void refresh(){
         if(!isVisible() || sliding)return;
-        if(detailKey==null){rebuild();restoreFocus();}
+        if(detailKey==null)updateTiles();
         else if("airplay".equals(detailKey))fillAirPlay();
+    }
+    /** Glass: status pings update tile text and dots in place; rebuilding the
+     *  whole sheet on each ping flickered focus and restarted animations. */
+    private void updateTiles(){
+        AirPlayMonitorService.Snapshot air=host.air();
+        boolean netOk="Connected".equals(host.networkStatus());
+        setTile("network",host.networkName(),host.networkStatus(),netOk?0xFF6ED69A:0xFFFF7A6E);
+        setTile("bluetooth","Bluetooth",host.bluetoothSummary(),0);
+        setTile("airplay","AirPlay",airHeadline(air),airColor(air));
+        setTile("remote","Phone remote",host.remoteSummary(),0);
+    }
+    private void setTile(String key,String title,String status,int dotColor){
+        View[] parts=tileParts.get(key);if(parts==null)return;
+        ((TextView)parts[0]).setText(title);((TextView)parts[1]).setText(status);
+        if(parts[2]!=null&&dotColor!=0)((GradientDrawable)parts[2].getBackground()).setColor(dotColor);
+        parts[3].setContentDescription(title+", "+status);
     }
     void restoreFocus(){
         for(View v:actions)if(focusKey.equals(v.getTag())){v.requestFocus();return;}
@@ -117,7 +135,11 @@ final class ControlCenterPanel extends FrameLayout {
         if(s.inSession())rows.add(row("air-show","Show on TV","Bring the AirPlay screen back",R.drawable.ic_feather_chevron,host::showAirPlayer,false,false));
         rows.add(toggleRow("air-toggle","AirPlay receiver",on?"On · visible to Apple devices":"Off · hidden from Apple devices",on,()->host.setAirEnabled(!on)));
         if(on)rows.add(row("air-restart","Restart receiver",s.inSession()?"Ends the current session":"Use if your iPhone can’t find this TV",R.drawable.ic_feather_refresh,host::restartAir,false,false));
-        if(host.airLegacyInstalled())rows.add(row("air-legacy","Old AirPlay app installed","Remove it so this TV isn’t listed twice",R.drawable.ic_feather_warning,()->{},false,false));
+        if(host.airLegacyInstalled())rows.add(row("air-legacy","Old AirPlay app installed","Select to remove it, so this TV isn’t listed twice",R.drawable.ic_feather_warning,()->{
+            try{getContext().startActivity(new android.content.Intent(android.content.Intent.ACTION_DELETE,
+                    android.net.Uri.parse("package:"+AirPlayMonitorService.LEGACY_RECEIVER_PKG)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));}
+            catch(RuntimeException ignored){}
+        },false,false));
         if(on)rows.add(toggleRow("air-debug","Detailed logging",s.debug?"On · for diagnosing a problem; turn off after":"Off",s.debug,()->host.setAirDebug(!s.debug)));
         for(View r:rows){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,px(64));lp.topMargin=px(10);page.addView(r,lp);}
         if(on&&!s.diagnostics.isEmpty()){
@@ -142,7 +164,13 @@ final class ControlCenterPanel extends FrameLayout {
     private String airExplain(AirPlayMonitorService.Snapshot s){
         String name=s.name.isEmpty()?host.deviceName():s.name;
         if(s.state==AirPlayStatus.State.OFF)return "Turn AirPlay on to mirror or play from an iPhone, iPad or Mac.";
-        if(s.inSession())return "Back on the remote stops the AirPlay screen. Your iPhone controls playback.";
+        switch(s.session){
+            case "mirroring":return "On the AirPlay screen, press Back twice to stop mirroring. Your iPhone controls what is shown.";
+            case "video":return "On the AirPlay screen, Back stops the video. Your iPhone controls playback.";
+            case "audio":return "Back leaves the music screen; the music keeps playing. Your iPhone controls playback.";
+            case "connecting":return "An Apple device is connecting.";
+            default:break;
+        }
         if(s.state==AirPlayStatus.State.FAILED)return "Your devices can’t see this TV right now. Glass keeps retrying; Restart usually fixes it.";
         return "On your iPhone, open Control Center → Screen Mirroring and choose “"+name+"”.";
     }
@@ -215,7 +243,7 @@ final class ControlCenterPanel extends FrameLayout {
     }
     private void cancelMotion(){if(card!=null)card.animate().cancel();if(controls!=null)controls.animate().cancel();if(detail!=null)detail.animate().cancel();animate().cancel();sliding=false;}
     private void rebuild(){
-        cancelMotion();removeAllViews();groups.clear();actions.clear();detailKey=null;detail=null;
+        cancelMotion();removeAllViews();groups.clear();actions.clear();tileParts.clear();detailKey=null;detail=null;
         card=NativeTheme.sheet(getContext());card.setOnClickListener(v->{});
         addView(card,NativeTheme.sheetParams(getContext()));
         controls=new LinearLayout(getContext());controls.setOrientation(LinearLayout.VERTICAL);
@@ -255,11 +283,13 @@ final class ControlCenterPanel extends FrameLayout {
         LinearLayout top=new LinearLayout(getContext());top.setGravity(Gravity.CENTER_VERTICAL);
         top.addView(icon(resource),new LinearLayout.LayoutParams(px(24),px(24)));
         top.addView(new View(getContext()),new LinearLayout.LayoutParams(0,1,1));
-        if(dotColor!=0)top.addView(dot(dotColor),new LinearLayout.LayoutParams(px(9),px(9)));
+        View dotView=dotColor!=0?dot(dotColor):null;
+        if(dotView!=null)top.addView(dotView,new LinearLayout.LayoutParams(px(9),px(9)));
         t.addView(top,new LinearLayout.LayoutParams(-1,-2));
         t.addView(new View(getContext()),new LinearLayout.LayoutParams(-1,0,1));
-        t.addView(text(title,16,false));
+        TextView titleView=text(title,16,false);t.addView(titleView);
         TextView sub=text(status,12,true);sub.setSingleLine(true);sub.setEllipsize(TextUtils.TruncateAt.END);
+        tileParts.put(key,new View[]{titleView,sub,dotView,t});
         LinearLayout.LayoutParams sl=new LinearLayout.LayoutParams(-1,-2);sl.topMargin=px(4);t.addView(sub,sl);
         t.setBackground(NativeTheme.row(getContext(),false,20));
         t.setOnClickListener(v->{v.requestFocus();focusKey=key;action.run();});

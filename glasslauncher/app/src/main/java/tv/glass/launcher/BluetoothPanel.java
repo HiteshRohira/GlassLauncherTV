@@ -164,7 +164,9 @@ final class BluetoothPanel {
         pairing = null;
         failedPairs.clear();
         found.clear();
-        clearPendingAudio();
+        // Glass: a connect/disconnect started before the sheet was closed is
+        // still running; keep showing it until it lands or times out.
+        prunePendingAudio();
         detail = null;
         btSettingsScreen = host.hasBtSettingsScreen();
         deviceSettingsScreen = host.hasDeviceSettingsScreen();
@@ -196,7 +198,6 @@ final class BluetoothPanel {
         final LinearLayout c = card;
         if (ov == null || ov.getVisibility() != View.VISIBLE) return;
         stopDiscovery();
-        clearPendingAudio();
         unregister();
         if (c != null && !host.returnsToControlCenter()) {
             c.animate().cancel();
@@ -788,6 +789,20 @@ final class BluetoothPanel {
         pendingAudio.remove(addr);
         Runnable t = audioTimeouts.remove(addr);
         if (t != null) handler.removeCallbacks(t);
+    }
+
+    /** Drop pending entries whose device already reached its target while
+     *  the sheet was closed (profile events are not received then). */
+    private void prunePendingAudio() {
+        BluetoothAdapter a = adapter();
+        if (a == null) { clearPendingAudio(); return; }
+        for (String addr : new java.util.ArrayList<>(pendingAudio.keySet())) {
+            try {
+                BluetoothDevice d = a.getRemoteDevice(addr);
+                Integer target = pendingAudio.get(addr);
+                if (target != null && profileState(controlProfile(d), d) == target) clearPendingAudio(addr);
+            } catch (RuntimeException e) { clearPendingAudio(addr); }
+        }
     }
 
     private void clearPendingAudio() {

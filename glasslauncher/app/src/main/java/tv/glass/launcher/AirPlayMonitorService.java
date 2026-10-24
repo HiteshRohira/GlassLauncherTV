@@ -172,9 +172,10 @@ public final class AirPlayMonitorService extends Service {
             String name = parts.length > 3 ? parts[3] : "";
             String diagnostics = parts.length > 4 ? parts[4] : "";
             boolean debug = parts.length > 5 && "1".equals(parts[5]);
-            AirPlayStatus.State s = Math.abs(System.currentTimeMillis() - at) > STALE_MS
-                    ? AirPlayStatus.State.STARTING : AirPlayStatus.parse(parts[0]);
-            return new Snapshot(s, session, name, diagnostics, debug);
+            boolean stale = Math.abs(System.currentTimeMillis() - at) > STALE_MS;
+            AirPlayStatus.State s = stale ? AirPlayStatus.State.STARTING : AirPlayStatus.parse(parts[0]);
+            // A stale file must not keep claiming "Mirroring now".
+            return new Snapshot(s, stale ? "idle" : session, name, diagnostics, debug);
         } catch (Exception e) {
             return new Snapshot(AirPlayStatus.State.STARTING, "idle", "");
         }
