@@ -2912,6 +2912,7 @@ public class LauncherActivity extends Activity {
         ambientBackground.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         // A chosen wallpaper stays available through Glass's existing picker.
         ambientBackground.setVisibility(ambientBackgroundEnabled ? View.VISIBLE : View.GONE);
+        applyAmbientWindow();
         root.addView(ambientBackground, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         drawerBlurLayer = new ImageView(this);
@@ -11544,6 +11545,7 @@ public class LauncherActivity extends Activity {
         prefs.edit().putBoolean(KEY_AMBIENT_BACKGROUND,on).apply();
         if(on && systemWallpaper)setSystemWallpaper(false,false);
         if(ambientBackground!=null)ambientBackground.setVisibility(on?View.VISIBLE:View.GONE);
+        applyAmbientWindow();
         int visibility=on || systemWallpaper?View.GONE:View.VISIBLE;
         if(wallpaperFront!=null)wallpaperFront.setVisibility(visibility);
         if(wallpaperBack!=null)wallpaperBack.setVisibility(visibility);
@@ -11603,6 +11605,13 @@ public class LauncherActivity extends Activity {
             }
         }
         refreshSettingsRows();
+    }
+
+    /** Glass: the ambient view paints every pixel opaquely, so the black window
+     *  background behind it was a full screen of overdraw. */
+    private void applyAmbientWindow() {
+        if (systemWallpaper) return;
+        getWindow().setBackgroundDrawable(ambientBackgroundEnabled ? null : new ColorDrawable(Color.BLACK));
     }
 
     private void applySystemWallpaperWindow(boolean on) {
