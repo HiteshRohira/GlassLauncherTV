@@ -479,6 +479,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _failStart()
             return
         }
+        // Glass: build the output once with the saved settings. Attaching with
+        // the renderer's defaults and then applying preferences ~500 ms later
+        // rebuilt the stream on the first packet of the first session.
+        audioRenderer.updateConfig(readAudioConfig(prefs))
         audioRenderer.attachEngine(nativeHandle)
 
         // apply settings from preferences
