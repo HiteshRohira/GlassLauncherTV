@@ -41,6 +41,8 @@ final class ControlCenterPanel extends FrameLayout {
     private View returnFocus;
     private String focusKey="network", detailKey;
     private boolean sliding;
+    /** Last AirPlay headline spoken to a screen reader. */
+    private String lastAnnounced;
     ControlCenterPanel(Context c,Host host) {
         super(c);this.host=host;
         setLayoutParams(new FrameLayout.LayoutParams(-1,-1));
@@ -101,7 +103,10 @@ final class ControlCenterPanel extends FrameLayout {
         top.addView(icon(R.drawable.ic_airplay),new LinearLayout.LayoutParams(px(30),px(30)));
         LinearLayout.LayoutParams dp=new LinearLayout.LayoutParams(px(10),px(10));dp.setMarginStart(px(12));
         top.addView(dot(airColor(s)),dp);
-        TextView state=text(airHeadline(s),13,true);LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-2,-2);sp.setMarginStart(px(8));top.addView(state,sp);
+        String headline=airHeadline(s);
+        if(lastAnnounced!=null&&!headline.equals(lastAnnounced))NativeTheme.announce(page,"AirPlay "+headline);
+        lastAnnounced=headline;
+        TextView state=text(headline,13,true);LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-2,-2);sp.setMarginStart(px(8));top.addView(state,sp);
         status.addView(top);
         TextView name=text(s.name.isEmpty()?host.deviceName():s.name,26,false);name.setTypeface(NativeTheme.light());
         LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2);np.topMargin=px(16);status.addView(name,np);
@@ -280,6 +285,7 @@ final class ControlCenterPanel extends FrameLayout {
         LinearLayout row=(LinearLayout)row(key,title,subtitle,R.drawable.ic_airplay,action,false,false);
         View sw=NativeTheme.toggle(getContext(),on);
         row.addView(sw,new LinearLayout.LayoutParams(px(42),px(24)));
+        NativeTheme.switchSemantics(row,on);
         return row;
     }
     private View row(String key,String title,String subtitle,int resource,Runnable action,boolean chevron,boolean track){
@@ -297,7 +303,7 @@ final class ControlCenterPanel extends FrameLayout {
         if(track)actions.add(row);return row;
     }
     private ImageView icon(int id){ImageView v=new ImageView(getContext());v.setImageResource(id);v.setImageTintList(ColorStateList.valueOf(0xFFF1EDF7));v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);return v;}
-    private TextView text(String value,int size,boolean secondary){TextView v=new TextView(getContext());v.setText(value);v.setTypeface(NativeTheme.regular());v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,px(size));v.setTextColor(secondary?0xFFD4CEDA:0xFFF8F7FA);v.setTag(secondary?"secondary":"primary");v.setIncludeFontPadding(false);return v;}
+    private TextView text(String value,int size,boolean secondary){TextView v=new TextView(getContext());v.setText(value);v.setTypeface(NativeTheme.regular());v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,NativeTheme.textPx(getContext(),size));v.setTextColor(secondary?0xFFD4CEDA:0xFFF8F7FA);v.setTag(secondary?"secondary":"primary");v.setIncludeFontPadding(false);return v;}
     static void tint(View v,boolean focused){if(v instanceof TextView)((TextView)v).setTextColor(focused?("secondary".equals(v.getTag())?0xFF625C68:0xFF222029):("secondary".equals(v.getTag())?0xFFD4CEDA:0xFFF8F7FA));if(v instanceof ImageView)((ImageView)v).setImageTintList(ColorStateList.valueOf(focused?0xFF24212A:0xFFF1EDF7));if(v instanceof NativeTheme.Toggle)((NativeTheme.Toggle)v).setFocusedStyle(focused);if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)tint(((ViewGroup)v).getChildAt(i),focused);}
     private int px(float n){return NativeTheme.px(getContext(),n);}
 }

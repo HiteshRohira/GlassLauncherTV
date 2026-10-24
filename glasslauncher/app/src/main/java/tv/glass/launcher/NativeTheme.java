@@ -34,6 +34,29 @@ final class NativeTheme {
     static int px(Context c, float value) {
         return Math.round(value * c.getResources().getDisplayMetrics().widthPixels / 1280f);
     }
+    /** Text size: screen-scaled like {@link #px}, plus the user's font size
+     *  setting (capped at 1.3x so fixed-height rows do not clip). */
+    static int textPx(Context c, float value) {
+        float scale = Math.max(1f, Math.min(1.3f, c.getResources().getConfiguration().fontScale));
+        return Math.round(px(c, value) * scale);
+    }
+    /** Lets screen readers treat a glass row with a drawn toggle as a switch. */
+    static void switchSemantics(View row, boolean checked) {
+        row.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override public void onInitializeAccessibilityNodeInfo(View host, android.view.accessibility.AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                info.setClassName("android.widget.Switch");
+                info.setCheckable(true);
+                info.setChecked(checked);
+            }
+        });
+    }
+    /** Speak a change only when a screen reader is on. */
+    static void announce(View v, CharSequence text) {
+        android.view.accessibility.AccessibilityManager am = (android.view.accessibility.AccessibilityManager)
+                v.getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+        if (am != null && am.isEnabled()) v.announceForAccessibility(text);
+    }
     static GradientDrawable glass(Context c, float radius, boolean panel) {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 panel ? new int[]{0xE33B3C43, 0xEF181C27, 0xED28222E}

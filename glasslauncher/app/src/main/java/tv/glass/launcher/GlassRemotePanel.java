@@ -6,7 +6,6 @@ import android.graphics.Color;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
-import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -87,18 +86,14 @@ final class GlassRemotePanel {
         LinearLayout.LayoutParams sl=new LinearLayout.LayoutParams(-1,-2);sl.topMargin=NativeTheme.px(c,4);words.addView(s,sl);
         if(checked!=null){
             row.addView(NativeTheme.toggle(c,checked),new LinearLayout.LayoutParams(NativeTheme.px(c,42),NativeTheme.px(c,24)));
-            row.setAccessibilityDelegate(new View.AccessibilityDelegate(){
-                @Override public void onInitializeAccessibilityNodeInfo(View host,AccessibilityNodeInfo info){
-                    super.onInitializeAccessibilityNodeInfo(host,info);info.setClassName("android.widget.Switch");info.setCheckable(true);info.setChecked(checked);
-                }
-            });
+            NativeTheme.switchSemantics(row,checked);
         }
         row.setBackground(NativeTheme.row(c,false,18));
         row.setOnClickListener(v->action.run());
         row.setOnFocusChangeListener((v,f)->{row.setBackground(NativeTheme.row(c,f,18));ControlCenterPanel.tint(row,f);});
         return row;
     }
-    private static TextView text(Context c,String value,int size){TextView v=new TextView(c);v.setText(value);v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,NativeTheme.px(c,size));v.setTypeface(NativeTheme.regular());v.setTextColor(0xFFF8F7FA);return v;}
+    private static TextView text(Context c,String value,int size){TextView v=new TextView(c);v.setText(value);v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,NativeTheme.textPx(c,size));v.setTypeface(NativeTheme.regular());v.setTextColor(0xFFF8F7FA);return v;}
     private static String address()throws Exception{
         Enumeration<NetworkInterface> interfaces=NetworkInterface.getNetworkInterfaces();String fallback=null;
         while(interfaces.hasMoreElements()){

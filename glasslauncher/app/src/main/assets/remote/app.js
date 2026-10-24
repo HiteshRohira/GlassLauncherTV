@@ -64,9 +64,13 @@ async function action(fn){if(busy)return;busy=true;feedback('');try{await fn();}
 const sheets=['pairPanel','nativePanel','settingsPanel','keyboardPanel','installPanel'];
 const isOpen=id=>!$(id).hidden;
 const sheetOpen=()=>sheets.some(isOpen);
-function openSheet(id){sheets.forEach(s=>$(s).hidden=s!==id);$('scrim').hidden=false;if(id==='pairPanel')setTimeout(()=>$('pin').focus(),250);if(id==='keyboardPanel')$('tvText').focus();}
-function closeSheets(){sheets.forEach(s=>$(s).hidden=true);$('scrim').hidden=true;document.activeElement?.blur?.();}
+// Sheets are modal dialogs: the page behind is inert for screen readers and
+// focus returns to where it was when the sheet closes.
+let sheetReturnFocus=null;
+function openSheet(id){if(!sheetOpen())sheetReturnFocus=document.activeElement;sheets.forEach(s=>$(s).hidden=s!==id);$('scrim').hidden=false;$('app').inert=true;if(id==='pairPanel')setTimeout(()=>$('pin').focus(),250);if(id==='keyboardPanel')$('tvText').focus();}
+function closeSheets(){sheets.forEach(s=>$(s).hidden=true);$('scrim').hidden=true;$('app').inert=false;document.activeElement?.blur?.();const back=sheetReturnFocus;sheetReturnFocus=null;if(back&&back!==document.body&&back.isConnected)back.focus?.({preventScroll:true});}
 $('scrim').addEventListener('click',()=>{if(authenticated)closeSheets();});
+addEventListener('keydown',e=>{if(e.key==='Escape'&&sheetOpen()&&authenticated){e.stopImmediatePropagation();closeSheets();}},true);
 $('setupButton').addEventListener('click',()=>{haptic();openSheet('settingsPanel');});
 $('closeSettings').addEventListener('click',closeSheets);
 $('openSetup').addEventListener('click',()=>openSheet(authenticated?'nativePanel':'pairPanel'));
