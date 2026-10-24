@@ -841,7 +841,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         airPlayVideoPlayer.play(location, startPositionSeconds)
         // claim media-button routing for keys that arrive as media-session events
         mediaSession?.isActive = true
-        log("AirPlay Video play: $location @ ${startPositionSeconds}s")
+        log("AirPlay Video play: ${redactUrl(location)} @ ${startPositionSeconds}s")
     }
 
     override fun onVideoScrub(positionSeconds: Float) {
@@ -1403,6 +1403,13 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
 
         private const val COVER_ART_MAX_PX = 1024
+
+        /** Scheme, host and path only: signed media URLs carry credentials
+         *  in the query, which must not reach logcat. */
+        @JvmStatic fun redactUrl(url: String): String {
+            val cut = url.indexOfAny(charArrayOf('?', '#'))
+            return if (cut < 0) url else url.substring(0, cut) + "?…"
+        }
         private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
         private const val LOG_ERR = 3
         private const val LOG_DEBUG = 7

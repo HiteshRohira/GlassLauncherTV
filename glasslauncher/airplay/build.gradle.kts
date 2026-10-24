@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 // Built-in AirPlay receiver engine. Native UxPlay core, renderers, discovery
 // and the receiver service are adapted from jqssun/android-airplay-server
 // (GPL-3.0, see LICENSE in this module); the launcher supplies the UI.
@@ -61,6 +63,35 @@ tasks.register("applyUxplayPatches") {
 }
 tasks.configureEach {
     if (name.startsWith("configureCMake")) dependsOn("applyUxplayPatches")
+}
+
+// Glass: record exactly which UxPlay commit and patch files went into this
+// build, packaged as assets/uxplay-provenance.txt, so a crash or regression
+// can be tied to its native sources.
+abstract class UxplayProvenanceTask : DefaultTask() {
+    @get:InputDirectory abstract val patchDir: DirectoryProperty
+    @get:Input abstract val uxplayHead: Property<String>
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction fun write() {
+        val md = MessageDigest.getInstance("SHA-256")
+        val lines = patchDir.get().asFile.listFiles { f -> f.extension == "patch" }!!.sorted().map { f ->
+            md.reset()
+            md.digest(f.readBytes()).joinToString("") { b -> "%02x".format(b) } + "  " + f.name
+        }
+        val out = outputDir.get().asFile
+        out.mkdirs()
+        out.resolve("uxplay-provenance.txt").writeText("UxPlay ${uxplayHead.get()}\n" + lines.joinToString("\n") + "\n")
+    }
+}
+val uxplayProvenance = tasks.register<UxplayProvenanceTask>("generateUxplayProvenance") {
+    patchDir.set(layout.projectDirectory.dir("src/main/cpp/patches/UxPlay"))
+    uxplayHead.set(providers.exec {
+        commandLine("git", "-C", file("src/main/cpp/third_party/UxPlay").path, "rev-parse", "HEAD")
+    }.standardOutput.asText.map { it.trim() })
+}
+androidComponents.onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(uxplayProvenance, UxplayProvenanceTask::outputDir)
 }
 
 dependencies {
