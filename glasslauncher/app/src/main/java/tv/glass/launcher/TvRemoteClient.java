@@ -91,7 +91,16 @@ final class TvRemoteClient implements AutoCloseable {
             }
             if(chosen!=null)fastKeys.put(LINUX_KEYS[i][0],chosen+" "+LINUX_KEYS[i][1]);
         }
-        // OK prefers KEY_SELECT (DPAD_CENTER); ENTER stays its own key.
+        // Group permissions are not enough: SELinux on some TVs (this TCL
+        // included) denies the shell writes to input nodes. Probe each chosen
+        // device with a harmless EV_SYN and keep only those that accept it;
+        // otherwise every key would vanish silently.
+        Map<String,Boolean> writable=new HashMap<>();
+        for(String fast:new java.util.ArrayList<>(fastKeys.values())){
+            String dev=fast.split(" ")[0];
+            if(!writable.containsKey(dev))writable.put(dev,adb.shell("sendevent "+dev+" 0 0 0").getExitCode()==0);
+        }
+        fastKeys.values().removeIf(v->!Boolean.TRUE.equals(writable.get(v.split(" ")[0])));
         if(fastKeys.isEmpty())return;
         fastShell=adb.openShell("sh");
         final AdbShellStream stream=fastShell;
