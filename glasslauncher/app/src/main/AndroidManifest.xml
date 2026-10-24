@@ -212,7 +212,7 @@
             android:process=":airplay">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Monitors a local AirPlay receiver app and alerts when it stops advertising" />
+                android:value="Hosts the local phone remote and monitors the AirPlay receiver" />
         </service>
 
         <receiver
@@ -225,6 +225,11 @@
             </intent-filter>
         </receiver>
 
+        <service android:name=".GlassRemoteInputMethod" android:label="Glass phone keyboard"
+            android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true" android:process=":airplay">
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/remote_input_method" />
+        </service>
     </application>
 
 </manifest>

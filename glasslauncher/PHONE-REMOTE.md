@@ -1,0 +1,29 @@
+# Glass phone remote
+
+Glass serves its own remote at `http://<TV-IP>:48633/`. The TV and phone must be on the same home network; the Mac and an internet hosting service are not needed.
+
+1. Open Control Center → Phone remote on the TV.
+2. Scan the QR code in Safari and enter the six-digit code shown on the TV.
+3. Choose Enable TV controls and accept Android's debugging authorization on the TV, selecting Always allow. Local network debugging on port 5555 must already be enabled.
+4. In Safari, use Share → Add to Home Screen with Open as Web App enabled.
+
+The remote supports directions, OK, Home, Back, playback and volume. Select a text field in the TV app, open Keyboard on the phone, type, and choose Send text. Text is inserted at the TV cursor; Delete and Enter are separate controls. Apps with custom text editors may not support Android keyboard insertion.
+
+## Implementation
+
+- The existing foreground monitor process hosts a small bounded HTTP server; it also runs when the optional AirPlay receiver is absent. Assets ship inside the APK. There is no cloud service, telemetry, service worker, or offline cache.
+- A private TV-generated PIN grants an HttpOnly, SameSite cookie. Requests require the TV's host/origin; commands are fixed and authenticated. There is no arbitrary shell endpoint. HTTP traffic stays unencrypted on the home network.
+- Controls use an app-owned local ADB identity through the existing Dadb integration. Android TV Remote Service rejects connections originating on its own device, so that protocol cannot provide this embedded bridge.
+- Unicode text travels through an Android input method in the same process, never through shell interpolation. Glass briefly selects its input method and restores the previous default after delivery. Its input method remains enabled for subsequent sends.
+
+## Preview verification, 2026-10-24
+
+Version `1.0.6-feather.2` / code 15 was installed on the real TV after the user reviewed and approved the emulator preview. The TV-hosted page, pairing, connection and Home control were verified live. Real-TV keyboard insertion and physical Bluetooth toggles were not completed because the user stopped the live test.
+
+- Android TV emulator: Control Center cleanup, Android system settings, Appearance sliding inside the same dialog with Back returning, Phone remote QR/PIN, and glass app menu ordered Move / Hide / App info with Move selected.
+- iPhone simulator: Safari pairing, standalone Home Screen launch with the paired session retained, remote Home/navigation, and actual text delivery into a native Android editor. Unicode delivery and restoration of the previous default keyboard were also checked.
+- Existing release unit tests: 213 passed. Lint: zero errors, 11 existing warnings. Eight HTTP authentication/origin/input-boundary checks passed.
+- Physical Bluetooth connect/disconnect and TCL background behavior remain hardware checks. The emulator has no paired Bluetooth devices and no AirPlay receiver.
+- This emulator logs an OS permission error writing `/data/misc/adb/adb_keys`; accepting a live authorization works, but persistence across process/device restarts is not established by this preview. The physical TV subsequently reached Connected during installation; authorization persistence across a TV restart has not been tested.
+
+Private recordings, screenshots, APK and emulator-only keyboard fixture are kept outside the source repository under the workspace's `private-tv-backup/glass-remote-preview-20261024/`. They must not be committed.

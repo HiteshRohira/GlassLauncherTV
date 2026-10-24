@@ -127,6 +127,7 @@ public final class AirPlayMonitorService extends Service {
     private AirPlayStatus.State published;
     private View banner;
 
+    private GlassRemoteServer phoneRemote;
     private final Runnable checkTick = this::runCheck;
 
     // ── Entry points used by the launcher ─────────────────────────────────
@@ -134,7 +135,6 @@ public final class AirPlayMonitorService extends Service {
     /** Start (or nudge) the monitor with {@code action} when the receiver app
      *  is present. */
     static void start(Context ctx, String action) {
-        if (!receiverInstalled(ctx)) return;
         Intent i = new Intent(ctx, AirPlayMonitorService.class).setAction(action);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i);
@@ -176,10 +176,13 @@ public final class AirPlayMonitorService extends Service {
         nsd = (NsdManager) getSystemService(Context.NSD_SERVICE);
         goForeground();
         registerScreenReceiver();
+        try { phoneRemote=new GlassRemoteServer(this);phoneRemote.start(); }
+        catch(Exception e) { Log.w(TAG,"Phone remote could not start",e); }
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         goForeground();
+        scheduleRemoteKeepAlive();
         String action = intent != null ? intent.getAction() : null;
         long now = SystemClock.elapsedRealtime();
         if (ACTION_BOOT.equals(action)) {
@@ -210,6 +213,15 @@ public final class AirPlayMonitorService extends Service {
         return START_STICKY;
     }
 
+    private PendingIntent remoteTick() {
+        return PendingIntent.getForegroundService(this,48633,new Intent(this,AirPlayMonitorService.class)
+            .setAction("tv.glass.launcher.REMOTE_CHECK"),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+    private void scheduleRemoteKeepAlive() {
+        AlarmManager am=(AlarmManager)getSystemService(ALARM_SERVICE);
+        if(am!=null)am.set(AlarmManager.ELAPSED_REALTIME,SystemClock.elapsedRealtime()+120000,remoteTick());
+    }
+
     private boolean isInteractive() {
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         return pm == null || pm.isInteractive();
@@ -227,6 +239,9 @@ public final class AirPlayMonitorService extends Service {
     }
 
     @Override public void onDestroy() {
+        if(phoneRemote!=null)phoneRemote.close();
+        AlarmManager remoteAlarm=(AlarmManager)getSystemService(ALARM_SERVICE);
+        if(remoteAlarm!=null)remoteAlarm.cancel(remoteTick());
         handler.removeCallbacksAndMessages(null);
         cancelAlarm();
         probeGen++;
@@ -374,10 +389,7 @@ public final class AirPlayMonitorService extends Service {
         publish();
         if (alert) showBanner();
         if (status.state() == AirPlayStatus.State.READY) hideBanner();
-        if (status.state() == AirPlayStatus.State.OFF) {
-            stopSelf();
-            return;
-        }
+        if (status.state() == AirPlayStatus.State.OFF) return; // The phone remote still runs.
         // A miss while still READY rechecks soon so a stopped receiver is
         // reported within about a minute rather than a full READY interval.
         long next;

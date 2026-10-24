@@ -633,10 +633,10 @@ final class BluetoothPanel {
                 pair(r.device);
                 break;
             case ACT_AUDIO_TOGGLE:
-                toggleAudio(detail);
+                toggleDevice(detail);
                 break;
             case ACT_OPEN_DEVICE:
-                enterDetail(r.device);
+                toggleDevice(r.device);
                 break;
             case ACT_DEVICE_SETTINGS: {
                 BluetoothDevice d = detail;
@@ -677,12 +677,13 @@ final class BluetoothPanel {
         }
     }
 
-    private void toggleAudio(BluetoothDevice d) {
+    private void toggleDevice(BluetoothDevice d) {
         if (d == null) return;
         final String addr = d.getAddress();
         if (pendingAudio.containsKey(addr)) return;
-        final boolean connect = a2dpState(d) != BluetoothProfile.STATE_CONNECTED;
-        if (!invokeA2dp(proxies.get(BluetoothProfile.A2DP), connect, d)) {
+        final BluetoothProfile profile=controlProfile(d);
+        final boolean connect = profileState(profile,d) != BluetoothProfile.STATE_CONNECTED;
+        if (!invokeProfile(profile, connect, d)) {
             host.toast(activity.getString(connect ? R.string.toast_bt_connect_failed
                     : R.string.toast_bt_disconnect_failed, nameOf(d)));
             return;
@@ -693,7 +694,7 @@ final class BluetoothPanel {
         Runnable timeout = () -> {
             audioTimeouts.remove(addr);
             if (pendingAudio.remove(addr) == null || !isVisible()) return;
-            if (a2dpState(d) != target) {
+            if (profileState(profile,d) != target) {
                 host.toast(activity.getString(connect ? R.string.toast_bt_connect_failed
                         : R.string.toast_bt_disconnect_failed, nameOf(d)));
             }
@@ -736,10 +737,10 @@ final class BluetoothPanel {
      *  hidden-API list through Android 14, gated only by the normal Bluetooth
      *  permission. Any failure just reports false. */
     @SuppressLint({"DiscouragedPrivateApi", "PrivateApi"})
-    private static boolean invokeA2dp(BluetoothProfile proxy, boolean connect, BluetoothDevice d) {
-        if (!(proxy instanceof BluetoothA2dp)) return false;
+    private static boolean invokeProfile(BluetoothProfile proxy, boolean connect, BluetoothDevice d) {
+        if (proxy==null) return false;
         try {
-            Object r = BluetoothA2dp.class
+            Object r = proxy.getClass()
                     .getMethod(connect ? "connect" : "disconnect", BluetoothDevice.class)
                     .invoke(proxy, d);
             return Boolean.TRUE.equals(r);
@@ -832,6 +833,7 @@ final class BluetoothPanel {
         f.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
         f.addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED);
         f.addAction("android.bluetooth.headset.profile.action.CONNECTION_STATE_CHANGED");
+        f.addAction("android.bluetooth.input.profile.action.CONNECTION_STATE_CHANGED");
         try {
             activity.registerReceiver(receiver, f);
         } catch (RuntimeException e) {
@@ -863,8 +865,8 @@ final class BluetoothPanel {
         BluetoothAdapter a = adapter();
         if (a == null || !hasConnectPermission()) return;
         int[] profiles = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-                ? new int[] { BluetoothProfile.A2DP, BluetoothProfile.HEADSET, BluetoothProfile.LE_AUDIO }
-                : new int[] { BluetoothProfile.A2DP, BluetoothProfile.HEADSET };
+                ? new int[] { BluetoothProfile.A2DP, BluetoothProfile.HEADSET, BluetoothProfile.LE_AUDIO, 4 }
+                : new int[] { BluetoothProfile.A2DP, BluetoothProfile.HEADSET, 4 };
         BluetoothProfile.ServiceListener l = new BluetoothProfile.ServiceListener() {
             @Override public void onServiceConnected(int profile, BluetoothProfile proxy) {
                 if (receiver == null) {
@@ -913,6 +915,8 @@ final class BluetoothPanel {
                 onBondChanged(d, intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE,
                         BluetoothDevice.BOND_NONE));
                 break;
+            case "android.bluetooth.headset.profile.action.CONNECTION_STATE_CHANGED":
+            case "android.bluetooth.input.profile.action.CONNECTION_STATE_CHANGED":
             case BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED:
                 onA2dpState(d, intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1),
                         intent.getIntExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, -1));
@@ -981,6 +985,18 @@ final class BluetoothPanel {
         } catch (SecurityException e) {
             return false;
         }
+    }
+
+    private BluetoothProfile controlProfile(BluetoothDevice device) {
+        if(isInputDevice(device))return proxies.get(4); // HID host, used by remotes and keyboards.
+        BluetoothProfile audio=proxies.get(BluetoothProfile.A2DP);
+        if(isAudioSink(device)||profileState(audio,device)==BluetoothProfile.STATE_CONNECTED)return audio;
+        for(BluetoothProfile profile:proxies.values())if(profileState(profile,device)==BluetoothProfile.STATE_CONNECTED)return profile;
+        return proxies.get(BluetoothProfile.HEADSET);
+    }
+    private static int profileState(BluetoothProfile profile,BluetoothDevice device) {
+        if(profile==null)return BluetoothProfile.STATE_DISCONNECTED;
+        try{return profile.getConnectionState(device);}catch(RuntimeException e){return BluetoothProfile.STATE_DISCONNECTED;}
     }
 
     private int a2dpState(BluetoothDevice d) {

@@ -197,7 +197,7 @@ final class GoogleTvSetup {
         }
     }
 
-    private static Dadb connect(Context context) throws IOException {
+    static Dadb connect(Context context) throws IOException {
         File privateKey = new File(context.getNoBackupFilesDir(), "glasslauncher_adbkey");
         File publicKey = new File(context.getNoBackupFilesDir(), "glasslauncher_adbkey.pub");
         if (!privateKey.isFile() || !publicKey.isFile()) {

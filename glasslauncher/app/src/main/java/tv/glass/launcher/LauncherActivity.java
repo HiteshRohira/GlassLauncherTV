@@ -387,7 +387,6 @@ public class LauncherActivity extends Activity {
                 public String airStatus() {return !AirPlayMonitorService.receiverInstalled(LauncherActivity.this)?"Unavailable":airState==AirPlayStatus.State.READY?"Ready":airState==AirPlayStatus.State.STARTING?"Starting":"Unavailable";}
                 public String airSummary() {return !AirPlayMonitorService.receiverInstalled(LauncherActivity.this)?"Receiver not installed":airState==AirPlayStatus.State.FAILED?"Open receiver to retry":"Screen mirroring receiver";}
                 public String bluetoothSummary() {return btAdapter()==null?"Not available on this device":isBtOn()?"Open paired devices":"Bluetooth is off";}
-                public List<ControlCenterPanel.Device> devices() {return pairedControlsDevices();}
                 public void network() {openNetSettings();}
                 public void inputs() {
                     controlCenter.hide();
@@ -396,8 +395,9 @@ public class LauncherActivity extends Activity {
                 }
                 public void airplay() {openAirPlayReceiver();}
                 public void bluetooth() {controlsBluetoothKey="bluetooth";resumeControlsAfterBluetooth=true;onBtPillPressed();}
-                public void pair() {controlsBluetoothKey="pair";resumeControlsAfterBluetooth=true;openBluetoothPairing=true;onBtPillPressed();}
-                public void settings() {showSettingsPanel();}
+                public void settings() {controlCenter.hide();openSystemSettings();}
+                public View appearance() {return embeddedAppearance();}
+                public View remote() {return GlassRemotePanel.create(LauncherActivity.this);}
                 public void shown(boolean visible) {
                     restoreToolbarHomeSelection();
                     if(shelf!=null)shelf.animate().alpha(visible?.66f:1f).setDuration(150).start();
@@ -408,26 +408,6 @@ public class LauncherActivity extends Activity {
             root.addView(controlCenter);
         }
         controlCenter.show(anchor,key);
-    }
-
-    @android.annotation.SuppressLint("MissingPermission")
-    private List<ControlCenterPanel.Device> pairedControlsDevices() {
-        List<ControlCenterPanel.Device> result=new ArrayList<>();
-        android.bluetooth.BluetoothAdapter adapter=btAdapter();
-        if(adapter==null)return result;
-        try {
-            for(android.bluetooth.BluetoothDevice device:adapter.getBondedDevices()) {
-                String name=device.getName();if(name==null||name.isEmpty())name="Bluetooth device";
-                String key="device:"+device.getAddress();
-                final String selection=key;
-                result.add(new ControlCenterPanel.Device(key,name,"Paired",BluetoothPanel.iconFor(device),()->{
-                    controlsBluetoothKey=selection;resumeControlsAfterBluetooth=true;
-                    showBtPanel();btPanel.showDeviceDetails(device);
-                }));
-                if(result.size()==3)break;
-            }
-        }catch(SecurityException ignored) { }
-        return result;
     }
 
     /** AirPlay status pill — leftmost toolbar pill, built only when the
@@ -959,6 +939,7 @@ public class LauncherActivity extends Activity {
     // cold-start doesn't pay for ~12 view allocations and 5 click
     // listeners for a feature most users only touch occasionally.
     // Re-used across opens, torn down on activity destroy.
+    private boolean embeddedSettings;
     private FrameLayout                 settingsOverlay   = null;
     private android.widget.LinearLayout settingsCard      = null;
     private TextView                    settingsTitleView = null;
@@ -1046,7 +1027,7 @@ public class LauncherActivity extends Activity {
 
     private static final int[] SROWS_MAIN = {
             SR_APPEARANCE_MENU, SR_WALLPAPER_MENU, SR_APPS_MENU,
-            SR_DEVICE_MENU, SR_SYSTEM };
+            SR_DEVICE_MENU };
     private static final int[] SROWS_APPEARANCE = {
             SR_LAYOUT_COLUMNS, SR_CARD_CORNER, SR_FOCUS_BORDER,
             SR_FOCUS_COLOR, SR_FAVORITES_BACKGROUND, SR_CLOCK };
@@ -1231,7 +1212,7 @@ public class LauncherActivity extends Activity {
 
     /** Styled two-line label for a main category, or a normal one-line label. */
     private CharSequence settingsRowText(int rowId, boolean selected) {
-        String title = getString(settingsRowLabelRes(rowId));
+        String title = embeddedSettings && rowId==SR_APPEARANCE_MENU ? "Layout & style" : getString(settingsRowLabelRes(rowId));
         if (!settingsRowHasSummary(rowId)) return title;
         String summary = settingsCategorySummary(rowId);
         android.text.SpannableString text = new android.text.SpannableString(
@@ -3134,7 +3115,9 @@ public class LauncherActivity extends Activity {
         // rim/sheen fading to a quiet lower edge, plus standard padding and
         // elevation. Same primitive as the settings card, built by
         // EdgeGlassStyle so the two surfaces cannot drift apart.
-        EdgeGlassStyle.applyPanel(menuCol, density);
+        menuCol.setPadding(dp(10),dp(10),dp(10),dp(10));
+        menuCol.setBackground(NativeTheme.glass(this,22,true));
+        menuCol.setElevation(dp(14));
 
         // Each menu item gets its OWN GradientDrawable as background so the
         // selected highlight is a rounded pill (not a flat rectangle, which
@@ -3324,6 +3307,7 @@ public class LauncherActivity extends Activity {
         android.widget.LinearLayout.LayoutParams itemLp =
                 new android.widget.LinearLayout.LayoutParams(MP, WRAP);
         itemLp.bottomMargin = rowGap;
+        menuCol.addView(menuMove, new android.widget.LinearLayout.LayoutParams(MP,WRAP));
         menuCol.addView(menuHide, itemLp0);
         menuCol.addView(menuChangeIcon, itemLpChange);
         menuCol.addView(menuResetIcon, itemLpReset);
@@ -3333,7 +3317,7 @@ public class LauncherActivity extends Activity {
                 new android.widget.LinearLayout.LayoutParams(MP, WRAP);
         itemLp2.bottomMargin = rowGap;
         menuCol.addView(menuAppInfo,   itemLp2);
-        menuCol.addView(menuMove,      new android.widget.LinearLayout.LayoutParams(MP, WRAP));
+
 
         menuOverlay.addView(menuCol, new FrameLayout.LayoutParams(WRAP, WRAP));
         r.addView(menuOverlay);
@@ -3349,11 +3333,11 @@ public class LauncherActivity extends Activity {
         ReorderHost host = menuHost;
         boolean inputMode = host != null && host.menuAppIsInput();
         menuHasCustomIcon = host != null && host.menuAppHasCustomIcon();
-        menuChangeIcon.setVisibility(View.VISIBLE);
-        menuResetIcon.setVisibility(menuHasCustomIcon ? View.VISIBLE : View.GONE);
-        menuRename.setVisibility(View.VISIBLE);
+        menuChangeIcon.setVisibility(View.GONE);
+        menuResetIcon.setVisibility(View.GONE);
+        menuRename.setVisibility(View.GONE);
         int packageActionVisibility = inputMode ? View.GONE : View.VISIBLE;
-        menuUninstall.setVisibility(packageActionVisibility);
+        menuUninstall.setVisibility(View.GONE);
         menuAppInfo.setVisibility(packageActionVisibility);
         cell.getLocationOnScreen(menuCellLoc);
         FrameLayout r = root; if (r == null) return;
@@ -3439,6 +3423,11 @@ public class LauncherActivity extends Activity {
             menuOverlay.setScaleX(1f);
             menuOverlay.setScaleY(1f);
         }
+        for (TextView row : new TextView[]{menuMove,menuHide,menuAppInfo}) {
+            row.setTypeface(NativeTheme.regular());
+            row.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,NativeTheme.px(this,15));
+            row.setPadding(dp(15),dp(12),dp(15),dp(12));
+        }
         updateMenuHighlight();
     }
 
@@ -3472,31 +3461,17 @@ public class LauncherActivity extends Activity {
     /** Context-menu rows in top→bottom visual order. {@link #menuNavSel} walks
      *  these so UP/DOWN navigation and conditional row visibility live in one
      *  place instead of being duplicated across the two cell key handlers. */
-    private static final int[] MENU_ROWS_FULL = {
-            RecyclingShelfView.MENU_HIDE, RecyclingShelfView.MENU_CHANGE_ICON,
-            RecyclingShelfView.MENU_RENAME, RecyclingShelfView.MENU_UNINSTALL,
-            RecyclingShelfView.MENU_APP_INFO, RecyclingShelfView.MENU_MOVE };
-    private static final int[] MENU_ROWS_WITH_RESET = {
-            RecyclingShelfView.MENU_HIDE, RecyclingShelfView.MENU_CHANGE_ICON,
-            RecyclingShelfView.MENU_RESET_ICON, RecyclingShelfView.MENU_RENAME,
-            RecyclingShelfView.MENU_UNINSTALL, RecyclingShelfView.MENU_APP_INFO,
-            RecyclingShelfView.MENU_MOVE };
-    private static final int[] MENU_ROWS_INPUT = {
-            RecyclingShelfView.MENU_HIDE, RecyclingShelfView.MENU_CHANGE_ICON,
-            RecyclingShelfView.MENU_RENAME, RecyclingShelfView.MENU_MOVE };
-    private static final int[] MENU_ROWS_INPUT_WITH_RESET = {
-            RecyclingShelfView.MENU_HIDE, RecyclingShelfView.MENU_CHANGE_ICON,
-            RecyclingShelfView.MENU_RESET_ICON, RecyclingShelfView.MENU_RENAME,
-            RecyclingShelfView.MENU_MOVE };
+    private static final int[] MENU_ROWS_FULL = { RecyclingShelfView.MENU_MOVE,
+            RecyclingShelfView.MENU_HIDE, RecyclingShelfView.MENU_APP_INFO };
+    private static final int[] MENU_ROWS_INPUT = { RecyclingShelfView.MENU_MOVE,
+            RecyclingShelfView.MENU_HIDE };
 
     /** Next visible menu selection, wrapping from the last row to the first
      *  and back. */
     private int menuNavSel(int cur, int dir) {
         ReorderHost host = menuHost;
         boolean input = host != null && host.menuAppIsInput();
-        int[] order = input
-                ? (menuHasCustomIcon ? MENU_ROWS_INPUT_WITH_RESET : MENU_ROWS_INPUT)
-                : (menuHasCustomIcon ? MENU_ROWS_WITH_RESET : MENU_ROWS_FULL);
+        int[] order = input ? MENU_ROWS_INPUT : MENU_ROWS_FULL;
         int idx = 0;
         for (int i = 0; i < order.length; i++) if (order[i] == cur) { idx = i; break; }
         idx = Math.floorMod(idx + dir, order.length);
@@ -3556,16 +3531,7 @@ public class LauncherActivity extends Activity {
      *  would do, losing the corner radius). Falls back to a fresh rounded
      *  drawable if the item somehow lost its background. */
     private void setMenuItemBg(TextView tv, int color) {
-        android.graphics.drawable.Drawable d = tv.getBackground();
-        if (d instanceof android.graphics.drawable.GradientDrawable) {
-            ((android.graphics.drawable.GradientDrawable) d).setColor(color);
-            return;
-        }
-        android.graphics.drawable.GradientDrawable g =
-                new android.graphics.drawable.GradientDrawable();
-        g.setCornerRadius(EdgeGlassStyle.rowRadiusPx(density));
-        g.setColor(color);
-        tv.setBackground(g);
+        tv.setBackground(NativeTheme.row(this,color==EdgeGlassStyle.SELECTED_PILL,16));
     }
 
     private View buildNetBtn(int sz) {
@@ -4614,7 +4580,7 @@ public class LauncherActivity extends Activity {
         }
         @Override public void onMenuHide() {
             if (!reorderMode) return;
-            menuSelection = MENU_HIDE;
+            menuSelection = MENU_MOVE;
             int idx = dragIndex;
             AppInfo app = (idx >= 0 && idx < displayed.size()) ? displayed.get(idx) : null;
             exitReorderMode(false);
@@ -6049,7 +6015,7 @@ public class LauncherActivity extends Activity {
         }
         @Override public void onMenuHide() {
             if (!reorderMode) return;
-            menuSelection = RecyclingShelfView.MENU_HIDE;
+            menuSelection = RecyclingShelfView.MENU_MOVE;
             triggerHide();
         }
         @Override public void onMenuUninstall() {
@@ -7999,6 +7965,10 @@ public class LauncherActivity extends Activity {
             if (handleKeymapOverlayKey(event)) return true;
             return super.dispatchKeyEvent(event);
         }
+        if (embeddedSettings && controlCenter != null && controlCenter.isDetailVisible("appearance")) {
+            if (event.getAction()==KeyEvent.ACTION_DOWN && handleSettingsKey(event.getKeyCode())) return true;
+            if (!isLetThroughKey(event.getKeyCode())) return true;
+        }
         FrameLayout sp = settingsOverlay;
         if (sp != null && sp.getVisibility() == View.VISIBLE) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -8152,6 +8122,7 @@ public class LauncherActivity extends Activity {
             if (w > max) max = w;
         }
         if (max <= 0) return;
+        if(embeddedSettings)max=NativeTheme.px(this,378);
         for (int i = 0; i < col.getChildCount(); i++) {
             View child = col.getChildAt(i);
             if (!(child instanceof android.widget.LinearLayout)) continue;
@@ -8202,7 +8173,8 @@ public class LauncherActivity extends Activity {
         // EdgeGlassStyle so the two surfaces stay visually identical.
         android.widget.LinearLayout card = new android.widget.LinearLayout(this);
         card.setOrientation(android.widget.LinearLayout.VERTICAL);
-        EdgeGlassStyle.applyPanel(card, density);
+        card.setBackground(NativeTheme.glass(this,28,true));
+        card.setPadding(dp(16),dp(16),dp(16),dp(16));
         card.setClipChildren(false);
         card.setClipToPadding(false);
 
@@ -8211,8 +8183,9 @@ public class LauncherActivity extends Activity {
         title.setTextColor(0x99FFFFFF);
         title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setAllCaps(true);
-        title.setLetterSpacing(0.08f);
+        title.setAllCaps(false);
+        title.setTypeface(NativeTheme.regular());
+        title.setLetterSpacing(0f);
         title.setPadding(dp(10), dp(3), dp(10), dp(7));
         card.addView(title, new android.widget.LinearLayout.LayoutParams(WRAP, WRAP));
 
@@ -8256,7 +8229,7 @@ public class LauncherActivity extends Activity {
         final android.widget.LinearLayout col = settingsColumn;
         if (col == null) return;
         TextView title = settingsTitleView;
-        if (title != null) title.setText(settingsPageTitleRes());
+        if (title != null) {title.setText(settingsPageTitleRes());title.setVisibility(embeddedSettings && settingsPage==SPAGE_MAIN?View.GONE:View.VISIBLE);}
         TextView hint = settingsHintView;
         if (hint != null) hint.setText(settingsPageHintRes());
         col.removeAllViews();
@@ -8276,7 +8249,7 @@ public class LauncherActivity extends Activity {
             label.setText(settingsRowText(rowId, false));
             label.setTextColor(0xCCFFFFFF);
             label.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
-            label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            label.setTypeface(NativeTheme.regular());
             boolean hasSummary = settingsRowHasSummary(rowId);
             label.setSingleLine(!hasSummary);
             label.setMaxLines(hasSummary ? 2 : 1);
@@ -8341,67 +8314,36 @@ public class LauncherActivity extends Activity {
      *  appear to fall out of the same icon — but the keymap card's anchor
      *  resolves against the gear too, so opening keymap from inside the
      *  settings panel keeps the visual continuity. */
-    private void showSettingsPanel() {
-        if (destroyed) return;
+    private View embeddedAppearance() {
         googleTvSetupStatus = GoogleTvSetup.inspect(this);
         if (settingsOverlay == null) buildSettingsPanel();
-        FrameLayout ov = settingsOverlay;
-        final android.widget.LinearLayout card = settingsCard;
-        if (ov == null || card == null) return;
-
-        // Hide focus ring — it belongs to the shelf which is now logically
-        // behind the panel.
-        RingView rv = ringView; if (rv != null) rv.setVisibility(View.INVISIBLE);
-
-        // Bring up the shared dim backdrop. Idempotent — when this is
-        // called as part of a settings → keymap → settings round-trip
-        // the backdrop is already at full alpha and this call is a
-        // no-op, so the dim level stays constant.
-        ensureOverlayBackdropVisible();
-
-        // Always open on the MAIN page (the panel may have been closed while
-        // on a sub-view). Rebuild, then land the cursor on the row a
-        // drill-through restores to (set by the activation handler before it
-        // called hideSettingsPanel); reset the pending cursor so the NEXT
-        // fresh open from the gear starts at the top row.
+        embeddedSettings = true;
         settingsPage = SPAGE_MAIN;
-        rebuildSettingsColumn();
-        settingsSelectedRow = settingsRowIndex(SROWS_MAIN, pendingSettingsCursor);
+        settingsSelectedRow = settingsRowIndex(SROWS_MAIN,pendingSettingsCursor);
         pendingSettingsCursor = SR_APPEARANCE_MENU;
-        refreshSettingsRows();
+        settingsCard.animate().cancel();
+        settingsCard.setAlpha(1);settingsCard.setScaleX(1);settingsCard.setScaleY(1);
+        settingsCard.setTranslationY(0);settingsCard.setBackground(null);
+        settingsCard.setPadding(0,0,0,0);
+        rebuildSettingsColumn();refreshSettingsRows();
+        settingsTitleView.setVisibility(View.GONE);
+        return settingsCard;
+    }
 
-        // Anchor the card just below the gear toolbar pill — shared
-        // helper since the keymap card uses the identical math.
-        anchorCardUnderGear(card, dp(78), dp(20));
-
-        ov.setVisibility(View.VISIBLE);
-        ov.bringToFront();
-        ov.requestFocus();
-
-        // Drop-down animation: same shape and timing as the keymap card so
-        // both surfaces feel like the same primitive opening from the same
-        // pill.
-        card.animate().cancel();
-        card.setAlpha(0f);
-        card.setScaleX(0.94f); card.setScaleY(0.86f);
-        card.setTranslationY(-dp(6));
-        card.post(() -> {
-            if (card != settingsCard) return;
-            card.setPivotX(card.getWidth());
-            card.setPivotY(0f);
-            card.animate()
-                    .alpha(1f)
-                    .scaleX(1f).scaleY(1f)
-                    .translationY(0f)
-                    .setDuration(160)
-                    .setInterpolator(MENU_IN)
-                    .withLayer()
-                    .start();
-        });
+    private void showSettingsPanel() {
+        if (destroyed) return;
+        showControlCenter(mapperBtnView,"appearance");
+        controlCenter.openAppearance();
     }
 
     /** Animate the panel out and restore focus to the gear pill. */
     private void hideSettingsPanel() {
+        if (embeddedSettings) {
+            embeddedSettings=false;
+            if(controlCenter!=null)controlCenter.hide();
+            if(layoutApplyPending) {layoutApplyPending=false;if(!destroyed)recreate();}
+            return;
+        }
         final FrameLayout ov = settingsOverlay;
         final android.widget.LinearLayout card = settingsCard;
         if (ov == null) return;
@@ -8611,6 +8553,8 @@ public class LauncherActivity extends Activity {
                     hideSettingsPanel();
                 } else if (settingsPage != SPAGE_MAIN) {
                     returnToSettingsParent();
+                } else if (embeddedSettings && controlCenter != null) {
+                    embeddedSettings=false;controlCenter.backToControls();
                 } else {
                     hideSettingsPanel();
                 }
