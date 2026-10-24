@@ -943,11 +943,27 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onCoverArt(data: ByteArray) {
-        val bmp = BitmapFactory.decodeByteArray(data, 0, data.size) ?: return
+        val bmp = _decodeCoverArt(data) ?: return
         _coverArtBytes = data
         _trackInfo.value = _trackInfo.value.copy(coverArt = bmp)
         _updateMediaMetadata()
         _refreshDacpPlayer()
+    }
+
+    /** Sender-supplied artwork, downsampled to at most ~1024 px so a huge image
+     *  cannot exhaust the receiver process's heap. */
+    private fun _decodeCoverArt(data: ByteArray): android.graphics.Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > COVER_ART_MAX_PX) sample *= 2
+        return try {
+            BitmapFactory.decodeByteArray(data, 0, data.size, BitmapFactory.Options().apply { inSampleSize = sample })
+        } catch (e: OutOfMemoryError) {
+            Log.w(TAG, "cover art too large", e)
+            null
+        }
     }
 
     override fun onProgress(start: Long, curr: Long, end: Long) {
@@ -1290,6 +1306,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         const val VIDEO_SEEK_STEP_MS = 10_000L
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
 
+        private const val COVER_ART_MAX_PX = 1024
         private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
         private const val SERVER_RESTART_DEBOUNCE_MS = 500L
 
