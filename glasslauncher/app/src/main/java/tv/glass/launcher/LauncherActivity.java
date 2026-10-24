@@ -122,8 +122,6 @@ public class LauncherActivity extends Activity {
     private static final String KEY_SYSTEM_WALLPAPER = "system_wallpaper";
     private static final String KEY_SCROLL_IDX = "scroll_idx";
     private static final String KEY_APP_ORDER  = "app_order";
-    /** Set once {@link #applyStoredOrder} has applied R.array.initial_app_order. */
-    private static final String KEY_INITIAL_ORDER_APPLIED = "initial_order_applied_v1";
     /** v1.5.0: number of leading apps (in the visible / non-hidden order)
      *  that form the bottom "home favourites" row and, equivalently, the
      *  centred first row of the pull-down app drawer. Range [0, COLS]. Absent on
@@ -1451,6 +1449,7 @@ public class LauncherActivity extends Activity {
                         // orphan images do not accumulate indefinitely.
                         if (Intent.ACTION_PACKAGE_REMOVED.equals(action)
                                 && !intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) {
+                            forgetUninstalledApp(pkg);
                             CustomIconStore store = customIconStore;
                             if (store != null) store.delete(pkg);
                             if (customNames.remove(pkg) != null) saveCustomNames();
@@ -1494,16 +1493,8 @@ public class LauncherActivity extends Activity {
     };
 
     private void applyStoredOrder(List<AppInfo> apps) {
+        // Only the user's own arrangement: no bundled favourites list.
         String raw = prefs.getString(KEY_APP_ORDER, null);
-        // One-time migration to this TV's previous Google TV app order: the
-        // bundled list goes first, any existing saved order follows (parse
-        // keeps the first occurrence). Later reorders are never overridden.
-        if (!prefs.getBoolean(KEY_INITIAL_ORDER_APPLIED, false)) {
-            String init = String.join(",", getResources().getStringArray(R.array.initial_app_order));
-            raw = (raw == null || raw.isEmpty()) ? init : init + "," + raw;
-            prefs.edit().putString(KEY_APP_ORDER, raw)
-                    .putBoolean(KEY_INITIAL_ORDER_APPLIED, true).apply();
-        }
         Map<String, Integer> rank = AppOrder.parse(raw);
         if (rank.isEmpty()) return;
         Collections.sort(apps, (a, b) -> {
@@ -1524,8 +1515,11 @@ public class LauncherActivity extends Activity {
         if (appList.isEmpty()) return;
         ArrayList<String> pkgs = new ArrayList<>(appList.size());
         for (int i = 0; i < appList.size(); i++) pkgs.add(appList.get(i).packageName);
+        // Glass: keep the place of apps that are missing right now (an app
+        // being updated is briefly uninstalled); see AppOrder.merge.
         prefs.edit()
-                .putString(KEY_APP_ORDER, AppOrder.serialize(pkgs)).apply();
+                .putString(KEY_APP_ORDER, AppOrder.serialize(
+                        AppOrder.merge(prefs.getString(KEY_APP_ORDER, ""), pkgs))).apply();
         // Mirror the order into the AppListCache so the next cold start
         // renders the shelf in the user's just-saved arrangement instead
         // of the previous order. Without this nudge, the next cold start
@@ -2215,29 +2209,19 @@ public class LauncherActivity extends Activity {
         density = dm.density; screenW = dm.widthPixels; screenH = dm.heightPixels;
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         NativeTheme.init(this);
-        // Apply the approved appearance/favourites once; preserve previous values
-        // privately for rollback and retain every app, shortcut and saved wallpaper.
+        // Apply the approved appearance once; preserve previous values privately
+        // for rollback. The app order and home-row size are the user's alone.
         if (!prefs.getBoolean("feather_theme_v1", false)) {
             prefs.edit().putBoolean("feather_theme_v1", true)
                     .putInt("pre_feather_layout_columns",prefs.getInt(KEY_LAYOUT_COLUMNS,6))
                     .putInt("pre_feather_card_corner",prefs.getInt(KEY_CARD_CORNER_PERCENT,20))
                     .putBoolean("pre_feather_focus_border",prefs.getBoolean(KEY_FOCUS_BORDER_ENABLED,false))
-                    .putString("pre_feather_app_order",prefs.getString(KEY_APP_ORDER,""))
                     .putInt("pre_feather_home_count",prefs.getInt(KEY_HOME_COUNT,-1))
                     .putBoolean("pre_feather_system_wallpaper",prefs.getBoolean(KEY_SYSTEM_WALLPAPER,false))
-                    .putString(KEY_APP_ORDER,"com.edde746.plezy,com.apple.atve.androidtv.appletv,com.google.android.youtube.tv,com.amazon.amazonvideo.livingroom,com.jio.media.jiotvplus,"+prefs.getString(KEY_APP_ORDER,""))
-                    .putInt(KEY_HOME_COUNT,5)
-                    .putBoolean(KEY_INITIAL_ORDER_APPLIED,true)
                     .putBoolean(KEY_SYSTEM_WALLPAPER,false)
                     .putBoolean(KEY_AMBIENT_BACKGROUND,true)
                     .putInt(KEY_LAYOUT_COLUMNS, 5).putInt(KEY_CARD_CORNER_PERCENT, 14)
                     .putBoolean(KEY_FOCUS_BORDER_ENABLED, false).apply();
-        }
-        // Separate gate also repairs the first preview's stale-cache order.
-        if(!prefs.getBoolean("feather_favorites_v1",false)) {
-            prefs.edit().putBoolean("feather_favorites_v1",true)
-                    .putString(KEY_APP_ORDER,"com.edde746.plezy,com.apple.atve.androidtv.appletv,com.google.android.youtube.tv,com.amazon.amazonvideo.livingroom,com.jio.media.jiotvplus,"+prefs.getString(KEY_APP_ORDER,""))
-                    .putInt(KEY_HOME_COUNT,5).apply();
         }
         ambientBackgroundEnabled=prefs.getBoolean(KEY_AMBIENT_BACKGROUND,true);
         loadLayoutOptions();
@@ -7152,7 +7136,7 @@ public class LauncherActivity extends Activity {
                 final List<AppInfo> freshFinal = fresh;
                 runOnUiThread(() -> {
                     // Wrap the whole UI body in try/finally so a faulting
-                    // helper (pruneHiddenApps prefs write, applyShelfApps,
+                    // helper (applyShelfApps,
                     // requestFocusOnIndex) cannot strand the appsLoading
                     // flag at `true`. Belt-and-braces companion to the
                     // background-side guard above: if either path fails,
@@ -7169,7 +7153,7 @@ public class LauncherActivity extends Activity {
                         applyCustomNames(freshFinal);
                         // Build the "fresh package set" exactly ONCE per
                         // reconcile and share it across the icon-cache
-                        // invalidation, pruneHiddenApps, and pruneKeyMap
+                        // invalidation
                         // paths below. The earlier draft built a separate
                         // ArraySet inside each helper from the same
                         // freshFinal data — three N-element passes plus
@@ -7192,7 +7176,11 @@ public class LauncherActivity extends Activity {
                         // sees the new appList — keeps the saved set in sync
                         // with the actually-installed packages without a
                         // separate scheduling step.
-                        pruneHiddenApps(freshPkgs);
+                        // Glass: hidden apps and key bindings are no longer
+                        // pruned when a scan misses a package: an app being
+                        // updated is briefly absent and came back unhidden and
+                        // unbound. They are forgotten on a real uninstall
+                        // (package receiver) instead.
                         // Mirror prune for the remote-key shortcut
                         // map so an uninstalled-app binding is dropped
                         // automatically (the keymap settings slot row
@@ -7201,7 +7189,7 @@ public class LauncherActivity extends Activity {
                         // still handles the rare race where this
                         // reconcile hasn't run yet by the time the user
                         // presses the dead-binding key.
-                        pruneKeyMap(freshPkgs);
+
                         boolean changed = freshFinal.size() != appList.size();
                         if (!changed) {
                             for (int i = 0; i < freshFinal.size(); i++) {
@@ -7774,9 +7762,9 @@ public class LauncherActivity extends Activity {
                         KeymapStore.serializeKeyMap(keycodes, packages)).apply();
     }
 
-    /** Parse the persisted hidden-apps set once at startup. Hidden-but-
-     *  uninstalled packages get garbage-collected the next time
-     *  {@link #loadApps()} runs (see {@link #pruneHiddenApps}). */
+    /** Parse the persisted hidden-apps set once at startup. Entries are
+     *  dropped when the app is really uninstalled (see
+     *  {@link #forgetUninstalledApp}), never because an update hid it briefly. */
     private void loadHiddenApps() {
         hiddenApps.clear();
         String raw = prefs.getString(KEY_HIDDEN, null);
@@ -7816,60 +7804,19 @@ public class LauncherActivity extends Activity {
         for (int i = 0, n = apps.size(); i < n; i++) applyCustomName(apps.get(i));
     }
 
-    /** Drop hidden-set entries whose package is no longer installed.
-     *  Called from loadApps once the fresh appList is known. O(N + M)
-     *  via a single ArraySet pass over fresh package names; the prior
-     *  nested loop was O(N · M) and quadratic when many apps were
-     *  hidden — fine in practice but trivially fixed. */
-    /** Mirror of {@link #pruneHiddenApps} for the remote-key shortcut
-     *  map. Uninstalled-package bindings persist in {@link #keyMap}
-     *  until the user actually presses the bound key — at which point
-     *  {@link #dispatchKeyEvent}'s "Mapped to an uninstalled package"
-     *  branch cleans up lazily. The lazy cleanup works for the press
-     *  path, but it leaves the keymap settings UI showing the raw
-     *  package name on the slot row (instead of "Not assigned") for
-     *  every binding pointing at an uninstalled app.
-     *
-     *  <p>Eager cleanup on every {@link #loadApps()} reconcile keeps
-     *  the slot list visually correct without user action. Iterates
-     *  the SparseArray in reverse so the {@code removeAt} indices
-     *  stay valid; calls {@link #saveKeyMap()} at most once per
-     *  reconcile no matter how many entries dropped.
-     *
-     *  <p>Cheap on warm runs: {@link #SHORTCUT_KEYCODES} caps the
-     *  binding count at 6, so the inner ArraySet contains() check
-     *  runs at most 6 times. Accepts the freshly-built package set
-     *  from the reconcile body so the v1.4.x first cut's separate-
-     *  ArraySet allocations (three sets built from the same data on
-     *  every reconcile — see the v1.4.x reconcile body comment) are
-     *  collapsed to a single shared instance.
-     */
-    private void pruneKeyMap(ArraySet<String> installedPkgs) {
-        if (keyMap.size() == 0) return;
-        if (installedPkgs == null) return;
-        boolean changed = false;
-        for (int i = keyMap.size() - 1; i >= 0; i--) {
-            String pkg = keyMap.valueAt(i);
-            if (pkg == null || !installedPkgs.contains(pkg)) {
-                keyMap.removeAt(i);
-                changed = true;
-            }
-        }
-        if (changed) saveKeyMap();
+
+    /** Glass: a real uninstall (not an update) removes the app from the saved
+     *  order, the hidden set and remote-key bindings. */
+    private void forgetUninstalledApp(String pkg) {
+        String order = prefs.getString(KEY_APP_ORDER, "");
+        String pruned = AppOrder.without(order, pkg);
+        if (!pruned.equals(order)) prefs.edit().putString(KEY_APP_ORDER, pruned).apply();
+        if (hiddenApps.remove(pkg)) saveHiddenApps();
+        boolean bound = false;
+        for (int i = keyMap.size() - 1; i >= 0; i--) if (pkg.equals(keyMap.valueAt(i))) { keyMap.removeAt(i); bound = true; }
+        if (bound) saveKeyMap();
     }
 
-    private void pruneHiddenApps(ArraySet<String> installedPkgs) {
-        if (hiddenApps.isEmpty()) return;
-        if (installedPkgs == null) return;
-        boolean changed = false;
-        for (int i = hiddenApps.size() - 1; i >= 0; i--) {
-            if (!installedPkgs.contains(hiddenApps.valueAt(i))) {
-                hiddenApps.removeAt(i);
-                changed = true;
-            }
-        }
-        if (changed) saveHiddenApps();
-    }
 
     /** Push the (filtered) shelf list to the RecyclingShelfView.
      *  Single point of policy: the shelf shows appList minus hiddenApps;

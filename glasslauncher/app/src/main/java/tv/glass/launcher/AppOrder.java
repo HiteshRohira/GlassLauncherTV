@@ -79,4 +79,38 @@ final class AppOrder {
         }
         return Math.min(Math.max(keepIdx, 0), now.size() - 1);
     }
+
+    /** Glass: the order to save. {@code current} is the user's arrangement of
+     *  the apps installed right now; apps in {@code previousRaw} that are
+     *  missing at this moment (mid-update, briefly disabled) keep their place,
+     *  each re-inserted just before the app that followed it. Saving only
+     *  the installed apps made an updating app lose its position and come
+     *  back at the end. Apps leave the order only via {@link #without}, on a
+     *  real uninstall. */
+    static List<String> merge(String previousRaw, List<String> current) {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>(current);
+        if (previousRaw == null || previousRaw.isEmpty()) return out;
+        java.util.HashSet<String> present = new java.util.HashSet<>(current);
+        String[] prev = previousRaw.split(",");
+        String nextKept = null;   // the app that followed, already in out
+        for (int i = prev.length - 1; i >= 0; i--) {
+            String p = prev[i];
+            if (p.isEmpty()) continue;
+            if (!present.contains(p)) {
+                int at = nextKept == null ? out.size() : out.indexOf(nextKept);
+                out.add(at, p);
+                present.add(p);
+            }
+            nextKept = p;
+        }
+        return out;
+    }
+
+    /** The stored order without {@code pkg} (after it was really uninstalled). */
+    static String without(String raw, String pkg) {
+        if (raw == null || raw.isEmpty() || pkg == null) return raw == null ? "" : raw;
+        java.util.ArrayList<String> kept = new java.util.ArrayList<>();
+        for (String p : raw.split(",")) if (!p.isEmpty() && !p.equals(pkg)) kept.add(p);
+        return serialize(kept);
+    }
 }
