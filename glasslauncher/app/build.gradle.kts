@@ -499,8 +499,11 @@ android {
         // Bumped 51 → 52: 2.6.1 reorganizes settings into a compact category
         // hub, removes the About/QR surface, and refines the Orange focus color.
         // SemVer PATCH — settings navigation and visual clarity refinement.
-        versionCode   = 22
-        versionName   = "1.1.6-airplay.7"
+        // Glass 1.1.7-airplay.8 / 23: fixes from the two Glass TV code reviews
+        // (phone-remote pairing, UxPlay httpd/HLS hardening, audio and video
+        // pipeline, launcher reliability). See git history on fix/review-backlog.
+        versionCode   = 23
+        versionName   = "1.1.7-airplay.8"
         resourceConfigurations += listOf("en")
 
         // Instrumentation test runner. Required so :app:connectedDebugAndroidTest
