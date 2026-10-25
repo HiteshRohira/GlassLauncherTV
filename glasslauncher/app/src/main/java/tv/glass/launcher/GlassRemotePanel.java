@@ -21,6 +21,8 @@ import java.util.Enumeration;
 
 /** Phone setup remains inside the same Control Center surface. */
 final class GlassRemotePanel {
+    /** How long "Forget paired phones" waits for the confirming press. */
+    private static final long CONFIRM_MS=5000;
     static LinearLayout create(Context context){
         LinearLayout content=new LinearLayout(context);content.setOrientation(LinearLayout.VERTICAL);content.setGravity(Gravity.CENTER_HORIZONTAL);
         fill(content,null,false);
@@ -74,13 +76,31 @@ final class GlassRemotePanel {
         addRow(content,toggle,24);
         if(on){
             View forget=row(context,"remote-forget","Forget paired phones",
-                    confirmForget?"Press again: every phone must scan the new code":"New code; phones paired before stop working",null,()->{
+                    confirmForget?"Are you sure? All phones will be disconnected":"New code; phones paired before stop working",null,()->{
                 if(!confirmForget){fill(content,"remote-forget",true);return;}
                 try{GlassRemoteAccess.forgetAll(context);}catch(Exception ignored){}
                 AirPlayMonitorService.start(context,AirPlayMonitorService.ACTION_REMOTE_CHANGED);
                 fill(content,"remote-forget",false);
             });
             addRow(content,forget,10);
+            if(confirmForget){
+                // Read as a warning, not as another subtitle.
+                View sub=forget.findViewWithTag("secondary");
+                if(sub instanceof TextView){sub.setTag("warning");ControlCenterPanel.tint(sub,forget.hasFocus()||forget.isFocused());}
+                // The confirmation is armed only briefly and only while this row
+                // keeps focus, so a much later press cannot forget every phone.
+                Runnable disarm=()->{
+                    if(!forget.isAttachedToWindow())return;
+                    View f=content.findFocus();
+                    fill(content,f!=null&&f.getTag()!=null?f.getTag().toString():null,false);
+                };
+                forget.postDelayed(disarm,CONFIRM_MS);
+                View.OnFocusChangeListener styling=forget.getOnFocusChangeListener();
+                forget.setOnFocusChangeListener((v,f)->{
+                    if(styling!=null)styling.onFocusChange(v,f);
+                    if(!f){forget.removeCallbacks(disarm);content.post(disarm);}
+                });
+            }
         }
         if(focusTag!=null){View f=content.findViewWithTag(focusTag);if(f!=null)f.requestFocus();}
     }
