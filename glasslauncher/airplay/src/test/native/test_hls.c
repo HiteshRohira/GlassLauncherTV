@@ -101,9 +101,38 @@ static void test_prune(void) {
     free(out);
 }
 
+static void test_language(void) {
+    airplay_video_t *av = airplay_video_init((raop_t *) 1, 7000, "fr:de");
+    const char *master =
+        "#EXTM3U\n"
+        "#EXT-X-MEDIA:URI=\"mlhls://localhost/a1.m3u8\",TYPE=AUDIO,GROUP-ID=\"a\",DEFAULT=YES,NAME=\"En\",LANGUAGE=\"en-US\",YT-EXT-AUDIO-CONTENT-ID=\"en.1\"\n"
+        "#EXT-X-MEDIA:URI=\"mlhls://localhost/a2.m3u8\",TYPE=AUDIO,GROUP-ID=\"a\",DEFAULT=NO,NAME=\"Zh\",LANGUAGE=\"zh-Hant-TW\",YT-EXT-AUDIO-CONTENT-ID=\"zh.1\"\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720,AUDIO=\"a\"\nmlhls://localhost/v.m3u8\n";
+    /* name "En" (2) is shorter than code "en-US" (5): the old code overflowed */
+    for (int round = 0; round < 3; round++) {
+        char *out = select_master_playlist_language(av, strdup(master));
+        CHECK(out && strstr(out, "a1.m3u8") && !strstr(out, "a2.m3u8"), "default language kept:\n%s", out ? out : "(null)");
+        free(out);
+    }
+    CHECK(get_language_code(av) && !strcmp(get_language_code(av), "en-US"), "code: %s", get_language_code(av));
+    /* malformed: second entry has no NAME */
+    const char *bad =
+        "#EXTM3U\n"
+        "#EXT-X-MEDIA:URI=\"x\",DEFAULT=YES,NAME=\"En\",LANGUAGE=\"en\",YT-EXT-AUDIO-CONTENT-ID=\"1\"\n"
+        "#EXT-X-MEDIA:URI=\"y\",DEFAULT=NO,LANGUAGE=\"de\",YT-EXT-AUDIO-CONTENT-ID=\"2\"";
+    char *in = strdup(bad);
+    char *out = select_master_playlist_language(av, in);
+    CHECK(out == in && !strcmp(out, bad), "malformed playlist must come back unchanged");
+    free(out);
+    airplay_video_destroy(av);
+}
+
 /* Random and mutated playlists: no crashes, leaks or out-of-bounds access. */
+static airplay_video_t *fuzz_av;
 static void fuzz(void) {
-    static const char *atoms[] = { "#EXTM3U", "#EXT-X-STREAM-INF:BANDWIDTH=5", "URI=\"", "\"", "mlhls://localhost",
+    fuzz_av = airplay_video_init((raop_t *) 1, 7000, "en");
+    static const char *atoms[] = { "#EXT-X-MEDIA:URI=\"u\",", "DEFAULT=YES,", "NAME=\"Ab\",", "LANGUAGE=\"zh-Hant\",",
+        "YT-EXT-AUDIO-CONTENT-ID=\"1\"", "#EXTM3U", "#EXT-X-STREAM-INF:BANDWIDTH=5", "URI=\"", "\"", "mlhls://localhost",
         "/", "a.m3u8", "../", "\r", "\n", "?q=1", "#", "://", " ", "m3u8", "x" };
     srand(12345);
     for (int i = 0; i < 200000; i++) {
@@ -125,6 +154,7 @@ static void fuzz(void) {
             CHECK(out != NULL, "adjust returned NULL");
             free(out);
             int k, d;
+            r = select_master_playlist_language(fuzz_av, r);
             r = prune_master_playlist(r, 1080, &k, &d);
             char **table = NULL;
             int num = 0;
@@ -141,7 +171,9 @@ int main(void) {
     test_adjust();
     test_resolve();
     test_prune();
+    test_language();
     fuzz();
+    airplay_video_destroy(fuzz_av);
     if (failures) { fprintf(stderr, "test_hls: %d failure(s)\n", failures); return 1; }
     printf("test_hls: ok\n");
     return 0;

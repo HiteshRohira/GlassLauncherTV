@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "F. Duncanh" <fduncanh@gmail.com>
+Date: Wed, 16 Sep 2026 03:25:37 -0400
+Subject: [PATCH] message: unsupported FairPlay type != 0x03 challenge received
+
+(cherry picked from commit 942d7b249a700cf07ee4ef45e0e5f8f145f4ffbb)
+---
+ lib/raop_handlers.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
+index bf72698..b6cc825 100644
+--- a/lib/raop_handlers.h
++++ b/lib/raop_handlers.h
+@@ -555,6 +555,13 @@ raop_handler_fpsetup(raop_conn_t *conn,
+ 
+     data = (unsigned char *) http_request_get_data(request, &datalen);
+     if (datalen == 16) {
++        if (data[4] != 0x03) {
++            logger_log(raop->logger, LOGGER_ERR, " Client sent an unsupported type 0x%02x FairPlay challenge:\n"
++            "Only type 0x03 can be handled using publically-available information", data[4]);
++            http_response_init(response, "RTSP/1.0", 501, "Not Implemented");
++            return;
++        }  
++
+         *response_data = calloc(142, sizeof(char));
+         if (*response_data) {
+             http_response_add_header(response, "Content-Type", "application/octet-stream");
