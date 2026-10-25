@@ -3811,7 +3811,9 @@ public class LauncherActivity extends Activity {
             android.graphics.drawable.Drawable glyph = getDrawable(R.drawable.ic_airplay);
             iv.setImageDrawable(dot == 0 ? glyph : new StatusDotDrawable(glyph, dot));
         }
-        String key = s.name() + snap.session + snap.name;
+        // Glass: include diagnostics and the logging switch, or the AirPlay
+        // page never redraws when only those change.
+        String key = s.name() + snap.session + snap.name + "|" + snap.diagnostics + "|" + snap.debug;
         if (!key.equals(airRecord)) {
             airRecord = key;
             airState = s;
