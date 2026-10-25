@@ -44,8 +44,11 @@ final class GlassRemoteAccess {
                 @SuppressWarnings("unchecked") T same = (T) book;
                 return same;
             }
+            // Write only if something changed: a wrong code must not touch
+            // the file (its version is how other processes notice changes).
+            String before = dirty ? null : serialize(book);
             T result = change.apply(book);
-            write(file, book);
+            if (dirty || !serialize(book).equals(before)) write(file, book);
             return result;
         }
     }
@@ -84,13 +87,16 @@ final class GlassRemoteAccess {
         return book;
     }
 
-    private static void write(AtomicFile file, PairingBook book) throws Exception {
+    private static String serialize(PairingBook book) throws Exception {
         JSONArray devices = new JSONArray();
         for (PairingBook.Device d : book.devices) devices.put(new JSONObject().put("token", d.token).put("since", d.since));
         JSONArray installs = new JSONArray();
         for (PairingBook.Install i : book.installs) installs.put(new JSONObject().put("token", i.token).put("expires", i.expires));
-        byte[] bytes = new JSONObject().put("pin", book.pin).put("devices", devices).put("installs", installs)
-                .toString().getBytes(StandardCharsets.UTF_8);
+        return new JSONObject().put("pin", book.pin).put("devices", devices).put("installs", installs).toString();
+    }
+
+    private static void write(AtomicFile file, PairingBook book) throws Exception {
+        byte[] bytes = serialize(book).getBytes(StandardCharsets.UTF_8);
         FileOutputStream out = file.startWrite();
         try { out.write(bytes); file.finishWrite(out); } catch (Exception failure) { file.failWrite(out); throw failure; }
     }

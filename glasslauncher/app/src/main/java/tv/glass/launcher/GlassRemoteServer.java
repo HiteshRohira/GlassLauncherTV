@@ -40,10 +40,12 @@ final class GlassRemoteServer implements AutoCloseable {
     static{Map<String,Integer> keys=new HashMap<>();keys.put("up",19);keys.put("down",20);keys.put("left",21);keys.put("right",22);keys.put("ok",23);keys.put("back",4);keys.put("home",3);keys.put("playPause",85);keys.put("volumeUp",24);keys.put("volumeDown",25);keys.put("mute",164);keys.put("rewind",89);keys.put("forward",90);keys.put("delete",67);keys.put("enter",66);KEYS=Collections.unmodifiableMap(keys);}
     /** @param onLockout runs (on a request thread) when repeated wrong codes close pairing. */
     GlassRemoteServer(Context context,Runnable onLockout)throws Exception{this.context=context.getApplicationContext();this.onLockout=onLockout;access=GlassRemoteAccess.load(context);accessVersion=GlassRemoteAccess.version(context);tv=new TvRemoteClient(context);}
-    /** Current pairing material; picks up "Forget paired phones" from the launcher process. */
+    /** Current pairing material; picks up "Forget paired phones" from the launcher process.
+     *  The brute-force guard is never reset here: the file also changes on
+     *  every pairing, and a reset would hand a guesser a fresh budget. */
     private PairingBook access()throws Exception{
         long version=GlassRemoteAccess.version(context);
-        if(version!=accessVersion){synchronized(this){if(version!=accessVersion){access=GlassRemoteAccess.load(context);accessVersion=version;guard.reset();}}}
+        if(version!=accessVersion){synchronized(this){if(version!=accessVersion){access=GlassRemoteAccess.load(context);accessVersion=version;}}}
         return access;
     }
     /** Pairs a phone if {@code pin} is the current code, under the shared
