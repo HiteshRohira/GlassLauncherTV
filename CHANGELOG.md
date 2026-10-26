@@ -1,28 +1,36 @@
 # Changelog
 
-All notable changes to Glass Launcher land here.
+Glass TV changes are listed first; earlier entries are inherited Glass Launcher history.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
+- Remove the inherited website, social-card template and upstream release publisher.
+- Refresh build/remote/interface documentation and remove stale build commentary.
+- Side-panel focus containment is staged separately on `fix/side-panel-focus`; testing is deferred.
 
-- A TV-hosted, PIN-paired phone remote with navigation, playback, volume and
-  Unicode text input. Safari can save it to the iPhone Home Screen.
+## [1.1.7-airplay.8] — 2026-10-26
 
-### Changed
+Source: `fix/review-backlog` at `cd46f2b`; installed reference build, version code 23.
 
-- Native Feather home uses an app-colour ambient background and outline controls.
-- Control Center opens Android system settings separately from Appearance.
-  Appearance slides inside the same glass dialog; paired devices and the Pair
-  device button are removed from Control Center.
-- Bluetooth device rows toggle connect/disconnect directly.
-- The glass app menu contains Move, Hide and App info, with Move selected first.
-- This approved in-dialog Appearance flow supersedes the earlier unreleased
-  full-height settings sheet. Existing wallpaper, shortcuts and backup settings
-  remain available through the embedded Appearance categories.
+- Per-phone pairing tokens, rotating codes, pairing limits, revocation and an off switch.
+- Hardened native HTTP/HLS handling, JNI thread cleanup and selected UxPlay backports.
+- Bounded mirroring queues, audio discontinuity handling and session-only resource locks.
+- Persistent phone key injection and keyboard recovery after process interruption.
+- Launcher refresh/cache fixes, in-place status updates and preserved app order.
+- Optional ARMv7-only packaging via `-PtvAbiOnly`.
+
+## [1.1.6-airplay.7] — 2026-10-24
+
+Source: `main` before source cleanup, version code 22.
+
+- Integrated AirPlay receiver and player; separate receiver app no longer required.
+- Low-latency audio default, asynchronous mirroring decoder and HLS compatibility fixes.
+- TV-hosted phone remote and native Control Center/Appearance interface.
+
+## Inherited Glass Launcher history
 
 ## [1.0.6] — 2026-10-19
 
