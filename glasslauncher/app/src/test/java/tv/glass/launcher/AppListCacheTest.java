@@ -65,7 +65,7 @@ public class AppListCacheTest {
 
     @Test public void parse_badMagic_returnsFalse() {
         // Different first line → file written by something else (or a
-        // future Glass Launcher format we don't recognise). Reject.
+        // future Mirage format we don't recognise). Reject.
         String contents = "WHAT\n1\n0\n";
         Map<String, String[]> out = capture(contents);
         assertTrue(out.isEmpty());

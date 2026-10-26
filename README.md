@@ -1,13 +1,24 @@
-# Glass TV
+# Mirage
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="Mirage home screen" width="80%"/>
+</p>
 
 **A fast, quiet home screen for Android TV with AirPlay built in.**
 
-The installed reference is `1.1.7-airplay.8`. This branch prepares
-`1.1.8-airplay.9`: ABI-specific APKs, native size optimization, and the
-`fix/side-panel-focus` changes with additional navigation regressions covered.
-TV installation remains a separate approval step.
+Installed/reference source: `main`, `1.1.7-airplay.8`. This branch prepares
+`1.1.8-airplay.9` with smaller ABI APKs and the tested side-panel fix; TV
+installation remains a separate approval step.
 
-Glass TV replaces the stock Google TV home with a calm, glass-styled launcher: a clock, an ambient background that takes its colour from the app you're on, and one row of favourite apps. Everything else stays out of the way until you ask for it. It has no ads, recommendations, accounts or telemetry.
+Mirage replaces the stock Google TV home with a calm, glass-styled launcher: a clock, an ambient background that takes its colour from the app you're on, and one row of favourite apps. Everything else stays out of the way until you ask for it. It has no ads, recommendations, accounts or telemetry.
+
+## Screenshots
+
+| Home |
+| --- |
+| ![Home](docs/screenshots/home.png) |
+
+`main` contains `1.1.7-airplay.8` (version code 23), the build currently installed on the reference TV, including the review-backlog fixes. `fix/side-panel-focus` contains an additional focus fix awaiting testing; it is not included in this version.
 
 ## Features
 
@@ -87,7 +98,7 @@ This project is personal and non-commercial; no APKs are published.
 
 ## Origins
 
-Glass TV started as a fork of [Glass Launcher](https://github.com/namillis/GlassLauncherTV) by mithun.ys / pixel, and its home screen still owes that project a lot. It has since grown into something quite different:
+Mirage started as a fork of [Glass Launcher](https://github.com/namillis/GlassLauncherTV) by mithun.ys / pixel, but it is no longer a GitHub fork: it has diverged into its own project. The credits stay — its home screen still owes the original a lot — and it has since grown into something quite different:
 - a redesigned interface;
 - an AirPlay receiver built into the launcher instead of a separate app;
 - a phone remote served by the TV itself;

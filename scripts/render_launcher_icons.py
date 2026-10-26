@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Render Glass Launcher's raster icon assets.
+# Render Mirage's raster icon assets.
 #
 # The adaptive icon (res/drawable/ic_launcher_background.xml +
 # ic_launcher_foreground.xml) is what every device on minSdk 26 shows.
