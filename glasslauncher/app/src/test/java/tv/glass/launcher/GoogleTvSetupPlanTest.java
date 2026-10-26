@@ -22,6 +22,11 @@ public class GoogleTvSetupPlanTest {
                 GoogleTvSetupPlan.launcherHomeComponent("tv.glass.launcher.debug"));
     }
 
+    @Test public void launcherHomeComponent_supportsMirageApplicationId() {
+        assertEquals("tv.mirage.launcher/tv.glass.launcher.LauncherActivity",
+                GoogleTvSetupPlan.launcherHomeComponent("tv.mirage.launcher"));
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void launcherHomeComponent_rejectsUnsafeApplicationId() {
         GoogleTvSetupPlan.launcherHomeComponent("tv.glass.launcher; pm disable-user other");

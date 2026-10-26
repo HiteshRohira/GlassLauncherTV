@@ -7,7 +7,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "tv.glass.launcher"
+        applicationId = "tv.mirage.launcher"
         minSdk        = 26
         targetSdk     = 36
         versionCode   = 23

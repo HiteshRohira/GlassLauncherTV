@@ -60,15 +60,31 @@ cd Mirage/glasslauncher
 gradle --no-daemon :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease
 ```
 
-The first build compiles OpenSSL and FFmpeg for `armeabi-v7a` and `arm64-v8a`.
-Add `-PtvAbiOnly` for ARMv7 only; omit that property
-for both ABIs. Use separate, fresh native build state when comparing variants.
 For an existing clone, initialize dependencies with
-`git submodule update --init --recursive`.
+`git submodule update --init --recursive`. The first build compiles OpenSSL and
+FFmpeg for the selected ABIs. The size-focused build produces standalone APKs
+for both ARM ABIs by default; `-PtargetAbis=armeabi-v7a` or
+`-PtargetAbis=arm64-v8a` builds only that ABI. Its release APKs are under
+`glasslauncher/.build/crypto-size/app/outputs/apk/release/` with the default
+native profile. Use fresh native build state when comparing variants.
 
-The unsigned APK is written under `glasslauncher/app/build/outputs/apk/release/`.
-Sign it locally; an update must use the same key as the installed app. Keep keys
-outside the repository. JVM tests and lint do not execute device tests.
+To select a standalone APK for a TV, check its supported ABIs over ADB:
+
+```sh
+adb shell getprop ro.product.cpu.abilist
+```
+
+Use an `arm64-v8a` APK if that ABI is listed, or an `armeabi-v7a` APK if
+that is supported. The device ABI list is authoritative; the CPU's advertised
+bitness alone does not establish the installed Android userspace's support.
+The size-focused build produces separate ABI APKs; select a matching one.
+
+APK installation requires a signature. For a first installation, create and
+secure your own Android signing keystore, then sign your APK with `apksigner`
+using your key and alias. Never commit the keystore or its passwords. For an
+update to an existing package, use the **same signing certificate** as that
+installation; a different key cannot update it. JVM tests and lint do not execute
+device tests.
 The phone remote maintains a local ADB connection after Android authorization;
 see [`glasslauncher/PHONE-REMOTE.md`](glasslauncher/PHONE-REMOTE.md).
 
@@ -88,10 +104,10 @@ see [`glasslauncher/PHONE-REMOTE.md`](glasslauncher/PHONE-REMOTE.md).
 
 This project is personal and non-commercial; no APKs are published.
 
-## Origins
-
-Mirage started as a fork of [Glass Launcher](https://github.com/namillis/GlassLauncherTV) by mithun.ys / pixel, but it is no longer a GitHub fork: it has diverged into its own project. The credits stay — its home screen still owes the original a lot — and it has since grown into something quite different:
-- a redesigned interface;
-- an AirPlay receiver built into the launcher instead of a separate app;
-- a phone remote served by the TV itself;
-- a long list of performance and reliability work for low-end TV hardware.
+The application ID is `tv.mirage.launcher`. An installation using the earlier
+ID is a separate app: Android does not move its private data automatically.
+Export settings from the old app and restore supported settings and custom icons
+in Mirage; wallpaper, phone pairings, local ADB authorization keys and other
+private state are not covered by that backup. Re-pair and authorize as needed.
+The two receivers can compete for network ports; stop the old receiver before
+starting the new one, and keep the old app and data until migration is verified.

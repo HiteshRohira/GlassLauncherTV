@@ -128,7 +128,7 @@ final class GoogleTvSetup {
         Status after = inspect(appContext);
         if (after.isActive()) {
             return Result.success(
-                    "Glass Launcher is now the default Home app. The Google TV launcher "
+                    "Mirage is now the default Home app. The Google TV launcher "
                             + "packages are disabled, and this should survive normal restarts.",
                     after);
         }

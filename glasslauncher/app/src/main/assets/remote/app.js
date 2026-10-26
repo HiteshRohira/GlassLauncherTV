@@ -225,7 +225,7 @@ $('installLater').addEventListener('click',closeSheets);
 $('shareNow').addEventListener('click',async()=>{
   // The Web Share sheet is Safari's own; if it lacks Add to Home Screen,
   // the toolbar Share button has it.
-  try{await navigator.share({title:'Glass Remote',url:location.href});}
+  try{await navigator.share({title:'Mirage Remote',url:location.href});}
   catch(e){if(e?.name!=='AbortError')feedback('Use the Share button in Safari’s toolbar.');}
 });
 if(!navigator.share)$('shareNow').hidden=true;
