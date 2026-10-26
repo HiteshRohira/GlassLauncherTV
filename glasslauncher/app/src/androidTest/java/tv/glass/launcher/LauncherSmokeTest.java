@@ -32,9 +32,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *     <li>No leaked window state that would prevent finish() from completing.</li>
  * </ul>
  *
- * <p>This test requires an emulator/device. It is a no-op in pure JVM CI but
- * compiles in every build, so a structural change to the activity that
- * breaks construction fails the build.
+ * <p>This test requires an emulator/device and a separate instrumentation
+ * task. Release assembly and host JVM tests do not compile or run it.
  *
  * <h3>Why ActivityScenario, not ActivityTestRule</h3>
  * The previous implementation used {@code ActivityTestRule} (deprecated

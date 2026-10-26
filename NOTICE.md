@@ -77,7 +77,3 @@ Google, also under the Apache License 2.0.
 
 A copy of the Apache License 2.0 is available at
 <https://www.apache.org/licenses/LICENSE-2.0>.
-
-The website in `site/` uses the [Inter](https://rsms.me/inter/) typeface,
-Copyright 2020 The Inter Project Authors, under the SIL Open Font License 1.1
-(see `site/assets/Inter-OFL.txt`).
