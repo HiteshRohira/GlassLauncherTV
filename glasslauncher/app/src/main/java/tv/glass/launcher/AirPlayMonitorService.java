@@ -69,6 +69,10 @@ public final class AirPlayMonitorService extends Service {
     static final String ACTION_SET_ENABLED = "tv.glass.launcher.AIRPLAY_SET_ENABLED";
     /** Restart the receiver now (drops any active session). */
     static final String ACTION_RESTART = "tv.glass.launcher.AIRPLAY_RESTART";
+    /** The phone remote was switched on/off or its pairing was replaced. */
+    static final String ACTION_REMOTE_CHANGED = "tv.glass.launcher.REMOTE_CHANGED";
+    /** Switch detailed AirPlay logging ({@link #EXTRA_ENABLED}). */
+    static final String ACTION_SET_DEBUG = "tv.glass.launcher.AIRPLAY_SET_DEBUG";
     static final String EXTRA_ENABLED = "enabled";
     private static final String ACTION_TICK = "tv.glass.launcher.REMOTE_CHECK";
     private static final String STATUS_FILE = "airplay_status";
@@ -81,6 +85,7 @@ public final class AirPlayMonitorService extends Service {
     private static final long WAKE_GRACE_MS = 20_000L;
     /** Inside TCL's ~200 s freeze window. */
     private static final long KEEPALIVE_MS = 120_000L;
+    private static final long FREEZE_WINDOW_MS = 190_000L;
     /** Re-check cadence while starting or failed. */
     private static final long RETRY_MS = 15_000L;
     /** Status older than this is shown as unknown (amber) by the launcher. */
@@ -94,13 +99,26 @@ public final class AirPlayMonitorService extends Service {
     private BroadcastReceiver screenReceiver;
     private boolean dreaming;
     private String publishedRecord;
+    /** When the status file was last written (elapsedRealtime). */
+    private long writtenAt;
+    /** Status writes run here, in order, never on the main thread. */
+    private final java.util.concurrent.ExecutorService writer = java.util.concurrent.Executors.newSingleThreadExecutor();
+    /** Rewrite an unchanged record this often so readers never see it stale. */
+    private static final long REWRITE_MS = 5 * 60_000L;
     private View banner;
     private GlassRemoteServer phoneRemote;
+    /** When the last keep-alive tick ran, to spot ticks that came too late. */
+    private long lastTickAt;
 
     // ── Entry points used by the launcher ─────────────────────────────────
 
     static void start(Context ctx, String action) {
         send(ctx, new Intent(ctx, AirPlayMonitorService.class).setAction(action));
+    }
+
+    static void setDebug(Context ctx, boolean enabled) {
+        send(ctx, new Intent(ctx, AirPlayMonitorService.class).setAction(ACTION_SET_DEBUG)
+                .putExtra(EXTRA_ENABLED, enabled));
     }
 
     static void setEnabled(Context ctx, boolean enabled) {
@@ -136,8 +154,14 @@ public final class AirPlayMonitorService extends Service {
         final String session;
         /** Name iPhones see, or empty before the first start. */
         final String name;
-        Snapshot(AirPlayStatus.State state, String session, String name) {
+        /** Decoder and counters of the last mirroring session, last error. */
+        final String diagnostics;
+        /** Detailed native logging is on. */
+        final boolean debug;
+        Snapshot(AirPlayStatus.State state, String session, String name) { this(state, session, name, "", false); }
+        Snapshot(AirPlayStatus.State state, String session, String name, String diagnostics, boolean debug) {
             this.state = state; this.session = session; this.name = name;
+            this.diagnostics = diagnostics; this.debug = debug;
         }
         boolean inSession() { return !"idle".equals(session); }
     }
@@ -152,9 +176,12 @@ public final class AirPlayMonitorService extends Service {
             long at = parts.length > 1 ? Long.parseLong(parts[1].trim()) : 0L;
             String session = parts.length > 2 ? parts[2] : "idle";
             String name = parts.length > 3 ? parts[3] : "";
-            AirPlayStatus.State s = Math.abs(System.currentTimeMillis() - at) > STALE_MS
-                    ? AirPlayStatus.State.STARTING : AirPlayStatus.parse(parts[0]);
-            return new Snapshot(s, session, name);
+            String diagnostics = parts.length > 4 ? parts[4] : "";
+            boolean debug = parts.length > 5 && "1".equals(parts[5]);
+            boolean stale = Math.abs(System.currentTimeMillis() - at) > STALE_MS;
+            AirPlayStatus.State s = stale ? AirPlayStatus.State.STARTING : AirPlayStatus.parse(parts[0]);
+            // A stale file must not keep claiming "Mirroring now".
+            return new Snapshot(s, stale ? "idle" : session, name, diagnostics, debug);
         } catch (Exception e) {
             return new Snapshot(AirPlayStatus.State.STARTING, "idle", "");
         }
@@ -169,8 +196,7 @@ public final class AirPlayMonitorService extends Service {
         goForeground();
         registerScreenReceiver();
         AirPlayService.addListener(engineChanged);
-        try { phoneRemote = new GlassRemoteServer(this); phoneRemote.start(); }
-        catch (Exception e) { Log.w(TAG, "Phone remote could not start", e); }
+        syncPhoneRemote();
         if (isInteractive()) status.onInUse(SystemClock.elapsedRealtime(), BOOT_GRACE_MS);
         else status.onNotInUse();
     }
@@ -180,6 +206,13 @@ public final class AirPlayMonitorService extends Service {
         scheduleKeepAlive();
         String action = intent != null ? intent.getAction() : null;
         long now = SystemClock.elapsedRealtime();
+        if (ACTION_TICK.equals(action)) {
+            // TCL freezes us ~200 s after the last service start; a tick later
+            // than that means the receiver may have been unreachable.
+            if (lastTickAt > 0 && isInteractive() && now - lastTickAt > FREEZE_WINDOW_MS)
+                Log.w(TAG, "keep-alive tick late: " + (now - lastTickAt) / 1000 + " s since the last one");
+            lastTickAt = now;
+        }
         if (ACTION_SET_ENABLED.equals(action)) {
             setEnabledInternal(intent.getBooleanExtra(EXTRA_ENABLED, true));
         } else if (ACTION_RESTART.equals(action)) {
@@ -188,6 +221,11 @@ public final class AirPlayMonitorService extends Service {
             status.onInUse(now, WAKE_GRACE_MS);
         } else if (ACTION_BOOT.equals(action)) {
             if (isInteractive()) status.onInUse(now, BOOT_GRACE_MS);
+        } else if (ACTION_SET_DEBUG.equals(action)) {
+            AirPlayService svc = AirPlayService.getInstance();
+            if (svc != null) svc.setDebugLogging(intent.getBooleanExtra(EXTRA_ENABLED, false));
+        } else if (ACTION_REMOTE_CHANGED.equals(action)) {
+            syncPhoneRemote();
         } else if (ACTION_IN_USE.equals(action)) {
             if (!status.inUse()) status.onInUse(now, WAKE_GRACE_MS);
         }
@@ -204,10 +242,28 @@ public final class AirPlayMonitorService extends Service {
             screenReceiver = null;
         }
         hideBanner();
+        writer.shutdown();
         super.onDestroy();
     }
 
     @Override public IBinder onBind(Intent intent) { return null; }
+
+    /** Run the phone remote's web server only while it is switched on. */
+    private void syncPhoneRemote() {
+        boolean want = GlassRemoteAccess.enabled(this);
+        if (!want && phoneRemote != null) { phoneRemote.close(); phoneRemote = null; Log.i(TAG, "Phone remote off"); }
+        if (want && phoneRemote == null) {
+            try {
+                phoneRemote = new GlassRemoteServer(this, () -> handler.post(() ->
+                        Toast.makeText(this, R.string.remote_lockout, Toast.LENGTH_LONG).show()));
+                phoneRemote.start();
+            } catch (Exception e) {
+                Log.w(TAG, "Phone remote could not start", e);
+                if (phoneRemote != null) phoneRemote.close();
+                phoneRemote = null;
+            }
+        }
+    }
 
     private void setEnabledInternal(boolean on) {
         File flag = new File(getFilesDir(), DISABLED_FILE);
@@ -260,10 +316,19 @@ public final class AirPlayMonitorService extends Service {
     }
 
     /** Non-wakeup: a sleeping TV defers the tick, and nothing needs the
-     *  receiver until the screen is back. */
+     *  receiver until the screen is back. Exact where allowed: an inexact
+     *  alarm may be batched past TCL's ~200 s freeze window. */
     private void scheduleKeepAlive() {
         AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
-        if (am != null) am.set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + KEEPALIVE_MS, tick());
+        if (am == null) return;
+        long at = SystemClock.elapsedRealtime() + KEEPALIVE_MS;
+        boolean exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms();
+        try {
+            if (exact) am.setExact(AlarmManager.ELAPSED_REALTIME, at, tick());
+            else am.set(AlarmManager.ELAPSED_REALTIME, at, tick());
+        } catch (SecurityException e) {
+            am.set(AlarmManager.ELAPSED_REALTIME, at, tick());
+        }
     }
 
     private boolean isInteractive() {
@@ -331,22 +396,34 @@ public final class AirPlayMonitorService extends Service {
     private void publish(AirPlayService svc) {
         String session = svc != null ? svc.sessionKind() : "idle";
         String name = svc != null ? svc.advertisedName() : "";
-        String record = status.state().name() + "\n%d\n" + session + "\n" + name.replace('\n', ' ');
-        File dst = new File(getFilesDir(), STATUS_FILE);
-        File tmp = new File(getFilesDir(), STATUS_FILE + ".tmp");
-        try (FileOutputStream out = new FileOutputStream(tmp)) {
-            out.write(String.format(java.util.Locale.ROOT, record, System.currentTimeMillis())
-                    .getBytes(StandardCharsets.UTF_8));
-            out.getFD().sync();
-        } catch (Exception e) {
-            Log.w(TAG, "status write failed", e);
-            return;
-        }
-        if (!tmp.renameTo(dst)) { Log.w(TAG, "status rename failed"); return; }
-        if (record.equals(publishedRecord)) return;
+        String diagnostics = svc != null ? svc.diagnostics() : "";
+        boolean debug = svc != null && svc.debugLogging();
+        String record = status.state().name() + "\n%d\n" + session + "\n" + name.replace('\n', ' ')
+                + "\n" + diagnostics.replace('\n', ' ') + "\n" + (debug ? "1" : "0");
+        // Glass: only the timestamp changed and the file is recent: skip the
+        // write and its fsync (this ran on every check, on the main thread).
+        long now = SystemClock.elapsedRealtime();
+        boolean changed = !record.equals(publishedRecord);
+        if (!changed && writtenAt != 0 && now - writtenAt < REWRITE_MS) return;
+        writtenAt = now;
         publishedRecord = record;
-        Log.i(TAG, "state " + status.state() + " session " + session);
-        sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName()));
+        if (changed) Log.i(TAG, "state " + status.state() + " session " + session);
+        final long wallClock = System.currentTimeMillis();
+        try {
+            writer.execute(() -> {
+                File dst = new File(getFilesDir(), STATUS_FILE);
+                File tmp = new File(getFilesDir(), STATUS_FILE + ".tmp");
+                try (FileOutputStream out = new FileOutputStream(tmp)) {
+                    out.write(String.format(java.util.Locale.ROOT, record, wallClock).getBytes(StandardCharsets.UTF_8));
+                    out.getFD().sync();
+                } catch (Exception e) {
+                    Log.w(TAG, "status write failed", e);
+                    return;
+                }
+                if (!tmp.renameTo(dst)) { Log.w(TAG, "status rename failed"); return; }
+                if (changed) sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName()));
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) { }
     }
 
     // ── Failure banner ────────────────────────────────────────────────────

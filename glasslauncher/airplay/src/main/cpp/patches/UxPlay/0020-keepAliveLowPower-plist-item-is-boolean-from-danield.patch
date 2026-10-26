@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "F. Duncanh" <fduncanh@gmail.com>
+Date: Fri, 16 Oct 2026 02:56:40 -0400
+Subject: [PATCH] keepAliveLowPower plist item is boolean  (from @danieldhaiti
+ )
+
+(cherry picked from commit 4e95a9ec013c52d8555d88dbc55abe346e94d56e)
+---
+ lib/raop_handlers.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
+index b3f3b17..bf72698 100644
+--- a/lib/raop_handlers.h
++++ b/lib/raop_handlers.h
+@@ -148,7 +148,7 @@ raop_handler_info(raop_conn_t *conn,
+     plist_t status_flags_node = plist_new_uint(68);
+     plist_dict_set_item(res_node, "statusFlags", status_flags_node);
+ 
+-    plist_t keep_alive_low_power_node = plist_new_uint(1);
++    plist_t keep_alive_low_power_node = plist_new_bool(1);
+     plist_dict_set_item(res_node, "keepAliveLowPower", keep_alive_low_power_node);
+ 
+     plist_t source_version_node = plist_new_string(GLOBAL_VERSION);

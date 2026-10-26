@@ -15,6 +15,7 @@ typedef struct {
     jobject callback_obj;
     raop_t *raop;
     jmethodID on_video_data;
+    jmethodID obtain_video_buffer;
     jmethodID on_audio_format;
     jmethodID on_video_size;
     jmethodID on_client_volume;
@@ -44,10 +45,14 @@ typedef struct {
     double playback_duration;
     float playback_rate;
     int playback_ready;
+    /* the user/sender paused (playWhenReady false); rate is 0 while buffering too */
+    int playback_paused;
     /* holds the /play response until the player is ready, so self-driven senders (macOS)
        establish their timeline after the real duration is known, not at duration 0 */
     pthread_cond_t play_ready_cond;
     int play_ready;
+    /* set while the server stops, so no httpd wait outlives it */
+    int stopping;
     AudioEngine *audio_engine;
 } android_callback_ctx_t;
 
@@ -55,7 +60,8 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
 void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env);
 void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx);
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
-                                             double duration, float rate, int ready);
+                                             double duration, float rate, int ready, int paused);
+void android_callbacks_set_stopping(android_callback_ctx_t *ctx, int stopping);
 
 #ifdef __cplusplus
 }

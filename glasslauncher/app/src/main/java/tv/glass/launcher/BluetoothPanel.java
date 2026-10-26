@@ -126,6 +126,8 @@ final class BluetoothPanel {
 
     private final List<Row> rows = new ArrayList<>();
     private int selected = -1;
+    /** Selection last spoken to a screen reader (the panel moves its own highlight, not focus). */
+    private int announcedSelection = -1;
     private boolean scanMode;
     private boolean discovering;
     private BluetoothDevice pairing;
@@ -162,7 +164,9 @@ final class BluetoothPanel {
         pairing = null;
         failedPairs.clear();
         found.clear();
-        clearPendingAudio();
+        // Glass: a connect/disconnect started before the sheet was closed is
+        // still running; keep showing it until it lands or times out.
+        prunePendingAudio();
         detail = null;
         btSettingsScreen = host.hasBtSettingsScreen();
         deviceSettingsScreen = host.hasDeviceSettingsScreen();
@@ -194,7 +198,6 @@ final class BluetoothPanel {
         final LinearLayout c = card;
         if (ov == null || ov.getVisibility() != View.VISIBLE) return;
         stopDiscovery();
-        clearPendingAudio();
         unregister();
         if (c != null && !host.returnsToControlCenter()) {
             c.animate().cancel();
@@ -299,7 +302,7 @@ final class BluetoothPanel {
         title = new TextView(activity);
         title.setTypeface(NativeTheme.light());
         title.setTextColor(0xFFF8F7FA);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(30));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_PX, NativeTheme.textPx(activity, 30));
         title.setIncludeFontPadding(false);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
@@ -308,7 +311,7 @@ final class BluetoothPanel {
         subtitle = new TextView(activity);
         subtitle.setTypeface(NativeTheme.regular());
         subtitle.setTextColor(0xFFD4CEDA);
-        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(14));
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_PX, NativeTheme.textPx(activity, 14));
         subtitle.setIncludeFontPadding(false);
         LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -546,7 +549,7 @@ final class BluetoothPanel {
         TextView t = new TextView(activity);
         t.setText(r.text);
         t.setTextColor(0x99FFFFFF);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(12));
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, NativeTheme.textPx(activity, 12));
         t.setTypeface(NativeTheme.medium());
         t.setAllCaps(true);
         t.setLetterSpacing(0.1f);
@@ -576,7 +579,7 @@ final class BluetoothPanel {
         words.setOrientation(LinearLayout.VERTICAL);
         TextView label = new TextView(activity);
         label.setText(r.text);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(info ? 13 : 16));
+        label.setTextSize(TypedValue.COMPLEX_UNIT_PX, NativeTheme.textPx(activity, info ? 13 : 16));
         label.setTypeface(NativeTheme.regular());
         label.setIncludeFontPadding(false);
         label.setSingleLine(!info);
@@ -586,7 +589,7 @@ final class BluetoothPanel {
         if (r.status != null) {
             TextView st = new TextView(activity);
             st.setText(r.status);
-            st.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(12));
+            st.setTextSize(TypedValue.COMPLEX_UNIT_PX, NativeTheme.textPx(activity, 12));
             st.setTypeface(NativeTheme.regular());
             st.setIncludeFontPadding(false);
             st.setSingleLine(true);
@@ -604,6 +607,11 @@ final class BluetoothPanel {
             row.addView(chevron, new LinearLayout.LayoutParams(px(16), px(16)));
         }
 
+        // Glass: a screen reader hears the device, its state and what selecting does.
+        if (r.selectable()) {
+            row.setContentDescription(r.text + (r.status != null ? ", " + r.status : "")
+                    + (r.device != null ? ", double-tap to " + (r.type == ROW_ACTION ? "open" : "connect or disconnect") : ""));
+        }
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         rlp.bottomMargin = px(8);
@@ -620,6 +628,11 @@ final class BluetoothPanel {
             if (!(v instanceof LinearLayout)) continue;
             LinearLayout row = (LinearLayout) v;
             boolean sel = i == selected;
+            if (sel && i != announcedSelection) {
+                announcedSelection = i;
+                CharSequence d = row.getContentDescription();
+                if (d != null) NativeTheme.announce(row, d);
+            }
             if (r.type != ROW_INFO) row.setBackground(NativeTheme.row(activity, sel, 18));
             int text = sel ? 0xFF222029 : (r.type == ROW_INFO ? 0xB3FFFFFF : 0xFFF8F7FA);
             paintRow(row, r, sel, text);
@@ -776,6 +789,20 @@ final class BluetoothPanel {
         pendingAudio.remove(addr);
         Runnable t = audioTimeouts.remove(addr);
         if (t != null) handler.removeCallbacks(t);
+    }
+
+    /** Drop pending entries whose device already reached its target while
+     *  the sheet was closed (profile events are not received then). */
+    private void prunePendingAudio() {
+        BluetoothAdapter a = adapter();
+        if (a == null) { clearPendingAudio(); return; }
+        for (String addr : new java.util.ArrayList<>(pendingAudio.keySet())) {
+            try {
+                BluetoothDevice d = a.getRemoteDevice(addr);
+                Integer target = pendingAudio.get(addr);
+                if (target != null && profileState(controlProfile(d), d) == target) clearPendingAudio(addr);
+            } catch (RuntimeException e) { clearPendingAudio(addr); }
+        }
     }
 
     private void clearPendingAudio() {

@@ -8,20 +8,44 @@ import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.RadialGradient;
 import android.graphics.Shader;
+import android.animation.ArgbEvaluator;
+import android.animation.ValueAnimator;
 import android.view.View;
+import java.util.WeakHashMap;
 
-/** Broad app-coloured light. Shaders change only on resize or app selection. */
+/** Broad app-coloured light. Shaders change only on resize or app selection;
+ *  a new colour cross-fades over ~220 ms, and each banner's colour is
+ *  sampled once (cached by bitmap identity) instead of on every focus. */
 final class AmbientBackgroundView extends View {
     private final Paint light = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint reflection = new Paint(Paint.ANTI_ALIAS_FLAG);
     private int tint = Color.rgb(113, 43, 21);
     private final float[] hsv = new float[3];
+    /** Colour picked for each banner bitmap; weak keys drop with the bitmap. */
+    private final WeakHashMap<Bitmap, Integer> sampled = new WeakHashMap<>();
+    private int target = tint;
+    private ValueAnimator fade;
+    private static final ArgbEvaluator ARGB = new ArgbEvaluator();
     AmbientBackgroundView(Context c) {
         super(c);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
     }
     void select(Bitmap banner) {
         if (banner == null || banner.isRecycled()) return;
+        Integer cached = sampled.get(banner);
+        int color = cached != null ? cached : sample(banner);
+        if (cached == null) { if (sampled.size() > 64) sampled.clear(); sampled.put(banner, color); }
+        if (color == target) return;
+        target = color;
+        if (fade != null) fade.cancel();
+        if (getWidth() == 0 || !isShown()) { tint = color; rebuild(); invalidate(); return; }
+        final int from = tint;
+        fade = ValueAnimator.ofFloat(0f, 1f).setDuration(220);
+        fade.addUpdateListener(a -> { tint = (Integer) ARGB.evaluate(a.getAnimatedFraction(), from, color); rebuild(); invalidate(); });
+        fade.start();
+    }
+    @Override protected void onDetachedFromWindow() { if (fade != null) fade.cancel(); super.onDetachedFromWindow(); }
+    private int sample(Bitmap banner) {
         float[] weights = new float[12];
         long[] red = new long[12], green = new long[12], blue = new long[12];
         int[] count = new int[12];
@@ -47,7 +71,7 @@ final class AmbientBackgroundView extends View {
             hsv[1] *= .83f; hsv[2] = .44f;
             color = Color.HSVToColor(hsv);
         }
-        if (color != tint) { tint = color; rebuild(); invalidate(); }
+        return color;
     }
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
     private void rebuild() {

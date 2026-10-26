@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Glass TV <noreply@glass.tv>
+Date: Sat, 24 Oct 2026 20:31:15 +0530
+Subject: [PATCH] glass: reap idle connections before select; TCP keepalive
+
+---
+ lib/httpd.c | 40 ++++++++++++++++++++++++++++++++--------
+ 1 file changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/lib/httpd.c b/lib/httpd.c
+index bf6b0db..6dcfc7a 100644
+--- a/lib/httpd.c
++++ b/lib/httpd.c
+@@ -28,6 +28,9 @@
+ #include "compat.h"
+ #include "logger.h"
+ #include "utils.h"
++#ifndef _WIN32
++#include <netinet/tcp.h>
++#endif
+ 
+ static const char *typename[] = {
+     [CONNECTION_TYPE_UNKNOWN] = "Unknown",
+@@ -311,6 +314,18 @@ httpd_accept_connection(httpd_t *httpd, int server_fd, int is_ipv6)
+         return -1;
+     }
+ 
++#if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
++    /* Glass: notice peers that vanished without closing (sleeping or roaming
++     * iPhones) after about 90 s, even on quiet connections. */
++    {
++        int on = 1, idle = 60, intvl = 10, cnt = 3;
++        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
++        setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
++        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
++        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
++    }
++#endif
++
+     local_saddrlen = sizeof(local_saddr);
+     ret = getsockname(fd, (struct sockaddr *)&local_saddr, &local_saddrlen);
+     if (ret == -1) {
+@@ -374,7 +389,10 @@ httpd_thread(void *arg)
+     char http[] = "HTTP/1.1";
+     char event[] = "EVENT/1.0";
+     char buffer[1024];
+-    int timeout_limit = 60; //drop connection after 60 secs of silence
++#ifndef HTTPD_IDLE_TIMEOUT
++#define HTTPD_IDLE_TIMEOUT 60
++#endif
++    int timeout_limit = HTTPD_IDLE_TIMEOUT; //drop connection after 60 secs of silence
+ 
+     bool logger_debug = (logger_get_level(httpd->logger) >= LOGGER_DEBUG);
+     assert(httpd);
+@@ -421,6 +439,19 @@ httpd_thread(void *arg)
+                 httpd_remove_connection(httpd, &httpd->connections[i], 0);
+                 continue;
+             }
++            /* Glass: reap silent connections here, before select(); a dead
++             * peer never becomes readable, so a check after FD_ISSET (as in
++             * upstream e60d981) never fires. The reverse (PTTH) channel is
++             * legitimately quiet during HLS playback; TCP keepalive (set on
++             * accept) detects its dead peers instead. */
++            if (httpd->connections[i].type != CONNECTION_TYPE_PTTH &&
++                time(NULL) - httpd->connections[i].last_active > timeout_limit) {
++                logger_log(httpd->logger, LOGGER_WARNING,
++                           "httpd closing dead connection on socket %d after timeout_limit = %d seconds of inactivity",
++                            httpd->connections[i].socket_fd, timeout_limit);
++                httpd_remove_connection(httpd, &httpd->connections[i], 0);
++                continue;
++            }
+             socket_fd = httpd->connections[i].socket_fd;
+             FD_SET(socket_fd, &rfds);
+             if (nfds <= socket_fd) {
+@@ -449,7 +480,6 @@ httpd_thread(void *arg)
+                 continue;
+             }
+         }
+-        time_t now = time(NULL);
+         if (httpd->open_connections < httpd->max_connections &&
+             httpd->server_fd6 != -1 && FD_ISSET(httpd->server_fd6, &rfds)) {
+             int ret = httpd_accept_connection(httpd, httpd->server_fd6, 1);
+@@ -470,12 +500,6 @@ httpd_thread(void *arg)
+             if (!FD_ISSET(connection->socket_fd, &rfds)) {
+                 continue;
+             }
+-            if (now - connection->last_active > timeout_limit) {
+-                logger_log(httpd->logger, LOGGER_WARNING,
+-                           "httpd closing dead connection on socket %d after timeout_limit = %d seconds of inactivity",
+-                            connection->socket_fd, timeout_limit);
+-                httpd_remove_connection(httpd, connection, 0);
+-            }
+             /* If not in the middle of request, allocate one */
+             if (!connection->request) {
+                 connection->request = http_request_init();

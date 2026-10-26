@@ -14,7 +14,7 @@ Mirage replaces the stock Google TV home with a calm, glass-styled launcher: a c
 | --- |
 | ![Home](docs/screenshots/home.png) |
 
-Branch state: `main` carries the integrated source (`1.1.6-airplay.7` plus cleanup); `fix/review-backlog` carries a newer build (`1.1.7-airplay.8`) that has not landed on `main` yet and is the version running on the reference TV; `fix/side-panel-focus` contains an additional focus fix awaiting testing.
+`main` contains `1.1.7-airplay.8` (version code 23), the build currently installed on the reference TV, including the review-backlog fixes. `fix/side-panel-focus` contains an additional focus fix awaiting testing; it is not included in this version.
 
 ## Features
 
@@ -52,7 +52,7 @@ gradle --no-daemon :app:assembleRelease :app:testReleaseUnitTest :app:lintReleas
 ```
 
 The first build compiles OpenSSL and FFmpeg for `armeabi-v7a` and `arm64-v8a`.
-On `fix/review-backlog`, add `-PtvAbiOnly` for ARMv7 only; omit that property
+Add `-PtvAbiOnly` for ARMv7 only; omit that property
 for both ABIs. Use separate, fresh native build state when comparing variants.
 For an existing clone, initialize dependencies with
 `git submodule update --init --recursive`.

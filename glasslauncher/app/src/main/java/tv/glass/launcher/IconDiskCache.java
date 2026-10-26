@@ -146,8 +146,11 @@ final class IconDiskCache {
      *                   to a long-lived runnable, but either works
      *                   functionally.
      */
-    IconDiskCache(Context appContext) {
-        this.dir = new File(appContext.getFilesDir(), DIR_NAME);
+    IconDiskCache(Context appContext) { this(appContext, DIR_NAME); }
+
+    /** Glass: a separate directory, e.g. for rendered banner tiles. */
+    IconDiskCache(Context appContext, String dirName) {
+        this.dir = new File(appContext.getFilesDir(), dirName);
         // Best-effort mkdir. On the rare ROM where the call fails the
         // cache becomes inert (every read misses, every write skips on
         // the parent-directory absence) — same observable behaviour as

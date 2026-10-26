@@ -122,8 +122,6 @@ public class LauncherActivity extends Activity {
     private static final String KEY_SYSTEM_WALLPAPER = "system_wallpaper";
     private static final String KEY_SCROLL_IDX = "scroll_idx";
     private static final String KEY_APP_ORDER  = "app_order";
-    /** Set once {@link #applyStoredOrder} has applied R.array.initial_app_order. */
-    private static final String KEY_INITIAL_ORDER_APPLIED = "initial_order_applied_v1";
     /** v1.5.0: number of leading apps (in the visible / non-hidden order)
      *  that form the bottom "home favourites" row and, equivalently, the
      *  centred first row of the pull-down app drawer. Range [0, COLS]. Absent on
@@ -390,8 +388,9 @@ public class LauncherActivity extends Activity {
                 public AirPlayMonitorService.Snapshot air() {return AirPlayMonitorService.read(LauncherActivity.this);}
                 public boolean airLegacyInstalled() {return AirPlayMonitorService.legacyReceiverInstalled(LauncherActivity.this);}
                 public String bluetoothSummary() {return bluetoothTileSummary();}
-                public String remoteSummary() {return "Use your iPhone";}
+                public String remoteSummary() {return GlassRemoteAccess.enabled(LauncherActivity.this)?"Use your iPhone":"Off";}
                 public void setAirEnabled(boolean on) {AirPlayMonitorService.setEnabled(LauncherActivity.this,on);uiHandler.postDelayed(LauncherActivity.this::refreshAirState,400);}
+                public void setAirDebug(boolean on) {AirPlayMonitorService.setDebug(LauncherActivity.this,on);uiHandler.postDelayed(LauncherActivity.this::refreshAirState,400);}
                 public void restartAir() {AirPlayMonitorService.start(LauncherActivity.this,AirPlayMonitorService.ACTION_RESTART);showToast("Restarting AirPlay…");}
                 public void showAirPlayer() {controlCenter.hide();openAirPlayPlayer();}
                 public void network() {openNetSettings();}
@@ -649,6 +648,8 @@ public class LauncherActivity extends Activity {
      *  shelf renders icons in the very first frame. See {@link
      *  IconDiskCache} javadoc for the full pipeline. */
     private volatile IconDiskCache            iconDiskCache;
+    /** Glass: rendered banner tiles, so a cold start does not re-render every banner. */
+    private volatile IconDiskCache            bannerDiskCache;
     /** Durable source images selected by the user. Unlike IconDiskCache,
      *  these are user data rather than a disposable rendering cache. */
     private volatile CustomIconStore customIconStore;
@@ -688,6 +689,11 @@ public class LauncherActivity extends Activity {
     private final ArrayList<AppInfo> visibleScratch = new ArrayList<>();
 
     private boolean pkgChangedWhilePaused = false;
+    /** Glass: bumped on every package event; a scan that started before the
+     *  latest event runs again when it finishes, so an install/remove that
+     *  lands mid-scan is never lost (loadApps returns early while one runs). */
+    private final java.util.concurrent.atomic.AtomicInteger pkgRequestedGen = new java.util.concurrent.atomic.AtomicInteger();
+    private int pkgScanGen;
     /** Packages flagged by {@link #packageReceiver} as REPLACED / CHANGED
      *  whose icons must be re-decoded on the next reconcile. Cleared after
      *  the reconcile consumes it. UI-thread only — no synchronisation. */
@@ -712,6 +718,8 @@ public class LauncherActivity extends Activity {
      *
      *  <p>UI-thread only — no synchronisation needed. */
     private boolean uiPaused = false;
+    private static long lastMonitorStartAt;
+    private static final long MONITOR_START_THROTTLE_MS = 60_000L;
     /** v1.5.x: set in {@link #onPause} when the drawer was open at pause time,
      *  consumed in {@link #onResume}. We DEFER the drawer teardown (restore
      *  shelf + rebuild home row) to resume so that launching an app from the
@@ -1433,12 +1441,15 @@ public class LauncherActivity extends Activity {
                         // disk read of the stale bytes.
                         IconDiskCache dc = iconDiskCache;
                         if (dc != null) dc.delete(pkg);
+                        IconDiskCache bdc = bannerDiskCache;
+                        if (bdc != null) bdc.delete(pkg);
                         // A custom icon is user data, not a disposable cache.
                         // Keep it through the REMOVED/ADDED pair emitted by an
                         // app upgrade, but remove it after a real uninstall so
                         // orphan images do not accumulate indefinitely.
                         if (Intent.ACTION_PACKAGE_REMOVED.equals(action)
                                 && !intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) {
+                            forgetUninstalledApp(pkg);
                             CustomIconStore store = customIconStore;
                             if (store != null) store.delete(pkg);
                             if (customNames.remove(pkg) != null) saveCustomNames();
@@ -1447,6 +1458,7 @@ public class LauncherActivity extends Activity {
                 }
             }
             pkgChangedWhilePaused = true;
+            pkgRequestedGen.incrementAndGet();
             // Invalidate cached picker chip strip — its identities can no
             // longer be trusted to match the in-memory appList after a
             // package install / remove / replace. Same applies to the
@@ -1481,16 +1493,8 @@ public class LauncherActivity extends Activity {
     };
 
     private void applyStoredOrder(List<AppInfo> apps) {
+        // Only the user's own arrangement: no bundled favourites list.
         String raw = prefs.getString(KEY_APP_ORDER, null);
-        // One-time migration to this TV's previous Google TV app order: the
-        // bundled list goes first, any existing saved order follows (parse
-        // keeps the first occurrence). Later reorders are never overridden.
-        if (!prefs.getBoolean(KEY_INITIAL_ORDER_APPLIED, false)) {
-            String init = String.join(",", getResources().getStringArray(R.array.initial_app_order));
-            raw = (raw == null || raw.isEmpty()) ? init : init + "," + raw;
-            prefs.edit().putString(KEY_APP_ORDER, raw)
-                    .putBoolean(KEY_INITIAL_ORDER_APPLIED, true).apply();
-        }
         Map<String, Integer> rank = AppOrder.parse(raw);
         if (rank.isEmpty()) return;
         Collections.sort(apps, (a, b) -> {
@@ -1511,21 +1515,23 @@ public class LauncherActivity extends Activity {
         if (appList.isEmpty()) return;
         ArrayList<String> pkgs = new ArrayList<>(appList.size());
         for (int i = 0; i < appList.size(); i++) pkgs.add(appList.get(i).packageName);
+        // Glass: keep the place of apps that are missing right now (an app
+        // being updated is briefly uninstalled); see AppOrder.merge.
         prefs.edit()
-                .putString(KEY_APP_ORDER, AppOrder.serialize(pkgs)).apply();
+                .putString(KEY_APP_ORDER, AppOrder.serialize(
+                        AppOrder.merge(prefs.getString(KEY_APP_ORDER, ""), pkgs))).apply();
         // Mirror the order into the AppListCache so the next cold start
         // renders the shelf in the user's just-saved arrangement instead
         // of the previous order. Without this nudge, the next cold start
         // would render in the OLD cached order for ~200 ms before the
         // PM-scan reconcile detects the order change and re-renders —
         // visible as a transient flicker after every reorder + reboot.
-        // Best-effort write on a background thread: appExecutor uses a
-        // DiscardPolicy, so a saturated (or shut-down) executor silently
-        // drops the task rather than throwing — the cache then converges
-        // on the next loadApps reconcile that detects the new order.
+        // Best-effort write on a background thread: if the executor is full or
+        // shut down the cache converges on the next loadApps reconcile.
         final ArrayList<AppInfo> snapshot = new ArrayList<>(appList);
         final Context appCtx = getApplicationContext();
-        appExecutor.execute(() -> AppListCache.writeFileFromAppInfo(appCtx, snapshot));
+        try { appExecutor.execute(() -> AppListCache.writeFileFromAppInfo(appCtx, snapshot)); }
+        catch (java.util.concurrent.RejectedExecutionException ignored) { }
     }
 
     /** Persist the home/drawer boundary. Cheap and synchronous — written only
@@ -2203,29 +2209,19 @@ public class LauncherActivity extends Activity {
         density = dm.density; screenW = dm.widthPixels; screenH = dm.heightPixels;
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         NativeTheme.init(this);
-        // Apply the approved appearance/favourites once; preserve previous values
-        // privately for rollback and retain every app, shortcut and saved wallpaper.
+        // Apply the approved appearance once; preserve previous values privately
+        // for rollback. The app order and home-row size are the user's alone.
         if (!prefs.getBoolean("feather_theme_v1", false)) {
             prefs.edit().putBoolean("feather_theme_v1", true)
                     .putInt("pre_feather_layout_columns",prefs.getInt(KEY_LAYOUT_COLUMNS,6))
                     .putInt("pre_feather_card_corner",prefs.getInt(KEY_CARD_CORNER_PERCENT,20))
                     .putBoolean("pre_feather_focus_border",prefs.getBoolean(KEY_FOCUS_BORDER_ENABLED,false))
-                    .putString("pre_feather_app_order",prefs.getString(KEY_APP_ORDER,""))
                     .putInt("pre_feather_home_count",prefs.getInt(KEY_HOME_COUNT,-1))
                     .putBoolean("pre_feather_system_wallpaper",prefs.getBoolean(KEY_SYSTEM_WALLPAPER,false))
-                    .putString(KEY_APP_ORDER,"com.edde746.plezy,com.apple.atve.androidtv.appletv,com.google.android.youtube.tv,com.amazon.amazonvideo.livingroom,com.jio.media.jiotvplus,"+prefs.getString(KEY_APP_ORDER,""))
-                    .putInt(KEY_HOME_COUNT,5)
-                    .putBoolean(KEY_INITIAL_ORDER_APPLIED,true)
                     .putBoolean(KEY_SYSTEM_WALLPAPER,false)
                     .putBoolean(KEY_AMBIENT_BACKGROUND,true)
                     .putInt(KEY_LAYOUT_COLUMNS, 5).putInt(KEY_CARD_CORNER_PERCENT, 14)
                     .putBoolean(KEY_FOCUS_BORDER_ENABLED, false).apply();
-        }
-        // Separate gate also repairs the first preview's stale-cache order.
-        if(!prefs.getBoolean("feather_favorites_v1",false)) {
-            prefs.edit().putBoolean("feather_favorites_v1",true)
-                    .putString(KEY_APP_ORDER,"com.edde746.plezy,com.apple.atve.androidtv.appletv,com.google.android.youtube.tv,com.amazon.amazonvideo.livingroom,com.jio.media.jiotvplus,"+prefs.getString(KEY_APP_ORDER,""))
-                    .putInt(KEY_HOME_COUNT,5).apply();
         }
         ambientBackgroundEnabled=prefs.getBoolean(KEY_AMBIENT_BACKGROUND,true);
         loadLayoutOptions();
@@ -2343,7 +2339,14 @@ public class LauncherActivity extends Activity {
         refreshBtState();            // pick up any change while we were away
         registerAirReceiver();       // live AirPlay state for the airBtn dot
         refreshAirState();
-        AirPlayMonitorService.start(this, AirPlayMonitorService.ACTION_IN_USE);
+        // Glass: at most once a minute. Each start is a binder call plus a
+        // health check in the receiver process; the keep-alive alarm renews
+        // TCL's freeze window anyway.
+        long nowUp = android.os.SystemClock.elapsedRealtime();
+        if (nowUp - lastMonitorStartAt > MONITOR_START_THROTTLE_MS || lastMonitorStartAt == 0) {
+            lastMonitorStartAt = nowUp;
+            AirPlayMonitorService.start(this, AirPlayMonitorService.ACTION_IN_USE);
+        }
         // Wallpaper slideshow: resume the foreground rotation timer, and (once
         // per process) roll to a new image in "each restart" mode. Both are
         // no-ops when slideshow is off / no folder is set. Done after the
@@ -2548,17 +2551,20 @@ public class LauncherActivity extends Activity {
         if (iconExecutor   != null) try { iconExecutor.shutdown(); } catch (Throwable ignored) { /* best-effort */ }
         if (appExecutor    != null) try { appExecutor .shutdown(); } catch (Throwable ignored) { /* best-effort */ }
         if (iconDiskCache  != null) iconDiskCache.beginShutdown();
+        if (bannerDiskCache != null) bannerDiskCache.beginShutdown();
         if (wallpaperCtl   != null) wallpaperCtl .beginShutdown();
         long deadlineNs = System.nanoTime()
                 + TimeUnit.MILLISECONDS.toNanos(300);
         awaitOrSkip(iconExecutor,  deadlineNs);
         awaitOrSkip(appExecutor,   deadlineNs);
         if (iconDiskCache != null) iconDiskCache.awaitShutdown(remainingMs(deadlineNs));
+        if (bannerDiskCache != null) bannerDiskCache.awaitShutdown(remainingMs(deadlineNs));
         if (wallpaperCtl  != null) wallpaperCtl .awaitShutdown(remainingMs(deadlineNs));
         // Phase 3 — force-stop survivors and release wallpaper bitmaps.
         if (iconExecutor != null) try { iconExecutor.shutdownNow(); } catch (Throwable ignored) { /* best-effort */ }
         if (appExecutor  != null) try { appExecutor .shutdownNow(); } catch (Throwable ignored) { /* best-effort */ }
         if (iconDiskCache != null) iconDiskCache = null;
+        bannerDiskCache = null;
         customIconStore = null;
         pendingCustomIconPackage = null;
         pendingCustomIconLabel = null;
@@ -2660,14 +2666,16 @@ public class LauncherActivity extends Activity {
             // stale AppInfo whose backing identity the user just trimmed.
             // The next loadApps() (1 s post) repopulates both atomically.
             appByPackage.clear();
-            // Reuse the cached {@link #pkgReloadRunnable} instead of a
-            // fresh {@code this::loadApps} method-reference. Same effect
-            // (clears the changed-while-paused flag and runs loadApps),
-            // saves one Runnable allocation, and lets a future
-            // {@code uiHandler.removeCallbacks(pkgReloadRunnable)} call
-            // cancel this delayed reload alongside any pending receiver
-            // post.
-            uiHandler.postDelayed(pkgReloadRunnable, 1000);
+            // Glass: drawer cells kept their bitmaps outside the caches.
+            AppDrawer dr = drawer;
+            if (dr != null && dr.getVisibility() != View.VISIBLE) {
+                dr.setApps(Collections.emptyList(), 0);
+                for (int i = 0; i < dr.pool.size(); i++) dr.pool.get(i).iconBitmap = null;
+            }
+            // Glass: refilling right away while in the background undoes the
+            // trim; reload on resume instead (or now, if Home is showing).
+            if (uiPaused) pkgChangedWhilePaused = true;
+            else uiHandler.postDelayed(pkgReloadRunnable, 1000);
         }
         // MODERATE / BACKGROUND: trim the in-memory bitmap cache only.
         // The {@code iconInflight} map is intentionally left untouched —
@@ -2683,6 +2691,14 @@ public class LauncherActivity extends Activity {
             if (bannerCache != null) bannerCache.trimToSize(bannerCache.maxSize() / 2); }
         else if (level >= TRIM_MEMORY_BACKGROUND) { iconCache.trimToSize(iconCache.maxSize() * 3 / 4);
             if (bannerCache != null) bannerCache.trimToSize(bannerCache.maxSize() * 3 / 4); }
+        // Glass: the system is short of memory while Home is in use (a big
+        // streaming app or the AirPlay receiver is running too). Visible cells
+        // hold their own bitmaps, so trimming the caches keeps what is on
+        // screen and gives back only off-screen art.
+        else if (level >= TRIM_MEMORY_RUNNING_CRITICAL) { iconCache.trimToSize(iconCache.maxSize() / 4);
+            if (bannerCache != null) bannerCache.trimToSize(bannerCache.maxSize() / 4); }
+        else if (level >= TRIM_MEMORY_RUNNING_LOW) { iconCache.trimToSize(iconCache.maxSize() / 2);
+            if (bannerCache != null) bannerCache.trimToSize(bannerCache.maxSize() / 2); }
     }
 
     @Override public void onWindowFocusChanged(boolean h) { super.onWindowFocusChanged(h); if (h) hideSystemUI(); }
@@ -2880,6 +2896,7 @@ public class LauncherActivity extends Activity {
         ambientBackground.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         // A chosen wallpaper stays available through Glass's existing picker.
         ambientBackground.setVisibility(ambientBackgroundEnabled ? View.VISIBLE : View.GONE);
+        applyAmbientWindow();
         root.addView(ambientBackground, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         drawerBlurLayer = new ImageView(this);
@@ -3794,7 +3811,9 @@ public class LauncherActivity extends Activity {
             android.graphics.drawable.Drawable glyph = getDrawable(R.drawable.ic_airplay);
             iv.setImageDrawable(dot == 0 ? glyph : new StatusDotDrawable(glyph, dot));
         }
-        String key = s.name() + snap.session + snap.name;
+        // Glass: include diagnostics and the logging switch, or the AirPlay
+        // page never redraws when only those change.
+        String key = s.name() + snap.session + snap.name + "|" + snap.diagnostics + "|" + snap.debug;
         if (!key.equals(airRecord)) {
             airRecord = key;
             airState = s;
@@ -4861,10 +4880,12 @@ public class LauncherActivity extends Activity {
             // (the activity may rebuild appList during a package broadcast
             // without re-calling setApps; we want stable rendering until
             // applyShelfApps is invoked again).
+            final String keepPkg = keepIdx >= 0 && keepIdx < displayed.size() ? displayed.get(keepIdx).packageName : null;
+            final int oldSize = displayed.size();
             displayed.clear();
             if (apps != null && !apps.isEmpty()) displayed.addAll(apps);
             if (displayed.isEmpty()) { focusedIndex = 0; scrollX = 0; }
-            else                     focusedIndex = Math.min(keepIdx, displayed.size() - 1);
+            else                     focusedIndex = AppOrder.keepIndexFor(displayed, keepPkg, keepIdx, oldSize);
             totalW = displayed.size() * stride; centerX = 0; needsRefill = true;
             requestLayout();
             for (AppInfo app : displayed) preWarmBanner(app);
@@ -6068,10 +6089,12 @@ public class LauncherActivity extends Activity {
             // apps — nothing will ever reach the posted branch to clear it,
             // so there is no gap left to protect and leaving it true would
             // wedge every future DrawerCell focus/label update).
+            final String keepPkg = keepIdx >= 0 && keepIdx < displayed.size() ? displayed.get(keepIdx).packageName : null;
+            final int oldSize = displayed.size();
             displayed.clear();
             if (apps != null && !apps.isEmpty()) displayed.addAll(apps);
             if (displayed.isEmpty()) { focusedIndex = 0; scrollY = 0; }
-            else focusedIndex = Math.min(keepIdx, displayed.size() - 1);
+            else focusedIndex = AppOrder.keepIndexFor(displayed, keepPkg, keepIdx, oldSize);
             recomputeContentHeight();
             requestLayout();
             // No eager pre-warm of the whole list: banner tiles are heavier
@@ -7040,6 +7063,7 @@ public class LauncherActivity extends Activity {
 
     private void loadApps() {
         if (!appsLoading.compareAndSet(false, true)) return;
+        pkgScanGen = pkgRequestedGen.get();
         // A5 fix: bail before any work if the activity was already torn
         // down. A package broadcast can post pkgReloadRunnable to the
         // shelf's looper just before {@link #onDestroy} nulls the shelf,
@@ -7114,7 +7138,7 @@ public class LauncherActivity extends Activity {
                 final List<AppInfo> freshFinal = fresh;
                 runOnUiThread(() -> {
                     // Wrap the whole UI body in try/finally so a faulting
-                    // helper (pruneHiddenApps prefs write, applyShelfApps,
+                    // helper (applyShelfApps,
                     // requestFocusOnIndex) cannot strand the appsLoading
                     // flag at `true`. Belt-and-braces companion to the
                     // background-side guard above: if either path fails,
@@ -7131,7 +7155,7 @@ public class LauncherActivity extends Activity {
                         applyCustomNames(freshFinal);
                         // Build the "fresh package set" exactly ONCE per
                         // reconcile and share it across the icon-cache
-                        // invalidation, pruneHiddenApps, and pruneKeyMap
+                        // invalidation
                         // paths below. The earlier draft built a separate
                         // ArraySet inside each helper from the same
                         // freshFinal data — three N-element passes plus
@@ -7154,7 +7178,11 @@ public class LauncherActivity extends Activity {
                         // sees the new appList — keeps the saved set in sync
                         // with the actually-installed packages without a
                         // separate scheduling step.
-                        pruneHiddenApps(freshPkgs);
+                        // Glass: hidden apps and key bindings are no longer
+                        // pruned when a scan misses a package: an app being
+                        // updated is briefly absent and came back unhidden and
+                        // unbound. They are forgotten on a real uninstall
+                        // (package receiver) instead.
                         // Mirror prune for the remote-key shortcut
                         // map so an uninstalled-app binding is dropped
                         // automatically (the keymap settings slot row
@@ -7163,7 +7191,7 @@ public class LauncherActivity extends Activity {
                         // still handles the rare race where this
                         // reconcile hasn't run yet by the time the user
                         // presses the dead-binding key.
-                        pruneKeyMap(freshPkgs);
+
                         boolean changed = freshFinal.size() != appList.size();
                         if (!changed) {
                             for (int i = 0; i < freshFinal.size(); i++) {
@@ -7369,6 +7397,8 @@ public class LauncherActivity extends Activity {
                         }
                     } finally {
                         appsLoading.set(false);
+                        try { logHomeRowOnce(); } catch (RuntimeException ignored) { }
+                        rescanIfPackagesChanged();
                     }
                 });
             });
@@ -7393,6 +7423,40 @@ public class LauncherActivity extends Activity {
             // deferred reloads share one cancellable Runnable.
             uiHandler.postDelayed(pkgReloadRunnable, 400);
         }
+    }
+
+    private static boolean homeRowLogged;
+
+    /** Glass: once per process, after the first real scan, log what the home
+     *  row shows and why ordered apps are absent (not installed, hidden), to
+     *  diagnose favourites that silently changed. Package names only. */
+    private void logHomeRowOnce() {
+        if (homeRowLogged || appList.isEmpty() || appList.get(0).ri == null) return;
+        homeRowLogged = true;
+        List<AppInfo> visible = buildVisibleList();
+        int hc = effectiveHomeCount(visible.size());
+        StringBuilder row = new StringBuilder();
+        for (int i = 0; i < hc && i < visible.size(); i++) row.append(i == 0 ? "" : ", ").append(visible.get(i).packageName);
+        StringBuilder missing = new StringBuilder();
+        String order = prefs.getString(KEY_APP_ORDER, "");
+        if (order != null) for (String pkg : order.split(",")) {
+            if (pkg.isEmpty() || appByPackage.containsKey(pkg)) continue;
+            missing.append(missing.length() == 0 ? "" : ", ").append(pkg);
+        }
+        StringBuilder hidden = new StringBuilder();
+        for (String pkg : hiddenApps) hidden.append(hidden.length() == 0 ? "" : ", ").append(pkg);
+        android.util.Log.i("GlassHome", "home row (" + hc + "): " + row
+                + " | ordered but not installed/launchable: " + (missing.length() == 0 ? "none" : missing)
+                + " | hidden: " + (hidden.length() == 0 ? "none" : hidden));
+    }
+
+    /** A package event arrived while the last scan ran: scan again (now, or on
+     *  resume when paused). */
+    private void rescanIfPackagesChanged() {
+        if (destroyed || pkgRequestedGen.get() == pkgScanGen) return;
+        if (uiPaused) { pkgChangedWhilePaused = true; return; }
+        uiHandler.removeCallbacks(pkgReloadRunnable);
+        uiHandler.postDelayed(pkgReloadRunnable, 400);
     }
 
     /** Count of apps in {@code list} that survive the hidden-apps
@@ -7700,9 +7764,9 @@ public class LauncherActivity extends Activity {
                         KeymapStore.serializeKeyMap(keycodes, packages)).apply();
     }
 
-    /** Parse the persisted hidden-apps set once at startup. Hidden-but-
-     *  uninstalled packages get garbage-collected the next time
-     *  {@link #loadApps()} runs (see {@link #pruneHiddenApps}). */
+    /** Parse the persisted hidden-apps set once at startup. Entries are
+     *  dropped when the app is really uninstalled (see
+     *  {@link #forgetUninstalledApp}), never because an update hid it briefly. */
     private void loadHiddenApps() {
         hiddenApps.clear();
         String raw = prefs.getString(KEY_HIDDEN, null);
@@ -7742,60 +7806,19 @@ public class LauncherActivity extends Activity {
         for (int i = 0, n = apps.size(); i < n; i++) applyCustomName(apps.get(i));
     }
 
-    /** Drop hidden-set entries whose package is no longer installed.
-     *  Called from loadApps once the fresh appList is known. O(N + M)
-     *  via a single ArraySet pass over fresh package names; the prior
-     *  nested loop was O(N · M) and quadratic when many apps were
-     *  hidden — fine in practice but trivially fixed. */
-    /** Mirror of {@link #pruneHiddenApps} for the remote-key shortcut
-     *  map. Uninstalled-package bindings persist in {@link #keyMap}
-     *  until the user actually presses the bound key — at which point
-     *  {@link #dispatchKeyEvent}'s "Mapped to an uninstalled package"
-     *  branch cleans up lazily. The lazy cleanup works for the press
-     *  path, but it leaves the keymap settings UI showing the raw
-     *  package name on the slot row (instead of "Not assigned") for
-     *  every binding pointing at an uninstalled app.
-     *
-     *  <p>Eager cleanup on every {@link #loadApps()} reconcile keeps
-     *  the slot list visually correct without user action. Iterates
-     *  the SparseArray in reverse so the {@code removeAt} indices
-     *  stay valid; calls {@link #saveKeyMap()} at most once per
-     *  reconcile no matter how many entries dropped.
-     *
-     *  <p>Cheap on warm runs: {@link #SHORTCUT_KEYCODES} caps the
-     *  binding count at 6, so the inner ArraySet contains() check
-     *  runs at most 6 times. Accepts the freshly-built package set
-     *  from the reconcile body so the v1.4.x first cut's separate-
-     *  ArraySet allocations (three sets built from the same data on
-     *  every reconcile — see the v1.4.x reconcile body comment) are
-     *  collapsed to a single shared instance.
-     */
-    private void pruneKeyMap(ArraySet<String> installedPkgs) {
-        if (keyMap.size() == 0) return;
-        if (installedPkgs == null) return;
-        boolean changed = false;
-        for (int i = keyMap.size() - 1; i >= 0; i--) {
-            String pkg = keyMap.valueAt(i);
-            if (pkg == null || !installedPkgs.contains(pkg)) {
-                keyMap.removeAt(i);
-                changed = true;
-            }
-        }
-        if (changed) saveKeyMap();
+
+    /** Glass: a real uninstall (not an update) removes the app from the saved
+     *  order, the hidden set and remote-key bindings. */
+    private void forgetUninstalledApp(String pkg) {
+        String order = prefs.getString(KEY_APP_ORDER, "");
+        String pruned = AppOrder.without(order, pkg);
+        if (!pruned.equals(order)) prefs.edit().putString(KEY_APP_ORDER, pruned).apply();
+        if (hiddenApps.remove(pkg)) saveHiddenApps();
+        boolean bound = false;
+        for (int i = keyMap.size() - 1; i >= 0; i--) if (pkg.equals(keyMap.valueAt(i))) { keyMap.removeAt(i); bound = true; }
+        if (bound) saveKeyMap();
     }
 
-    private void pruneHiddenApps(ArraySet<String> installedPkgs) {
-        if (hiddenApps.isEmpty()) return;
-        if (installedPkgs == null) return;
-        boolean changed = false;
-        for (int i = hiddenApps.size() - 1; i >= 0; i--) {
-            if (!installedPkgs.contains(hiddenApps.valueAt(i))) {
-                hiddenApps.removeAt(i);
-                changed = true;
-            }
-        }
-        if (changed) saveHiddenApps();
-    }
 
     /** Push the (filtered) shelf list to the RecyclingShelfView.
      *  Single point of policy: the shelf shows appList minus hiddenApps;
@@ -10328,7 +10351,7 @@ public class LauncherActivity extends Activity {
         List<IconTarget> waiters = new ArrayList<>(2);
         iconInflight.put(key, waiters);
         try {
-            iconExecutor.execute(() -> {
+            iconExecutor.execute(new DiscardOldestWithCleanup.Task(() -> {
                 if (destroyed) return;
                 Bitmap bmp = null;
                 boolean sourceCurrent = false;
@@ -10364,7 +10387,7 @@ public class LauncherActivity extends Activity {
                         onIconLoaded(key, fb);
                     }
                 });
-            });
+            }, () -> { if (iconInflight.get(key) == waiters) iconInflight.remove(key); }));
         } catch (java.util.concurrent.RejectedExecutionException e) { iconInflight.remove(key); }
     }
 
@@ -10560,13 +10583,26 @@ public class LauncherActivity extends Activity {
         if (app.tvInputId != null) {
             return IconRenderer.generateInputTile(w, h, corner, app.label, density);
         }
-        Drawable banner = resolveBannerDrawable(app);
-        if (banner != null) {
-            Bitmap b = IconRenderer.processBannerArt(banner, w, h, corner);
-            if (b != null) return b;
+        // Disk tier, only for artwork that comes from the installed APK. The
+        // key includes the APK path, which changes on every update, so a
+        // missed package broadcast cannot leave a stale banner behind.
+        IconDiskCache disk = bannerDiskCache;
+        String apk = app.ri != null && app.ri.activityInfo != null && app.ri.activityInfo.applicationInfo != null
+                ? app.ri.activityInfo.applicationInfo.sourceDir : null;
+        int diskKey = apk == null ? 0 : (((w * 31 + h) * 31 + corner) * 31 + apk.hashCode()) & 0x7FFFFFFF;
+        if (disk != null && diskKey > 0) {
+            Bitmap cached = disk.tryRead(app.packageName, diskKey);
+            if (cached != null) return cached;
         }
-        Drawable icon = resolveIconDrawable(app);
-        return IconRenderer.generateBannerTile(icon, w, h, corner);
+        Bitmap rendered = null;
+        Drawable banner = resolveBannerDrawable(app);
+        if (banner != null) rendered = IconRenderer.processBannerArt(banner, w, h, corner);
+        if (rendered == null) rendered = IconRenderer.generateBannerTile(resolveIconDrawable(app), w, h, corner);
+        if (disk != null && diskKey > 0 && rendered != null) {
+            disk.delete(app.packageName);  // drop older sizes/versions; same FIFO executor as the write
+            disk.writeAsync(app.packageName, diskKey, rendered);
+        }
+        return rendered;
     }
 
     private void preWarmBanner(AppInfo app) {
@@ -10577,7 +10613,7 @@ public class LauncherActivity extends Activity {
         List<IconTarget> waiters = new ArrayList<>(2);
         bannerInflight.put(key, waiters);
         try {
-            iconExecutor.execute(() -> {
+            iconExecutor.execute(new DiscardOldestWithCleanup.Task(() -> {
                 if (destroyed) return;
                 Bitmap bmp = null;
                 boolean sourceCurrent = false;
@@ -10610,7 +10646,7 @@ public class LauncherActivity extends Activity {
                         }
                     }
                 });
-            });
+            }, () -> { if (bannerInflight.get(key) == waiters) bannerInflight.remove(key); }));
         } catch (java.util.concurrent.RejectedExecutionException e) { bannerInflight.remove(key); }
     }
 
@@ -10629,7 +10665,7 @@ public class LauncherActivity extends Activity {
         bannerInflight.put(key, waiters);
         final List<IconTarget> fw = waiters;
         try {
-            iconExecutor.execute(() -> {
+            iconExecutor.execute(new DiscardOldestWithCleanup.Task(() -> {
                 if (destroyed) return;
                 Bitmap bmp = null;
                 boolean sourceCurrent = false;
@@ -10663,7 +10699,7 @@ public class LauncherActivity extends Activity {
                             cell.setIconBitmap(fb);
                     }
                 });
-            });
+            }, () -> { if (bannerInflight.get(key) == fw) bannerInflight.remove(key); }));
         } catch (java.util.concurrent.RejectedExecutionException e) { bannerInflight.remove(key); }
     }
 
@@ -11484,6 +11520,7 @@ public class LauncherActivity extends Activity {
         prefs.edit().putBoolean(KEY_AMBIENT_BACKGROUND,on).apply();
         if(on && systemWallpaper)setSystemWallpaper(false,false);
         if(ambientBackground!=null)ambientBackground.setVisibility(on?View.VISIBLE:View.GONE);
+        applyAmbientWindow();
         int visibility=on || systemWallpaper?View.GONE:View.VISIBLE;
         if(wallpaperFront!=null)wallpaperFront.setVisibility(visibility);
         if(wallpaperBack!=null)wallpaperBack.setVisibility(visibility);
@@ -11543,6 +11580,13 @@ public class LauncherActivity extends Activity {
             }
         }
         refreshSettingsRows();
+    }
+
+    /** Glass: the ambient view paints every pixel opaquely, so the black window
+     *  background behind it was a full screen of overdraw. */
+    private void applyAmbientWindow() {
+        if (systemWallpaper) return;
+        getWindow().setBackgroundDrawable(ambientBackgroundEnabled ? null : new ColorDrawable(Color.BLACK));
     }
 
     private void applySystemWallpaperWindow(boolean on) {
@@ -12391,6 +12435,7 @@ public class LauncherActivity extends Activity {
         // icon-load executor tasks can read from / write to it. Owns
         // its own write executor; shut down in onDestroy().
         iconDiskCache = new IconDiskCache(this);
+        bannerDiskCache = new IconDiskCache(this, "banners");
         // The in-memory icon cache. Pure LRU, no create() fallback —
         // the disk lookup is performed inside {@link #loadIconBlocking}
         // on the iconExecutor's worker thread. Earlier drafts wired the
@@ -12464,9 +12509,22 @@ public class LauncherActivity extends Activity {
         // cost of the higher bound is negligible and transient) — so the
         // discard path is no longer reachable in practice while still
         // keeping the queue bounded against a genuinely runaway producer.
-        int iconWorkers = Math.max(2, cores);
+        // Glass: two decode threads at background priority. One per core at
+        // default priority competed with the UI thread on this quad-core TV
+        // during cold start (and with AirPlay when it runs).
+        int iconWorkers = Math.min(2, Math.max(1, cores));
+        // Glass: DiscardOldestWithCleanup instead of DiscardOldestPolicy, so a
+        // dropped artwork task clears its in-flight entry (and user actions
+        // such as saving a custom icon are never dropped silently).
         iconExecutor = new ThreadPoolExecutor(iconWorkers, iconWorkers, 30L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(1024), new ThreadPoolExecutor.DiscardOldestPolicy());
+                new ArrayBlockingQueue<>(1024), r -> {
+                    Thread t = new Thread(() -> {
+                        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                        r.run();
+                    }, "glass-art");
+                    t.setDaemon(true);
+                    return t;
+                }, new DiscardOldestWithCleanup());
         iconExecutor.allowCoreThreadTimeOut(true);
         // Wallpaper executor is now owned by {@link WallpaperController}
         // (constructed later inside {@link #buildLayout()}). The activity
@@ -12477,8 +12535,13 @@ public class LauncherActivity extends Activity {
         // meant the thread, once spawned, lived forever even though
         // it's idle for 99.99 % of the session. 30 s + core-thread-
         // timeout matches the icon executor's discipline.
+        // Glass: a full queue throws (AbortPolicy) instead of silently dropping:
+        // loadApps sets appsLoading before submitting and relies on the
+        // RejectedExecutionException path to clear it and retry. A silently
+        // discarded scan left the app list stuck "loading". Cache writes share
+        // this queue, hence room for a few.
         ThreadPoolExecutor app = new ThreadPoolExecutor(1, 1, 30L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(1), new ThreadPoolExecutor.DiscardPolicy());
+                new ArrayBlockingQueue<>(8), new ThreadPoolExecutor.AbortPolicy());
         app.allowCoreThreadTimeOut(true);
         appExecutor = app;
 

@@ -10,8 +10,8 @@ android {
         applicationId = "tv.glass.launcher"
         minSdk        = 26
         targetSdk     = 36
-        versionCode   = 22
-        versionName   = "1.1.6-airplay.7"
+        versionCode   = 23
+        versionName   = "1.1.7-airplay.8"
         resourceConfigurations += listOf("en")
 
         // Instrumentation test runner. Required so :app:connectedDebugAndroidTest
@@ -24,7 +24,9 @@ android {
         // Apple-silicon Android TV emulator). Each extra ABI rebuilds
         // OpenSSL and FFmpeg, so x86 emulators are intentionally omitted.
         ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            // Glass: -PtvAbiOnly builds ARMv7 only (this TV's 32-bit userspace) for a
+            // smaller APK and faster build; the default keeps ARM64 for emulators.
+            abiFilters += if (project.hasProperty("tvAbiOnly")) listOf("armeabi-v7a") else listOf("armeabi-v7a", "arm64-v8a")
         }
     }
 
@@ -132,6 +134,10 @@ dependencies {
 
     // QR-code generation for phone pairing; JUnit below is host-only.
     implementation("com.google.zxing:core:3.5.3")
+
+    // Installs the Baseline Profile (src/main/baseline-prof.txt) on
+    // sideloaded builds, which get no Play cloud profile.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     testImplementation("junit:junit:4.13.2")
 
     // Instrumentation tests require separate androidTest compile/device tasks.

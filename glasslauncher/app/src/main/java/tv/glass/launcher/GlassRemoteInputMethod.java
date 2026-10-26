@@ -29,8 +29,9 @@ public final class GlassRemoteInputMethod extends InputMethodService {
     @Override public void onDestroy(){if(instance==this)instance=null;super.onDestroy();}
     private void deliver(){
         Delivery delivery;synchronized(GlassRemoteInputMethod.class){delivery=pending;if(delivery==null||!editor)return;pending=null;}
-        InputConnection connection=getCurrentInputConnection();
-        if(connection!=null){connection.beginBatchEdit();try{delivery.success=connection.commitText(delivery.text,1);}finally{connection.endBatchEdit();}}
-        delivery.done.countDown();
+        try{
+            InputConnection connection=getCurrentInputConnection();
+            if(connection!=null){connection.beginBatchEdit();try{delivery.success=connection.commitText(delivery.text,1);}finally{connection.endBatchEdit();}}
+        }finally{delivery.done.countDown();}
     }
 }

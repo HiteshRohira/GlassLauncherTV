@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Glass TV <noreply@glass.tv>
+Date: Sun, 25 Oct 2026 08:30:07 +0530
+Subject: [PATCH] glass: fix HLS language selection leak, overflows and
+ malformed-input crashes
+
+---
+ lib/airplay_video.c | 52 ++++++++++++++++++++++++++++-----------------
+ 1 file changed, 32 insertions(+), 20 deletions(-)
+
+diff --git a/lib/airplay_video.c b/lib/airplay_video.c
+index 1cac43f..1bd23a1 100644
+--- a/lib/airplay_video.c
++++ b/lib/airplay_video.c
+@@ -401,7 +401,10 @@ language_t* master_playlist_process_language(const char * data, int *slices, int
+         if (!(end = strchr(++ptr,'"'))) {
+             break;
+         }
+-        strncpy(languages[i].code, ptr, end - ptr);
++        /* Glass: code is char[6]; longer tags (e.g. "zh-Hant") overflowed it */
++        size_t code_len = (size_t) (end - ptr) < sizeof(languages[i].code) - 1 ? (size_t) (end - ptr) : sizeof(languages[i].code) - 1;
++        memcpy(languages[i].code, ptr, code_len);
++        languages[i].code[code_len] = '\0';
+         if (!(ptr = strchr(ptr,'\n'))) {
+             break;
+         }
+@@ -409,15 +412,25 @@ language_t* master_playlist_process_language(const char * data, int *slices, int
+         languages[i].len = (int) (ptr + 1 - languages[i].start);
+ 	    length += languages[i].len;
+     }
+-    assert (count1 == count);
+-    
++    /* Glass: the asserts below are compiled out in release builds; on any
++     * unexpected structure give up and leave the playlist as it was. */
++    if (count1 != count || !ptr) {
++        for (int i = 1; i <= count; i++) free(languages[i].name);
++        free(languages);
++        return NULL;
++    }
++
+     languages[count + 1].start = ++ptr;
+     languages[count + 1].len = strlen(ptr);
+     *languages[count + 1].code = '\0';
+     languages[count + 1].name = NULL;
+ 
+     length += languages[count + 1].len;
+-    assert(length == strlen(data));
++    if (length != strlen(data)) {
++        for (int i = 1; i <= count; i++) free(languages[i].name);
++        free(languages);
++        return NULL;
++    }
+     *slices = count + 2;
+ 
+     int copies = 0;
+@@ -428,15 +441,21 @@ language_t* master_playlist_process_language(const char * data, int *slices, int
+      }
+ 
+     *language_count = count/copies;
+-    assert(count == *language_count * copies);
++    bool well_formed = count == *language_count * copies;
+ 
+     /* verify expected structure of language choice information */
+-    for (int i = 1; i <= count; i++) {
++    for (int i = 1; i <= count && well_formed; i++) {
+   	int j = i - *language_count;
+-        if (j > 0) {
+-            assert (!strcmp(languages[i].code, languages[j].code));
++        if (j > 0 && strcmp(languages[i].code, languages[j].code)) {
++            well_formed = false;
+         }
+     }
++    if (!well_formed) {   /* Glass: was assert-only */
++        for (int i = 1; i <= count; i++) free(languages[i].name);
++        free(languages);
++        *language_count = 0;
++        return NULL;
++    }
+     return languages;
+ }
+ 
+@@ -511,19 +530,12 @@ char * select_master_playlist_language(airplay_video_t *airplay_video, char *mas
+     } 
+ 
+     /* update stored language code, name if changed */
++    /* Glass: the setters keep their own copies. The temporaries here were
++     * leaked on every HLS play, and the code buffer was sized by the name's
++     * length, so a code longer than its name overflowed the heap. */
+     if (name != language_name) {   /* compare addresses */
+-        size_t len = strlen(name);
+-        char *new_language_name = (char *) calloc(len + 1, sizeof(char));
+-        char *new_language_code = (char *) calloc(len + 1, sizeof(char));
+-        if (!new_language_name || !new_language_code) {
+-            printf("Memory allocation failure (new_language_name/code\n");
+-            exit (1);
+-        }
+-        memcpy(new_language_name, name, len);
+-        set_language_name(airplay_video, new_language_name, len);
+-        len = strlen(code);
+-        memcpy(new_language_code, code, len);
+-        set_language_code(airplay_video, new_language_code, len);
++        if (strlen(name)) set_language_name(airplay_video, name, strlen(name));
++        if (strlen(code)) set_language_code(airplay_video, code, strlen(code));
+     }
+     
+     int len = 0;

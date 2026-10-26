@@ -39,6 +39,13 @@ struct AudioConfig {
     const bool realtimePriority; // decoder: request realtime priority
     const bool lowLatency;       // low-latency decoder + oboe low-latency output
     const bool benchmarkLog;     // periodically log decoder stats
+
+    bool operator==(const AudioConfig &o) const {
+        return staticCushionMs == o.staticCushionMs && percentilePct == o.percentilePct &&
+               oboeBufferFrames == o.oboeBufferFrames && forceSwAlac == o.forceSwAlac &&
+               forceSwAac == o.forceSwAac && realtimePriority == o.realtimePriority &&
+               lowLatency == o.lowLatency && benchmarkLog == o.benchmarkLog;
+    }
 };
 
 struct CodecFormat {
@@ -63,6 +70,13 @@ struct AudioEngine {
         std::lock_guard<std::mutex> lk(mRebuildLock);
         if (!mApplied) {
             initInternals(cfg);
+            return true;
+        }
+        // Glass: an unchanged config must not queue a rebuild. A rebuild stops
+        // the output and recreates the decoder on the next packet, which is an
+        // audible gap at the start of a session.
+        if (cfg == *mApplied) {
+            delete mPending.exchange(nullptr, std::memory_order_acq_rel);  // cancel a queued change
             return true;
         }
         // engine may be in use: decode() applies the queued config
@@ -94,6 +108,12 @@ struct AudioEngine {
         if (mOutput) mOutput->stop();
         mOutputActive = false;
         mDecoder = {};
+    }
+
+    // any thread: drop buffered audio after a sender FLUSH (seek, pause)
+    void flush() {
+        std::lock_guard<std::mutex> lk(mRebuildLock);
+        if (mTimeline) mTimeline->requestFlush();
     }
 
     void setClientGain(float g) {
@@ -238,6 +258,10 @@ bool audio_engine_configure(AudioEngine *engine, int cushionMs, int percentilePc
     if (!engine) return false;
     return engine->configure({cushionMs, percentilePct, oboeBufferFrames, forceSwAlac, forceSwAac,
                               realtimePriority, lowLatency, benchmarkLog});
+}
+
+void audio_engine_flush(AudioEngine *engine) {
+    if (engine) engine->flush();
 }
 
 void audio_engine_set_client_gain(AudioEngine *engine, float gain) {

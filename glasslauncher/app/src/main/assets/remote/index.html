@@ -14,7 +14,7 @@
     <span class="ripple" id="ripple"></span>
     <button class="sr-only" data-key="up">Up</button><button class="sr-only" data-key="down">Down</button><button class="sr-only" data-key="left">Left</button><button class="sr-only" data-key="right">Right</button><button class="sr-only" data-key="ok">OK</button>
   </div>
-  <p class="pad-hint" id="padHint">Swipe to move · tap to select</p>
+  <p class="pad-hint" id="padHint">Swipe to move · tap to select · hold for options</p>
 </section>
 
 <section class="dock" id="dock" aria-label="Controls">
@@ -38,9 +38,9 @@
 </main>
 
 <div id="scrim" class="scrim" hidden></div>
-<section id="pairPanel" class="sheet" hidden aria-labelledby="pairTitle"><div class="grab"></div><h2 id="pairTitle">Pair with your TV</h2><p>On the TV open Control Center → Phone remote, then enter the six-digit code.</p><form id="pairForm"><label class="sr-only" for="pin">Pairing code</label><input id="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required placeholder="000000"><button class="primary">Pair</button></form></section>
-<section id="nativePanel" class="sheet" hidden aria-labelledby="nativeTitle"><div class="grab"></div><h2 id="nativeTitle">Enable TV controls</h2><p id="nativeHint">Approve Android’s debugging prompt on the TV once (choose Always allow). Everything stays on your Wi‑Fi.</p><button id="startNative" class="primary wide">Enable TV controls</button><button id="reconnect" class="ghost wide" hidden>Reconnect</button></section>
-<section id="settingsPanel" class="sheet" hidden aria-labelledby="settingsTitle"><div class="grab"></div><h2 id="settingsTitle">Remote</h2>
+<section id="pairPanel" class="sheet" role="dialog" aria-modal="true" hidden aria-labelledby="pairTitle"><div class="grab"></div><h2 id="pairTitle">Pair with your TV</h2><p>On the TV open Control Center → Phone remote, then enter the six-digit code.</p><form id="pairForm"><label class="sr-only" for="pin">Pairing code</label><input id="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required placeholder="000000"><button class="primary">Pair</button></form></section>
+<section id="nativePanel" class="sheet" role="dialog" aria-modal="true" hidden aria-labelledby="nativeTitle"><div class="grab"></div><h2 id="nativeTitle">Enable TV controls</h2><p id="nativeHint">Approve Android’s debugging prompt on the TV once (choose Always allow). Everything stays on your Wi‑Fi.</p><button id="startNative" class="primary wide">Enable TV controls</button><button id="reconnect" class="ghost wide" hidden>Reconnect</button></section>
+<section id="settingsPanel" class="sheet" role="dialog" aria-modal="true" hidden aria-labelledby="settingsTitle"><div class="grab"></div><h2 id="settingsTitle">Remote</h2>
   <p class="label">Navigation</p>
   <div class="segmented" role="radiogroup" aria-label="Navigation style"><button role="radio" data-mode="pad">Touchpad</button><button role="radio" data-mode="dpad">Buttons</button></div>
   <p class="label">Feel</p>
@@ -48,10 +48,10 @@
   <button id="openInstall" class="ghost wide" hidden>Add to Home Screen</button>
   <button id="openSetup" class="ghost wide">Connection &amp; pairing</button>
   <button id="closeSettings" class="primary wide">Done</button></section>
-<section id="installPanel" class="sheet" hidden aria-labelledby="installTitle"><div class="grab"></div><h2 id="installTitle">Keep the remote on your Home Screen</h2><p>It opens full screen like an app and stays paired with this TV.</p>
+<section id="installPanel" class="sheet" role="dialog" aria-modal="true" hidden aria-labelledby="installTitle"><div class="grab"></div><h2 id="installTitle">Keep the remote on your Home Screen</h2><p>It opens full screen like an app and stays paired with this TV.</p>
   <ol class="steps"><li><span class="step-icon"><svg><use href="#share"/></svg></span>Tap <b>Share</b> in Safari’s toolbar</li><li><span class="step-icon"><svg><use href="#addSquare"/></svg></span>Choose <b>Add to Home Screen</b></li><li><span class="step-icon"><svg><use href="#check"/></svg></span>Keep <b>Open as Web App</b> on, then tap <b>Add</b></li></ol>
   <button id="shareNow" class="primary wide">Open Share sheet</button><button id="installLater" class="ghost wide">Not now</button></section>
-<section id="keyboardPanel" class="sheet" hidden aria-labelledby="keyboardTitle"><div class="grab"></div><div class="sheet-heading"><h2 id="keyboardTitle">Type on TV</h2><button id="closeKeyboard" class="round small" aria-label="Close keyboard"><svg><use href="#close"/></svg></button></div><p>Select a search or text field on the TV first.</p><form id="textForm"><label class="sr-only" for="tvText">Text to send to the TV</label><textarea id="tvText" rows="2" maxlength="2048" placeholder="Type or paste…" autocomplete="off" autocorrect="on" enterkeyhint="send"></textarea><div class="text-actions"><button type="button" data-key="delete" class="ghost">⌫ Delete</button><button type="button" data-key="enter" class="ghost">Enter</button><button class="primary">Send</button></div></form></section>
+<section id="keyboardPanel" class="sheet" role="dialog" aria-modal="true" hidden aria-labelledby="keyboardTitle"><div class="grab"></div><div class="sheet-heading"><h2 id="keyboardTitle">Type on TV</h2><button id="closeKeyboard" class="round small" aria-label="Close keyboard"><svg><use href="#close"/></svg></button></div><p>Select a search or text field on the TV first.</p><form id="textForm"><label class="sr-only" for="tvText">Text to send to the TV</label><textarea id="tvText" rows="2" maxlength="2048" placeholder="Type or paste…" autocomplete="off" autocorrect="on" enterkeyhint="send"></textarea><div class="text-actions"><button type="button" data-key="delete" class="ghost">⌫ Delete</button><button type="button" data-key="enter" class="ghost">Enter</button><button class="primary">Send</button></div></form></section>
 <label id="hapticLabel" class="haptic" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
 
 <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>

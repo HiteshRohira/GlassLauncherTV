@@ -1,6 +1,6 @@
 # Glass phone remote
 
-This document describes `1.1.7-airplay.8` on `fix/review-backlog`.
+This document describes `1.1.7-airplay.8` on `main`.
 Glass serves its remote at `http://<TV-IP>:48633/` on the home network.
 
 1. Open Control Center → Phone remote and scan the QR code.

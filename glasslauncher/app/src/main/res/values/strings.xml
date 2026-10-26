@@ -13,6 +13,7 @@
     <string name="cd_airplay_failed">AirPlay not available. Select for options.</string>
     <string name="airplay_channel">AirPlay and phone remote</string>
     <string name="airplay_banner_title">AirPlay isn\'t available</string>
+    <string name="remote_lockout">Someone tried several wrong phone remote codes. Pairing is paused for 15 minutes.</string>
     <string name="airplay_banner_body">Glass is restarting it. If this continues, open Control Center → AirPlay.</string>
     <!-- Gear toolbar pill (v1.3.0). Short-press opens the unified
          settings panel; long-press opens system Settings directly.
