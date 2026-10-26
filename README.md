@@ -2,9 +2,10 @@
 
 **A fast, quiet home screen for Android TV with AirPlay built in.**
 
-The current installed reference build is `1.1.7-airplay.8` on
-`fix/review-backlog`. `main` contains `1.1.6-airplay.7` plus source cleanup;
-`fix/side-panel-focus` contains an additional focus fix awaiting testing.
+The installed reference is `1.1.7-airplay.8`. This branch prepares
+`1.1.8-airplay.9`: ABI-specific APKs, native size optimization, and the
+`fix/side-panel-focus` changes with additional navigation regressions covered.
+TV installation remains a separate approval step.
 
 Glass TV replaces the stock Google TV home with a calm, glass-styled launcher: a clock, an ambient background that takes its colour from the app you're on, and one row of favourite apps. Everything else stays out of the way until you ask for it. It has no ads, recommendations, accounts or telemetry.
 
@@ -38,20 +39,33 @@ Requirements:
 The AirPlay engine pulls UxPlay, libplist, OpenSSL and FFmpeg as git submodules:
 
 ```sh
-git clone --recursive --branch fix/review-backlog https://github.com/HiteshRohira/GlassLauncherTV.git
+git clone --recursive https://github.com/HiteshRohira/GlassLauncherTV.git
 cd GlassLauncherTV/glasslauncher
 gradle --no-daemon :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease
 ```
 
-The first build compiles OpenSSL and FFmpeg for `armeabi-v7a` and `arm64-v8a`.
-On `fix/review-backlog`, add `-PtvAbiOnly` for ARMv7 only; omit that property
-for both ABIs. Use separate, fresh native build state when comparing variants.
-For an existing clone, initialize dependencies with
-`git submodule update --init --recursive`.
+The first build compiles OpenSSL and FFmpeg for both ARM ABIs. Standalone
+ARMv7 and ARM64 APKs are generated; `-PtargetAbis=armeabi-v7a` selects only
+ARMv7 (`-PtvAbiOnly` remains supported). `-PuniversalApk=true` adds a universal
+comparison APK. App packaging and the library use the same ABI selection.
 
-The unsigned APK is written under `glasslauncher/app/build/outputs/apk/release/`.
-Sign it locally; an update must use the same key as the installed app. Keep keys
-outside the repository. JVM tests and lint do not execute device tests.
+Native profiles have separate build directories under `glasslauncher/.build/`:
+`baseline` retains the original native settings, `exports` localizes internal
+receiver symbols, and `crypto-size` also builds OpenSSL with `-Os` while keeping
+its algorithms and all media fallbacks. Select with `-PnativeProfile=PROFILE`.
+Debug/unit checks do not establish physical-TV playback or ARMv7 runtime behavior.
+
+For local signing, from the repository root:
+
+```sh
+python3 scripts/build-sideload.py --profile crypto-size --gradle /path/to/gradle \
+  --baseline-apk /path/to/previous-signed.apk --output dist/size-focus
+```
+
+The helper builds/tests/lints, verifies package/version/certificate and alignment,
+and refuses to overwrite APKs. It signs only the two ABI packages unless
+`--include-universal` is requested. Keys remain outside the repository.
+For an existing clone: `git submodule update --init --recursive`.
 The phone remote maintains a local ADB connection after Android authorization;
 see [`glasslauncher/PHONE-REMOTE.md`](glasslauncher/PHONE-REMOTE.md).
 

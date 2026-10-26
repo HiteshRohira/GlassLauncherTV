@@ -6,7 +6,7 @@ plugins {
 
 // Every experiment gets independent Gradle and native outputs. Never reuse the
 // historical .cxx tree when comparing different native configurations.
-val glassNativeProfile = providers.gradleProperty("nativeProfile").getOrElse("exports")
+val glassNativeProfile = providers.gradleProperty("nativeProfile").getOrElse("crypto-size")
 require(glassNativeProfile in listOf("baseline", "exports", "crypto-size")) {
     "nativeProfile must be baseline, exports, or crypto-size"
 }

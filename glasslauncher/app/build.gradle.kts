@@ -19,13 +19,6 @@ android {
         // under src/androidTest. JUnit 4 runner shipped with androidx.test.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // ABIs for the AirPlay engine's native library: ARMv7 (this TCL and
-        // most TV SoCs run 32-bit userspace) and ARM64 (newer TVs and the
-        // Apple-silicon Android TV emulator). Each extra ABI rebuilds
-        // OpenSSL and FFmpeg, so x86 emulators are intentionally omitted.
-        ndk {
-            abiFilters += rootProject.extra["glassAbis"] as List<String>
-        }
     }
 
     // Standalone sideload variants share package, certificate and versionCode.

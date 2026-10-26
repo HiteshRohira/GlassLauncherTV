@@ -9,8 +9,10 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import android.content.res.Configuration;
-import android.graphics.drawable.Drawable;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.SystemClock;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
@@ -27,17 +29,7 @@ import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
-/**
- * Device-level regressions for the Edge-glass slate restyle of the settings
- * card and the per-app context menu.
- *
- * <p>These assert the NEW visual contract (both surfaces share the
- * {@link EdgeGlassStyle} panel drawable; the menu is adaptive-width, not a
- * hard 140 dp) AND that the restyle did not change reachability — the menu and
- * settings panel still open and still expose their rows. They deliberately add
- * only new assertions; the pre-existing {@code LauncherCustomizationTest}
- * coverage of settings page structure is left untouched.
- */
+/** Native Feather menu material, adaptive layout, and Control Center reachability. */
 @RunWith(AndroidJUnit4.class)
 @LargeTest
 public class EdgeGlassMenuTest {
@@ -45,7 +37,7 @@ public class EdgeGlassMenuTest {
     private static final long WAIT_TIMEOUT_MS = 8_000L;
 
     @Test
-    public void perAppMenu_usesSharedEdgeGlassPanel_andOpensReachable() {
+    public void perAppMenu_usesFeatherGlass_andExposesAcceptedActions() {
         try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
             View homeCell = focusHomeCell(scenario);
             scenario.onActivity(a -> assertTrue(homeCell.performLongClick()));
@@ -54,17 +46,20 @@ public class EdgeGlassMenuTest {
             View overlay = awaitVisibleViewField(scenario, "menuOverlay");
             assertNotNull("context menu opens", overlay);
             scenario.onActivity(a -> {
-                assertNotNull("Hide row present", field(a, "menuHide"));
-                assertNotNull("Rename row present", field(a, "menuRename"));
-                assertNotNull("Uninstall row present", field(a, "menuUninstall"));
+                for (String name : new String[]{"menuMove", "menuHide", "menuAppInfo"}) {
+                    assertTrue(name + " is reachable", ((View) field(a, name)).isShown());
+                    assertTrue(name + " has an action", ((View) field(a, name)).isClickable());
+                }
+                for (String name : new String[]{"menuRename", "menuChangeIcon",
+                        "menuResetIcon", "menuUninstall"}) {
+                    assertEquals(name + " deliberately absent from Feather menu",
+                            View.GONE, ((View) field(a, name)).getVisibility());
+                }
 
-                // The menu column carries the shared edge-glass panel drawable.
+                // Feather uses the native glass gradient, with rounded corners.
                 LinearLayout col = firstLinearLayoutChild((ViewGroup) overlay);
                 assertNotNull("menu column present", col);
-                Drawable bg = col.getBackground();
-                assertNotNull("menu has a panel background", bg);
-                assertEquals("menu uses the shared EdgeGlassStyle panel",
-                        "PanelDrawable", bg.getClass().getSimpleName());
+                assertFeatherPanel(col, NativeTheme.px(a, 22));
 
                 float density = a.getResources().getDisplayMetrics().density;
                 assertEquals("menu column min width is the shared floor, not 140dp",
@@ -87,20 +82,25 @@ public class EdgeGlassMenuTest {
                 LinearLayout col = firstLinearLayoutChild((ViewGroup) overlay);
                 assertNotNull(col);
                 assertTrue("menu has rows", col.getChildCount() > 0);
+                int visibleRows = 0;
+                int previousBottom = 0;
                 for (int i = 0; i < col.getChildCount(); i++) {
                     View row = col.getChildAt(i);
+                    if (row.getVisibility() != View.VISIBLE) continue;
+                    visibleRows++;
                     LinearLayout.LayoutParams lp =
                             (LinearLayout.LayoutParams) row.getLayoutParams();
-                    // Adaptive: rows fill the column (MATCH_PARENT), never a
-                    // hard 140 dp pixel width.
-                    assertEquals("row " + i + " width is MATCH_PARENT (adaptive)",
+                    assertEquals("row " + i + " fills the adaptive column",
                             ViewGroup.LayoutParams.MATCH_PARENT, lp.width);
-                    assertTrue("row " + i + " is not hard-pinned to 140dp",
-                            lp.width != hard140);
-                    int expectedGap = i == col.getChildCount() - 1
-                            ? 0 : EdgeGlassStyle.dp(density, EdgeGlassStyle.ROW_GAP_DP);
-                    assertEquals("row " + i + " inter-row gap", expectedGap, lp.bottomMargin);
+                    assertTrue("row " + i + " is not hard-pinned to 140dp", lp.width != hard140);
+                    assertTrue("visible rows do not overlap", row.getTop() >= previousBottom);
+                    assertTrue("visible row has usable height", row.getHeight() > 0);
+                    assertEquals("visible row fills the column's content width",
+                            col.getWidth() - col.getPaddingLeft() - col.getPaddingRight(),
+                            row.getWidth());
+                    previousBottom = row.getBottom();
                 }
+                assertEquals("Move, Hide and App info are the accepted app actions", 3, visibleRows);
                 // The measured menu never collapses below the shared floor.
                 assertTrue("menu measured width respects the min floor",
                         col.getWidth() >= EdgeGlassStyle.dp(
@@ -110,25 +110,76 @@ public class EdgeGlassMenuTest {
     }
 
     @Test
-    public void settingsCard_usesSameSharedEdgeGlassPanel_andOpensReachable() {
+    public void settingsCard_isEmbeddedInFeatherSheet_andReturnsToOpeningControl() {
         try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
-            scenario.onActivity(a -> invoke(a, "showSettingsPanel"));
-            awaitVisibleViewField(scenario, "settingsOverlay");
-
+            scenario.onActivity(a -> assertTrue(((View) field(a, "mapperBtnView")).performClick()));
+            View overlay = awaitVisibleViewField(scenario, "controlCenter");
             scenario.onActivity(a -> {
+                View appearance = overlay.findViewWithTag("appearance");
+                assertNotNull("Appearance tile is reachable from Control Center", appearance);
+                assertTrue(appearance.performClick());
+            });
+            awaitValue(scenario, "settled embedded Appearance", a -> {
+                ControlCenterPanel panel = (ControlCenterPanel) overlay;
                 View card = (View) field(a, "settingsCard");
-                assertNotNull("settings card present", card);
-                Drawable bg = card.getBackground();
-                assertNotNull("settings card has a panel background", bg);
-                assertEquals("settings card uses the same shared EdgeGlassStyle panel",
-                        "PanelDrawable", bg.getClass().getSimpleName());
-
-                // Reachability: the row column has rows on the main page.
-                LinearLayout col = (LinearLayout) field(a, "settingsColumn");
-                assertNotNull("settings column present", col);
-                assertTrue("settings has rows", col.getChildCount() > 0);
+                return panel.isDetailVisible("appearance") && !panel.isTransitioning()
+                        && card != null && card.isShown() && card.hasFocus() ? card : null;
+            });
+            scenario.onActivity(a -> {
+                View sheet = (View) field(overlay, "card");
+                assertFeatherPanel(sheet, NativeTheme.px(a, 30));
+                assertEquals("native sheet width", NativeTheme.px(a, 440), sheet.getWidth());
+                assertTrue("sheet stays within the screen", sheet.getRight() <= overlay.getWidth());
+                View settings = (View) field(a, "settingsCard");
+                assertTrue("settings content belongs to the visible detail",
+                        isDescendant((View) field(overlay, "detail"), settings));
+                assertEquals("embedded content has one sheet background", null, settings.getBackground());
+                LinearLayout column = (LinearLayout) field(a, "settingsColumn");
+                assertEquals("four Appearance categories", 4, column.getChildCount());
+                for (int i = 0; i < column.getChildCount(); i++) {
+                    assertTrue("category is actionable", column.getChildAt(i).isClickable());
+                }
+                press(a, KeyEvent.KEYCODE_BACK);
+            });
+            awaitValue(scenario, "Appearance tile restored after Back", a -> {
+                ControlCenterPanel panel = (ControlCenterPanel) overlay;
+                View focused = a.getCurrentFocus();
+                return panel.isVisible() && !panel.isTransitioning()
+                        && !panel.isDetailVisible("appearance") && focused != null
+                        && "appearance".equals(focused.getTag()) ? focused : null;
+            });
+            scenario.onActivity(a -> {
+                press(a, KeyEvent.KEYCODE_BACK);
+                assertEquals(View.GONE, overlay.getVisibility());
+                assertSame("closing restores the toolbar anchor",
+                        field(a, "mapperBtnView"), a.getCurrentFocus());
             });
         }
+    }
+
+    private static void assertFeatherPanel(View view, int cornerRadius) {
+        assertTrue("Feather panel uses a native gradient", view.getBackground() instanceof GradientDrawable);
+        GradientDrawable background = (GradientDrawable) view.getBackground();
+        assertEquals("rounded native glass", cornerRadius, background.getCornerRadius(), 0.1f);
+        int[] colors = background.getColors();
+        assertNotNull("glass gradient colors", colors);
+        assertEquals("three-stop glass panel", 3, colors.length);
+        for (int color : colors) {
+            assertTrue("sheet provides readable contrast", Color.alpha(color) >= 220);
+            assertTrue("sheet remains translucent", Color.alpha(color) < 255);
+        }
+    }
+
+    private static boolean isDescendant(View ancestor, View child) {
+        for (android.view.ViewParent p = child.getParent(); p != null; p = p.getParent()) {
+            if (p == ancestor) return true;
+        }
+        return false;
+    }
+
+    private static void press(LauncherActivity a, int key) {
+        a.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
+        a.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
     }
 
     // ── minimal helpers (self-contained; no shared test infra to weaken) ──
@@ -166,7 +217,7 @@ public class EdgeGlassMenuTest {
         return awaitValue(scenario, "visible " + fieldName, activity -> {
             View view = (View) field(activity, fieldName);
             return view != null && view.getVisibility() == View.VISIBLE && view.isShown()
-                    ? view : null;
+                    && view.getWidth() > 0 && view.getHeight() > 0 ? view : null;
         });
     }
 

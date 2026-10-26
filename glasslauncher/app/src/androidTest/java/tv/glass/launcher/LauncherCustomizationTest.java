@@ -61,14 +61,25 @@ public class LauncherCustomizationTest {
     }
 
     @Test
-    public void contextMenu_forApp_exposesRename() {
+    public void contextMenu_forApp_exposesFeatherActionsAndOmitsLegacyCustomization() {
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
             View homeCell = focusHomeCell(scenario);
             scenario.onActivity(activity -> assertTrue(homeCell.performLongClick()));
 
-            View rename = awaitVisibleViewField(scenario, "menuRename");
-            assertNotNull(rename);
+            awaitVisibleViewField(scenario, "menuOverlay");
+            scenario.onActivity(activity -> {
+                for (String name : new String[]{"menuMove", "menuHide", "menuAppInfo"}) {
+                    View row = (View) field(activity, name);
+                    assertTrue(name + " is shown", row.isShown());
+                    assertTrue(name + " is actionable", row.isClickable());
+                }
+                for (String name : new String[]{"menuRename", "menuChangeIcon",
+                        "menuResetIcon", "menuUninstall"}) {
+                    assertEquals(name + " is deliberately removed from the menu",
+                            View.GONE, ((View) field(activity, name)).getVisibility());
+                }
+            });
         }
     }
 
@@ -178,14 +189,14 @@ public class LauncherCustomizationTest {
     @Test
     public void settingsCategoryHub_groupsExistingActionsAndTitlesPages() {
         try (ActivityScenario<LauncherActivity> scenario = launchSettledLauncher()) {
+            scenario.onActivity(activity -> invoke(activity, "showSettingsPanel"));
+            awaitEmbeddedSettings(scenario);
             scenario.onActivity(activity -> {
-                invoke(activity, "showSettingsPanel");
                 assertSettingsPage(activity, R.string.settings_title_main,
                         R.string.settings_row_appearance_menu,
                         R.string.settings_row_wallpaper_menu,
                         R.string.settings_row_apps_menu,
-                        R.string.settings_row_device_menu,
-                        R.string.settings_row_system_settings);
+                        R.string.settings_row_device_menu);
                 assertEquals(activity.getString(R.string.settings_hint_open),
                         ((android.widget.TextView) field(activity, "settingsHintView"))
                                 .getText().toString());
@@ -201,8 +212,7 @@ public class LauncherCustomizationTest {
                         R.string.settings_row_appearance_menu,
                         R.string.settings_row_wallpaper_menu,
                         R.string.settings_row_apps_menu,
-                        R.string.settings_row_device_menu,
-                        R.string.settings_row_system_settings);
+                        R.string.settings_row_device_menu);
                 assertEquals(2, ((Integer) field(activity, "settingsSelectedRow")).intValue());
 
                 invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
@@ -223,6 +233,28 @@ public class LauncherCustomizationTest {
                 invoke(activity, "handleSettingsKey", new Class<?>[] {int.class},
                         KeyEvent.KEYCODE_BACK);
                 assertEquals(3, ((Integer) field(activity, "settingsSelectedRow")).intValue());
+                invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
+                        staticField(LauncherActivity.class, "SR_WALLPAPER_MENU"));
+                assertSettingsPage(activity, R.string.settings_title_wallpaper,
+                        R.string.settings_row_ambient_background,
+                        R.string.settings_row_system_wallpaper,
+                        R.string.settings_row_set_wallpaper,
+                        R.string.settings_row_slideshow_folder,
+                        R.string.settings_row_slideshow_duration,
+                        R.string.settings_row_slideshow_restart,
+                        R.string.settings_row_idle_hide);
+                invoke(activity, "handleSettingsKey", new Class<?>[] {int.class}, KeyEvent.KEYCODE_BACK);
+                assertEquals(1, ((Integer) field(activity, "settingsSelectedRow")).intValue());
+                invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
+                        staticField(LauncherActivity.class, "SR_DEVICE_MENU"));
+                invoke(activity, "activateSettingsRowId", new Class<?>[] {int.class},
+                        staticField(LauncherActivity.class, "SR_BACKUP_MENU"));
+                assertSettingsPage(activity, R.string.settings_title_backup,
+                        R.string.settings_row_backup, R.string.settings_row_restore);
+                invoke(activity, "handleSettingsKey", new Class<?>[] {int.class}, KeyEvent.KEYCODE_BACK);
+                assertSettingsPage(activity, R.string.settings_title_device,
+                        R.string.settings_row_launcher_setup_menu, R.string.settings_row_backup_menu);
+                assertEquals(1, ((Integer) field(activity, "settingsSelectedRow")).intValue());
             });
         }
     }
@@ -239,7 +271,10 @@ public class LauncherCustomizationTest {
             ViewGroup row = (ViewGroup) column.getChildAt(i);
             android.widget.TextView label = (android.widget.TextView) row.getChildAt(0);
             String text = label.getText().toString();
-            assertEquals(activity.getString(rowLabelResources[i]), text.split("\\n", 2)[0]);
+            String expectedLabel = titleRes == R.string.settings_title_main
+                    && rowLabelResources[i] == R.string.settings_row_appearance_menu
+                    ? "Layout & style" : activity.getString(rowLabelResources[i]);
+            assertEquals(expectedLabel, text.split("\\n", 2)[0]);
             android.widget.LinearLayout.LayoutParams labelParams =
                     (android.widget.LinearLayout.LayoutParams) label.getLayoutParams();
             assertEquals(0, labelParams.width);
@@ -288,7 +323,7 @@ public class LauncherCustomizationTest {
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
             scenario.onActivity(activity -> invoke(activity, "showSettingsPanel"));
-            awaitVisibleViewField(scenario, "settingsOverlay");
+            awaitEmbeddedSettings(scenario);
 
             scenario.onActivity(activity -> invoke(activity, "activateSettingsRowId",
                     new Class<?>[] {int.class},
@@ -365,7 +400,7 @@ public class LauncherCustomizationTest {
     }
 
     @Test
-    public void fourColumnLayout_demotesOverflowFavoritesAndUsesFiveByThreeCards() {
+    public void fourColumnLayout_demotesOverflowFavoritesAndUsesSixteenByNineCards() {
         Context context = getInstrumentation().getTargetContext();
         String prefsName = (String) staticField(LauncherActivity.class, "PREFS");
         String columnsKey = (String) staticField(LauncherActivity.class, "KEY_LAYOUT_COLUMNS");
@@ -408,8 +443,8 @@ public class LauncherCustomizationTest {
                 assertEquals("shelf renders four favorites", 4, displayed.size());
                 int tileWidth = (Integer) field(activity, "tileWpx");
                 int tileHeight = (Integer) field(activity, "bannerHpx");
-                assertEquals("cards use 5:3 geometry", tileWidth * 3,
-                        tileHeight * 5, 2);
+                assertEquals("Feather cards use 16:9 geometry", tileWidth * 9,
+                        tileHeight * 16, 8);
                 assertEquals("zero percent gives square corners", 0,
                         ((Integer) field(activity, "tileCornerPx")).intValue());
             });
@@ -431,17 +466,14 @@ public class LauncherCustomizationTest {
     public void drawerBlurCrossfade_reachesBlurredAndSharpEndStates() {
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                awaitValue(scenario, "loaded wallpaper drawable", activity -> {
-                    ImageView wallpaper = (ImageView) field(activity, "wallpaperFront");
-                    return wallpaper.getDrawable() != null ? wallpaper : null;
-                });
-            }
-
             scenario.onActivity(activity -> {
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                    Bitmap preview = Bitmap.createBitmap(160, 90, Bitmap.Config.ARGB_8888);
-                    preview.eraseColor(0xFF315A82);
+                setField(activity, "systemWallpaper", false);
+                Bitmap preview = Bitmap.createBitmap(160, 90, Bitmap.Config.ARGB_8888);
+                preview.eraseColor(0xFF315A82);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    ImageView wallpaper = (ImageView) field(activity, "wallpaperFront");
+                    wallpaper.setImageBitmap(preview);
+                } else {
                     setField(activity, "legacyGridBlurBitmap", preview);
                 }
                 View layer = (View) field(activity, "drawerBlurLayer");
@@ -473,7 +505,7 @@ public class LauncherCustomizationTest {
     }
 
     @Test
-    public void favoritesGlass_matchesHomeAndGridAcrossBlurPaths() {
+    public void favoritesGlass_preservesFeatherContrastAndRestoresHomeAcrossBlurPaths() {
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
             View blurLayer = awaitVisibleViewField(scenario, "favoritesBlurLayer");
@@ -521,13 +553,16 @@ public class LauncherCustomizationTest {
                         field(drawer, "favoritesGlass");
                 int[] homeFill = (int[]) field(homeGlass, "fillColors");
                 int[] gridFill = (int[]) field(gridGlass, "fillColors");
-                int[] homeInner = (int[]) field(homeGlass, "innerEdgeColors");
-                int[] gridInner = (int[]) field(gridGlass, "innerEdgeColors");
-                assertTrue("grid glass should be quieter than Home",
+                // Feather's drawer uses a darker, stronger plate than Home.
+                // Compare the rendered lower fill, away from the rounded rim.
+                assertTrue("grid plate has stronger contrast than Home",
                         Color.alpha(gridFill[gridFill.length - 1])
-                                < Color.alpha(homeFill[homeFill.length - 1]));
-                assertTrue("grid inner reflection should be quieter than Home",
-                        Color.alpha(gridInner[0]) < Color.alpha(homeInner[0]));
+                                > Color.alpha(homeFill[homeFill.length - 1]));
+                int homePixel = drawablePixel(homeGlass);
+                int gridPixel = drawablePixel(gridGlass);
+                assertTrue("Home plate draws translucent pixels", Color.alpha(homePixel) > 0);
+                assertTrue("grid plate draws stronger contrast", Color.alpha(gridPixel) > Color.alpha(homePixel));
+                assertTrue("grid plate has a dark tint", Color.red(gridPixel) < Color.red(homePixel));
                 invoke(activity, "closeDrawer");
             });
 
@@ -738,7 +773,7 @@ public class LauncherCustomizationTest {
                 scenario.onActivity(activity -> assertFavoritesBackground(activity, true));
 
                 scenario.onActivity(activity -> invoke(activity, "showSettingsPanel"));
-                awaitVisibleViewField(scenario, "settingsOverlay");
+                awaitEmbeddedSettings(scenario);
                 scenario.onActivity(activity -> invoke(activity, "activateSettingsRowId",
                         new Class<?>[] {int.class},
                         staticField(LauncherActivity.class, "SR_APPEARANCE_MENU")));
@@ -866,7 +901,7 @@ public class LauncherCustomizationTest {
     }
 
     @Test
-    public void gridFocusStaysAnchoredForSingleStepAndHeldNavigation() {
+    public void gridFocus_keepsHorizontalAnchorAndFeatherLiftForSingleStepAndHeldNavigation() {
         try (ActivityScenario<LauncherActivity> scenario =
                      launchSettledLauncher()) {
             focusHomeCell(scenario);
@@ -897,15 +932,16 @@ public class LauncherCustomizationTest {
                 assertEquals(target, ((Integer) field(focused, "boundIndex")).intValue());
                 assertEquals("single-step focus must not move the card",
                         0f, focused.getTranslationX(), 0.1f);
-                assertEquals("single-step focus must not move the card",
-                        0f, focused.getTranslationY(), 0.1f);
+                assertTrue("focus animation stays within Feather's vertical lift",
+                        focused.getTranslationY() <= 0.1f
+                                && focused.getTranslationY() >= -NativeTheme.px(activity, 8) - 0.1f);
                 focusedCell.set(focused);
             });
 
-            View settledCell = awaitValue(scenario, "settled anchored focus scale",
+            View settledCell = awaitValue(scenario, "settled Feather focus scale and lift",
                     activity -> Math.abs(focusedCell.get().getTranslationX()) < 0.1f
-                            && Math.abs(focusedCell.get().getTranslationY()) < 0.1f
-                            && Math.abs(focusedCell.get().getScaleX() - 1.10f) < 0.01f
+                            && Math.abs(focusedCell.get().getTranslationY() + NativeTheme.px(activity, 8)) < 0.1f
+                            && Math.abs(focusedCell.get().getScaleX() - 1.075f) < 0.01f
                             ? focusedCell.get() : null);
 
             scenario.onActivity(activity -> {
@@ -923,9 +959,11 @@ public class LauncherCustomizationTest {
                         new Class<?>[] {int.class, boolean.class}, target, true);
                 View focused = activity.getWindow().getDecorView().findFocus();
                 assertNotNull(focused);
+                assertEquals(target, ((Integer) field(focused, "boundIndex")).intValue());
+                assertTrue("held navigation keeps real focus on the target", focused.isFocused());
                 assertEquals(0f, focused.getTranslationX(), 0.1f);
-                assertEquals(0f, focused.getTranslationY(), 0.1f);
-                assertEquals(1.10f, focused.getScaleX(), 0.01f);
+                assertEquals(-NativeTheme.px(activity, 8), focused.getTranslationY(), 0.1f);
+                assertEquals(1.075f, focused.getScaleX(), 0.01f);
             });
         }
     }
@@ -985,7 +1023,9 @@ public class LauncherCustomizationTest {
                 View ring = (View) field(activity, "ringView");
                 return ring != null
                         && ring.getVisibility() == View.VISIBLE
-                        && Math.abs(homeCell.getScaleX() - 1.10f) < 0.01f
+                        && homeCell.isFocused()
+                        && Math.abs(homeCell.getScaleX() - 1.075f) < 0.01f
+                        && Math.abs(homeCell.getTranslationY() + NativeTheme.px(activity, 8)) < 0.1f
                         && Math.abs(homeCell.getTranslationZ() - expectedShadow) < 0.6f
                         ? homeCell : null;
             });
@@ -1014,13 +1054,18 @@ public class LauncherCustomizationTest {
             scenario.onActivity(activity -> invoke(activity, "openDrawer"));
             View gridCell = awaitFocusedCell(scenario, "DrawerCell");
             awaitValue(scenario, "grid tile focus visuals", activity ->
-                    Math.abs(gridCell.getScaleX() - 1.10f) < 0.01f
+                    gridCell.isFocused()
+                            && Math.abs(gridCell.getScaleX() - 1.075f) < 0.01f
+                            && Math.abs(gridCell.getTranslationY() + NativeTheme.px(activity, 8)) < 0.1f
                             && Math.abs(gridCell.getTranslationZ() - expectedShadow) < 0.6f
                             ? gridCell : null);
 
             scenario.onActivity(activity -> gridCell.setFocusable(false));
             awaitValue(scenario, "shadow removed from blurred grid tile", activity ->
-                    Math.abs(gridCell.getTranslationZ()) < 0.1f ? gridCell : null);
+                    !gridCell.isFocused()
+                            && Math.abs(gridCell.getTranslationZ()) < 0.1f
+                            && Math.abs(gridCell.getTranslationY()) < 0.1f
+                            && Math.abs(gridCell.getScaleX() - 1f) < 0.01f ? gridCell : null);
         } finally {
             SharedPreferences.Editor restore = preferences.edit();
             if (hadBorder) restore.putBoolean(borderKey, oldBorder);
@@ -1315,6 +1360,29 @@ public class LauncherCustomizationTest {
             SystemClock.sleep(50);
         } while (SystemClock.uptimeMillis() < deadline);
         fail("Timed out waiting for a backup holding " + identity);
+    }
+
+    /** Wait for the visible owner instead of the detached legacy settings overlay. */
+    private static View awaitEmbeddedSettings(ActivityScenario<LauncherActivity> scenario) {
+        return awaitValue(scenario, "settled Appearance content in Control Center", activity -> {
+            ControlCenterPanel panel = (ControlCenterPanel) field(activity, "controlCenter");
+            View card = (View) field(activity, "settingsCard");
+            return panel != null && panel.isDetailVisible("appearance") && !panel.isTransitioning()
+                    && card != null && card.isShown() && card.hasFocus() ? card : null;
+        });
+    }
+
+    private static int drawablePixel(android.graphics.drawable.Drawable drawable) {
+        android.graphics.Rect bounds = new android.graphics.Rect(drawable.getBounds());
+        Bitmap sample = Bitmap.createBitmap(200, 100, Bitmap.Config.ARGB_8888);
+        try {
+            drawable.setBounds(0, 0, 200, 100);
+            drawable.draw(new android.graphics.Canvas(sample));
+            return sample.getPixel(100, 75);
+        } finally {
+            drawable.setBounds(bounds);
+            sample.recycle();
+        }
     }
 
     /** Text of the Favorites background row: child 0 is the label, 1 the value. */
