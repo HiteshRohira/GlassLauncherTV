@@ -335,7 +335,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private fun deviceName(): String =
         Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
-            ?.takeIf { it.isNotBlank() } ?: "Glass TV"
+            ?.takeIf { it.isNotBlank() } ?: "Mirage"
 
     private fun _registerNetworkCallback() {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return

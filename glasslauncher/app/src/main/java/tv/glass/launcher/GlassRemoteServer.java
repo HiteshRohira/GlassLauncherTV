@@ -180,7 +180,7 @@ final class GlassRemoteServer implements AutoCloseable {
                 // code itself changes after every pairing and is never put in
                 // a URL. Without a valid token, start_url is omitted.
                 String install=queryValue(query,"install");
-                JSONObject manifest=new JSONObject().put("id","/").put("name","Glass TV Remote").put("short_name","Glass Remote");
+                JSONObject manifest=new JSONObject().put("id","/").put("name","Mirage Remote").put("short_name","Mirage Remote");
                 if(installValid(install))manifest.put("start_url","/?install="+install);
                 manifest.put("scope","/").put("display","standalone").put("orientation","portrait")
                     .put("background_color","#121319").put("theme_color","#121319")

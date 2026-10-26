@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Glass Launcher</string>
+    <string name="app_name">Mirage</string>
 
     <!-- Accessibility / TalkBack content descriptions for non-text UI -->
     <string name="cd_app_shelf">App shelf</string>
@@ -14,7 +14,7 @@
     <string name="airplay_channel">AirPlay and phone remote</string>
     <string name="airplay_banner_title">AirPlay isn\'t available</string>
     <string name="remote_lockout">Someone tried several wrong phone remote codes. Pairing is paused for 15 minutes.</string>
-    <string name="airplay_banner_body">Glass is restarting it. If this continues, open Control Center → AirPlay.</string>
+    <string name="airplay_banner_body">Mirage is restarting it. If this continues, open Control Center → AirPlay.</string>
     <!-- Gear toolbar pill (v1.3.0). Short-press opens the unified
          settings panel; long-press opens system Settings directly.
          Replaced the v1.2.x wallpaper pill and standalone remap-remote
@@ -109,7 +109,7 @@
     <string name="settings_row_backup">Back up settings</string>
     <string name="settings_row_restore">Restore settings</string>
     <string name="settings_row_launcher_setup_menu">Default home</string>
-    <string name="settings_row_launcher_activate">Use Glass Launcher as Home</string>
+    <string name="settings_row_launcher_activate">Use Mirage as Home</string>
     <string name="settings_row_launcher_restore">Restore Google TV Home</string>
     <string name="google_tv_status_active">Active</string>
     <string name="google_tv_status_partial">Repair</string>
@@ -119,8 +119,8 @@
 
     <!-- Sideload-only Google TV setup. Commands run over the TV's own local
          ADB daemon after the user accepts Android's authorization dialog. -->
-    <string name="google_tv_setup_title">Set up Glass Launcher as Home</string>
-    <string name="google_tv_setup_message">First enable Network debugging in Developer options. Then continue and accept the one-time debugging authorization prompt.\n\nGlass Launcher will become the system Home app and disable Google TV Home. This also removes the Google TV quick-settings sidebar. The change survives normal restarts.</string>
+    <string name="google_tv_setup_title">Set up Mirage as Home</string>
+    <string name="google_tv_setup_message">First enable Network debugging in Developer options. Then continue and accept the one-time debugging authorization prompt.\n\nMirage will become the system Home app and disable Google TV Home. This also removes the Google TV quick-settings sidebar. The change survives normal restarts.</string>
     <string name="google_tv_setup_confirm">Set up</string>
     <string name="google_tv_restore_title">Restore Google TV Home</string>
     <string name="google_tv_restore_message">This re-enables the Google TV launcher and setup packages. You may be asked which Home app to use the next time you press Home.</string>
@@ -191,7 +191,7 @@
     <string name="toast_backup_failed">Couldn\'t save the backup</string>
     <string name="toast_restore_done">Settings restored</string>
     <string name="toast_restore_failed">Couldn\'t read the backup file</string>
-    <string name="toast_restore_invalid">Not a valid Glass Launcher backup</string>
+    <string name="toast_restore_invalid">Not a valid Mirage backup</string>
 
     <!-- Wallpaper slideshow. -->
     <string name="toast_slideshow_folder_set">Slideshow folder set</string>

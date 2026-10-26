@@ -230,7 +230,7 @@
             </intent-filter>
         </receiver>
 
-        <service android:name=".GlassRemoteInputMethod" android:label="Glass phone keyboard"
+        <service android:name=".GlassRemoteInputMethod" android:label="Mirage phone keyboard"
             android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true" android:process=":airplay">
             <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/remote_input_method" />

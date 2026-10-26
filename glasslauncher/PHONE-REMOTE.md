@@ -1,7 +1,6 @@
-# Glass phone remote
+# Mirage phone remote
 
-This document describes `1.1.8-airplay.9` on `feature/apk-size-focus`.
-Glass serves its remote at `http://<TV-IP>:48633/` on the home network.
+Mirage serves its remote at `http://<TV-IP>:48633/` on the home network.
 
 1. Open Control Center → Phone remote and scan the QR code.
 2. Enable TV controls and approve Android's debugging authorization on the TV.
@@ -15,7 +14,7 @@ revokes all devices and unused install links. The remote can also be turned off.
 
 The remote supports directions, OK/long-press, Home, Back, playback, volume and
 Unicode text entry through an Android input method. Custom app editors may not
-accept that text. Glass journals and restores the previous keyboard.
+accept that text. Mirage journals and restores the previous keyboard.
 
 The bounded HTTP server and bundled web assets run alongside the integrated
 AirPlay receiver. Requests are authenticated and rate-limited; commands use an

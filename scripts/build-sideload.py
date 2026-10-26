@@ -68,7 +68,7 @@ def main():
     if (output / f"manifest-{args.profile}.json").exists():
         raise SystemExit("Output manifest exists; choose a new output directory")
     for abi in ("armeabi-v7a", "arm64-v8a", "universal"):
-        if (output / f"GlassLauncher-{version}-{abi}-{args.profile}.apk").exists():
+        if (output / f"Mirage-{version}-{abi}-{args.profile}.apk").exists():
             raise SystemExit("Output exists; choose a new output directory")
     if not args.no_build:
         run([args.gradle, "--no-daemon", "--max-workers=4",
@@ -104,7 +104,7 @@ def main():
         badging = run([tools / "aapt2", "dump", "badging", source], capture_output=True, text=True).stdout
         if not badging.startswith(f"package: name='{package}' versionCode='{code}' versionName='{version}'"):
             raise SystemExit("Actual APK identity differs from source/metadata")
-        destination = output / f"GlassLauncher-{version}-{abi}-{args.profile}.apk"
+        destination = output / f"Mirage-{version}-{abi}-{args.profile}.apk"
         with tempfile.TemporaryDirectory(prefix=".signing-", dir=output) as temporary:
             signed = Path(temporary) / "signed.apk"
             run([signer, "sign", "--ks", args.keystore or args.key_dir / "glass-release.jks",

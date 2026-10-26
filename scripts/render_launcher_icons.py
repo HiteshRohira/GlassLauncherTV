@@ -6,7 +6,7 @@
 # This script draws the same composition with numpy for the legacy
 # square PNGs (res/mipmap-*/ic_launcher.png, 48-192 px), and writes the
 # Android TV banner (res/drawable/banner.xml) as a vector that reuses the
-# foreground artwork plus the two-line "Glass Launcher" wordmark as glyph
+# foreground artwork plus the "Mirage" wordmark as glyph
 # outlines.
 #
 # Geometry is in the 108-unit adaptive-icon canvas. A frosted 5:3 glass
@@ -164,7 +164,7 @@ ANDROID = "http://schemas.android.com/apk/res/android"
 AAPT = "http://schemas.android.com/aapt"
 BANNER_W, BANNER_H = 320.0, 180.0
 GLYPH_BOX = (23.0, 28.0, 81.0, 80.0)
-WORD_LINES = ("Glass", "Launcher")
+WORD_LINES = ("Mirage",)
 WORD_SIZE = 40.0
 WORD_LEADING = 1.08
 WORD_WEIGHT = 300

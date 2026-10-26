@@ -189,7 +189,7 @@ final class ControlCenterPanel extends FrameLayout {
             case "connecting":return "An Apple device is connecting.";
             default:break;
         }
-        if(s.state==AirPlayStatus.State.FAILED)return "Your devices can’t see this TV right now. Glass keeps retrying; Restart usually fixes it.";
+        if(s.state==AirPlayStatus.State.FAILED)return "Your devices can’t see this TV right now. Mirage keeps retrying; Restart usually fixes it.";
         return "On your iPhone, open Control Center → Screen Mirroring and choose “"+name+"”.";
     }
     static int airColor(AirPlayMonitorService.Snapshot s){

@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "GlassLauncher"
+rootProject.name = "Mirage"
 include(":app", ":airplay")
