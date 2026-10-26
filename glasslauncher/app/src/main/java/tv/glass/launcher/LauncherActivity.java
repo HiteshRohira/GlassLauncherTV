@@ -2748,7 +2748,12 @@ public class LauncherActivity extends Activity {
     public void onBackPressed() {
         if (btPanel != null && btPanel.isVisible()) { btPanel.handleKeyDown(KeyEvent.KEYCODE_BACK); return; }
         if (controlCenter != null && controlCenter.isVisible()
-                && (settingsOverlay == null || settingsOverlay.getVisibility()!=View.VISIBLE)) {controlCenter.hide();return;}
+                && (settingsOverlay == null || settingsOverlay.getVisibility()!=View.VISIBLE)) {
+            if(controlCenter.isTransitioning())return;
+            if(embeddedSettings && controlCenter.isDetailVisible("appearance"))handleSettingsKey(KeyEvent.KEYCODE_BACK);
+            else controlCenter.key(KeyEvent.KEYCODE_BACK);
+            return;
+        }
         FrameLayout fp = folderPickerOverlay;
         if (fp != null && fp.getVisibility() == View.VISIBLE) {
             hideFolderPicker(); return;
@@ -4292,7 +4297,13 @@ public class LauncherActivity extends Activity {
         if (btPanel == null) {
             btPanel = new BluetoothPanel(this, new BluetoothPanel.Host() {
                 @Override public FrameLayout root() { return root; }
-                @Override public View anchor() { return btBtn; }
+                @Override public View anchor() {
+                    // hide() asks for its anchor after onPanelHidden has
+                    // already reopened Control Center. Keep that restored
+                    // tile focused instead of moving back behind the sheet.
+                    return controlCenter!=null && controlCenter.isVisible()
+                            ? controlCenter.findFocus() : btBtn;
+                }
                 @Override public Interpolator menuIn() { return MENU_IN; }
                 @Override public Interpolator menuOut() { return MENU_OUT; }
                 @Override public boolean isLetThroughKey(int kc) {
@@ -7986,6 +7997,9 @@ public class LauncherActivity extends Activity {
             return super.dispatchKeyEvent(event);
         }
         if (embeddedSettings && controlCenter != null && controlCenter.isDetailVisible("appearance")) {
+            // Keep the custom Appearance navigator attached when Back arrives
+            // during its entrance slide; backToControls cannot run yet.
+            if(controlCenter.isTransitioning() && !isLetThroughKey(event.getKeyCode()))return true;
             if (event.getAction()==KeyEvent.ACTION_DOWN && handleSettingsKey(event.getKeyCode())) return true;
             if (!isLetThroughKey(event.getKeyCode())) return true;
         }
@@ -8025,13 +8039,16 @@ public class LauncherActivity extends Activity {
             return true;
         }
         if (controlCenter != null && controlCenter.isVisible()) {
+            // Device controls must pass both edges even during page slides.
+            if (isLetThroughKey(event.getKeyCode())) return super.dispatchKeyEvent(event);
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 if (controlCenter.key(event.getKeyCode())) return true;
-                // Match the other modal panels: only device-control keys may
-                // pass through to Android while the sheet owns navigation.
-                return isLetThroughKey(event.getKeyCode()) ? super.dispatchKeyEvent(event) : true;
             }
-            return isLetThroughKey(event.getKeyCode()) ? super.dispatchKeyEvent(event) : true;
+            // Native widgets need DOWN and UP (e.g. SeekBar arrows and
+            // Button clicks). Dispatch inside the sheet, so an unhandled
+            // boundary key cannot start the window's global focus search.
+            if(controlCenter.dispatchAppearanceWidgetKey(event))return true;
+            return true;
         }
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && event.getRepeatCount() == 0

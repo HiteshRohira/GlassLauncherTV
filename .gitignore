@@ -54,3 +54,6 @@ Desktop.ini
 *.hprof
 test-results/
 reports/
+
+# Isolated native-size comparison outputs
+.build/

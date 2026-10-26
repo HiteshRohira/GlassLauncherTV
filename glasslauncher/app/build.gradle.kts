@@ -502,8 +502,8 @@ android {
         // Glass 1.1.7-airplay.8 / 23: fixes from the two Glass TV code reviews
         // (phone-remote pairing, UxPlay httpd/HLS hardening, audio and video
         // pipeline, launcher reliability). See git history on fix/review-backlog.
-        versionCode   = 23
-        versionName   = "1.1.7-airplay.8"
+        versionCode   = 24
+        versionName   = "1.1.8-airplay.9"
         resourceConfigurations += listOf("en")
 
         // Instrumentation test runner. Required so :app:connectedDebugAndroidTest
@@ -518,7 +518,18 @@ android {
         ndk {
             // Glass: -PtvAbiOnly builds ARMv7 only (this TV's 32-bit userspace) for a
             // smaller APK and faster build; the default keeps ARM64 for emulators.
-            abiFilters += if (project.hasProperty("tvAbiOnly")) listOf("armeabi-v7a") else listOf("armeabi-v7a", "arm64-v8a")
+            abiFilters += rootProject.extra["glassAbis"] as List<String>
+        }
+    }
+
+    // Standalone APKs are simple to sideload; all variants share one identity,
+    // version and signing key. A universal is opt-in for comparison/recovery.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include(*(rootProject.extra["glassAbis"] as List<String>).toTypedArray())
+            isUniversalApk = providers.gradleProperty("universalApk").getOrElse("false").toBooleanStrict()
         }
     }
 

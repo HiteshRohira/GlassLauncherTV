@@ -19,12 +19,15 @@ android {
         ndk {
             // Glass: -PtvAbiOnly builds ARMv7 only (this TV's 32-bit userspace) for a
             // smaller APK and faster build; the default keeps ARM64 for emulators.
-            abiFilters += if (project.hasProperty("tvAbiOnly")) listOf("armeabi-v7a") else listOf("armeabi-v7a", "arm64-v8a")
+            abiFilters += rootProject.extra["glassAbis"] as List<String>
         }
         externalNativeBuild {
             cmake {
                 arguments += "-DANDROID_STL=c++_shared"
                 arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+                val profile = rootProject.extra["glassNativeProfile"] as String
+                arguments += "-DGLASS_HIDE_INTERNAL_SYMBOLS=${if (profile == "baseline") "OFF" else "ON"}"
+                arguments += "-DGLASS_CRYPTO_SIZE_OPT=${if (profile == "crypto-size") "ON" else "OFF"}"
             }
         }
     }
@@ -33,6 +36,7 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.31.6"
+            buildStagingDirectory = file(".cxx/${rootProject.extra["glassNativeProfile"]}")
         }
     }
 

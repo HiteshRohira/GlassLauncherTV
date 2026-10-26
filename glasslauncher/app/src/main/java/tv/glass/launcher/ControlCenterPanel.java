@@ -54,6 +54,7 @@ final class ControlCenterPanel extends FrameLayout {
         setBackgroundColor(0x40000000);
     }
     boolean isVisible(){return getVisibility()==VISIBLE;}
+    boolean isTransitioning(){return sliding;}
     boolean isDetailVisible(String key){return isVisible() && key.equals(detailKey);}
     void show(View anchor,String key){ show(anchor,key,true); }
     /** {@code animate=false} when returning from the Bluetooth sheet, which
@@ -222,6 +223,17 @@ final class ControlCenterPanel extends FrameLayout {
         }).start();
     }
     private void rebuildKeepingPosition(){rebuild();restoreFocus();}
+    /** Dispatch both edges to native Appearance widgets without letting the
+     *  window's fallback focus search reach the home screen at a slider edge. */
+    boolean dispatchAppearanceWidgetKey(KeyEvent event){
+        if(!isDetailVisible("appearance") || sliding)return false;
+        switch(event.getKeyCode()){
+            case KeyEvent.KEYCODE_DPAD_LEFT:case KeyEvent.KEYCODE_DPAD_RIGHT:
+            case KeyEvent.KEYCODE_DPAD_CENTER:case KeyEvent.KEYCODE_ENTER:case KeyEvent.KEYCODE_BUTTON_A:
+                super.dispatchKeyEvent(event);return true;
+            default:return false;
+        }
+    }
     boolean key(int key){
         if(sliding)return true;
         if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE){if(detailKey!=null)backToControls();else hide();return true;}

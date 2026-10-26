@@ -14,7 +14,15 @@ set(BUILD_OPENSSL ON CACHE BOOL "" FORCE)
 set(OPENSSL_BUILD_VERSION "3.4.4" CACHE STRING "" FORCE)
 set(CROSS_ANDROID ON CACHE BOOL "" FORCE)
 string(REGEX MATCH "[0-9]+" AIRPLAY_ANDROID_API "${ANDROID_PLATFORM}")
-set(OPENSSL_PARAMS "-D__ANDROID_API__=${AIRPLAY_ANDROID_API}" CACHE STRING "" FORCE)
+option(GLASS_HIDE_INTERNAL_SYMBOLS "Only export the receiver JNI API" ON)
+option(GLASS_CRYPTO_SIZE_OPT "Measure OpenSSL size optimization without removing algorithms" OFF)
+set(GLASS_OPENSSL_FLAGS "-D__ANDROID_API__=${AIRPLAY_ANDROID_API}")
+if(GLASS_CRYPTO_SIZE_OPT)
+    string(APPEND GLASS_OPENSSL_FLAGS " -Os")
+endif()
+set(OPENSSL_PARAMS "${GLASS_OPENSSL_FLAGS}" CACHE STRING "" FORCE)
+# Keep linkage explicit so a stale static preference cannot silently change it.
+set(OPENSSL_USE_STATIC_LIBS OFF CACHE STRING "" FORCE)
 set(FORWARD_ANDROID_NDK_ROOT "${ANDROID_NDK}" CACHE STRING "" FORCE) # CI
 
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
@@ -157,3 +165,19 @@ target_link_libraries(airplay_native
     log
     android
 )
+
+# Static codec/parser dependencies are implementation details, not a public ABI.
+# JNIEXPORT retains default visibility for the Java entrypoints. Keep unwind
+# information, shared libc++, Oboe, crypto and all codec fallbacks unchanged.
+if(GLASS_HIDE_INTERNAL_SYMBOLS)
+    foreach(target airplay_native plist llhttp playfair)
+        set_target_properties(${target} PROPERTIES
+            C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN YES)
+    endforeach()
+    target_link_options(airplay_native PRIVATE
+        "-Wl,--exclude-libs,ALL"
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/airplay.exports")
+    set_property(TARGET airplay_native APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/airplay.exports")
+endif()
