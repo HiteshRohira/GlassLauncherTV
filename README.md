@@ -12,13 +12,22 @@ installation remains a separate approval step.
 
 Mirage replaces the stock Google TV home with a calm, glass-styled launcher: a clock, an ambient background that takes its colour from the app you're on, and one row of favourite apps. Everything else stays out of the way until you ask for it. It has no ads, recommendations, accounts or telemetry.
 
-## Screenshots
+<details>
+<summary>More screenshots</summary>
 
-| Home |
-| --- |
-| ![Home](docs/screenshots/home.png) |
+### Control Center
 
-`main` contains `1.1.7-airplay.8` (version code 23), the build currently installed on the reference TV, including the review-backlog fixes. `fix/side-panel-focus` contains an additional focus fix awaiting testing; it is not included in this version.
+![Control Center](docs/screenshots/control-center.png)
+
+### AirPlay
+
+![AirPlay settings](docs/screenshots/airplay.png)
+
+### Appearance
+
+![Appearance settings](docs/screenshots/appearance.png)
+
+</details>
 
 ## Features
 
