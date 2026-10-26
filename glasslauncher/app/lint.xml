@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Lint baseline configuration for Glass Launcher.
+  Lint baseline configuration for Mirage.
 
   Philosophy: lint runs on every build and fails on real errors. Issues
   that would require invasive refactoring are downgraded to warnings (not

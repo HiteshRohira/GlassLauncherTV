@@ -64,7 +64,7 @@ final class CrashLogger {
 
     /**
      * Install the default uncaught-exception handler. Idempotent: a second
-     * call detects an already-installed Glass Launcher handler and is a
+     * call detects an already-installed Mirage handler and is a
      * no-op (so the activity can call this from {@code onCreate} on
      * every config-change rebirth without piling up handlers).
      */

@@ -1,12 +1,30 @@
-# Glass TV
+# Mirage
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="Mirage home screen" width="45%"/>
+  &nbsp;
+  <img src="docs/screenshots/control-center.png" alt="Mirage Control Center" width="45%"/>
+</p>
 
 **A fast, quiet home screen for Android TV with AirPlay built in.**
 
-The current installed reference build is `1.1.7-airplay.8` on
-`fix/review-backlog`. `main` contains `1.1.6-airplay.7` plus source cleanup;
-`fix/side-panel-focus` contains an additional focus fix awaiting testing.
+Mirage replaces the stock Google TV home with a calm, glass-styled launcher: a clock, an ambient background that takes its colour from the app you're on, and one row of favourite apps. Everything else stays out of the way until you ask for it. It has no ads, recommendations, accounts or telemetry.
 
-Glass TV replaces the stock Google TV home with a calm, glass-styled launcher: a clock, an ambient background that takes its colour from the app you're on, and one row of favourite apps. Everything else stays out of the way until you ask for it. It has no ads, recommendations, accounts or telemetry.
+## Screenshots
+
+| Home | All apps |
+| --- | --- |
+| ![Home](docs/screenshots/home.png) | ![All apps](docs/screenshots/all-apps.png) |
+
+| Control Center | Bluetooth |
+| --- | --- |
+| ![Control Center](docs/screenshots/control-center.png) | ![Bluetooth](docs/screenshots/bluetooth.png) |
+
+| AirPlay | Phone remote |
+| --- | --- |
+| ![AirPlay](docs/screenshots/airplay.png) | ![Phone remote](docs/screenshots/phone-remote.png) |
+
+Branch state: `main` carries the integrated source (`1.1.6-airplay.7` plus cleanup); `fix/review-backlog` carries a newer build (`1.1.7-airplay.8`) that has not landed on `main` yet and is the version running on the reference TV; `fix/side-panel-focus` contains an additional focus fix awaiting testing.
 
 ## Features
 
@@ -38,8 +56,8 @@ Requirements:
 The AirPlay engine pulls UxPlay, libplist, OpenSSL and FFmpeg as git submodules:
 
 ```sh
-git clone --recursive --branch fix/review-backlog https://github.com/HiteshRohira/GlassLauncherTV.git
-cd GlassLauncherTV/glasslauncher
+git clone --recursive https://github.com/HiteshRohira/Mirage.git
+cd Mirage/glasslauncher
 gradle --no-daemon :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease
 ```
 
@@ -73,7 +91,7 @@ This project is personal and non-commercial; no APKs are published.
 
 ## Origins
 
-Glass TV started as a fork of [Glass Launcher](https://github.com/namillis/GlassLauncherTV) by mithun.ys / pixel, and its home screen still owes that project a lot. It has since grown into something quite different:
+Mirage started as a fork of [Glass Launcher](https://github.com/namillis/GlassLauncherTV) by mithun.ys / pixel, but it is no longer a GitHub fork: it has diverged into its own project. The credits stay — its home screen still owes the original a lot — and it has since grown into something quite different:
 - a redesigned interface;
 - an AirPlay receiver built into the launcher instead of a separate app;
 - a phone remote served by the TV itself;
