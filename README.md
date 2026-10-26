@@ -1,9 +1,7 @@
 # Mirage
 
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="Mirage home screen" width="45%"/>
-  &nbsp;
-  <img src="docs/screenshots/control-center.png" alt="Mirage Control Center" width="45%"/>
+  <img src="docs/screenshots/home.png" alt="Mirage home screen" width="80%"/>
 </p>
 
 **A fast, quiet home screen for Android TV with AirPlay built in.**
@@ -12,17 +10,9 @@ Mirage replaces the stock Google TV home with a calm, glass-styled launcher: a c
 
 ## Screenshots
 
-| Home | All apps |
-| --- | --- |
-| ![Home](docs/screenshots/home.png) | ![All apps](docs/screenshots/all-apps.png) |
-
-| Control Center | Bluetooth |
-| --- | --- |
-| ![Control Center](docs/screenshots/control-center.png) | ![Bluetooth](docs/screenshots/bluetooth.png) |
-
-| AirPlay | Phone remote |
-| --- | --- |
-| ![AirPlay](docs/screenshots/airplay.png) | ![Phone remote](docs/screenshots/phone-remote.png) |
+| Home |
+| --- |
+| ![Home](docs/screenshots/home.png) |
 
 Branch state: `main` carries the integrated source (`1.1.6-airplay.7` plus cleanup); `fix/review-backlog` carries a newer build (`1.1.7-airplay.8`) that has not landed on `main` yet and is the version running on the reference TV; `fix/side-panel-focus` contains an additional focus fix awaiting testing.
 
