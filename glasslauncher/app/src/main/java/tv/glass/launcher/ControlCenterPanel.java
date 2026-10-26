@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
+import android.view.FocusFinder;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -93,6 +94,10 @@ final class ControlCenterPanel extends FrameLayout {
         parts[3].setContentDescription(title+", "+status);
     }
     void restoreFocus(){
+        if(detail!=null){
+            if(detail.findFocus()==null){View first=firstFocusable(detail);if(first!=null)first.requestFocus();}
+            return;
+        }
         for(View v:actions)if(focusKey.equals(v.getTag())){v.requestFocus();return;}
         if(!actions.isEmpty())actions.get(0).requestFocus();
     }
@@ -221,6 +226,16 @@ final class ControlCenterPanel extends FrameLayout {
         if(sliding)return true;
         if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE){if(detailKey!=null)backToControls();else hide();return true;}
         if(detailKey!=null){
+            if(key==KeyEvent.KEYCODE_DPAD_UP || key==KeyEvent.KEYCODE_DPAD_DOWN){
+                int direction=key==KeyEvent.KEYCODE_DPAD_UP?View.FOCUS_UP:View.FOCUS_DOWN;
+                View focused=detail.findFocus();
+                View next=focused==null?firstFocusable(detail)
+                        :FocusFinder.getInstance().findNextFocus(detail,focused,direction);
+                if(next!=null)next.requestFocus(direction);
+                // At either edge, keep focus on the current row. Falling through
+                // to the activity lets Android search the apps behind the sheet.
+                return true;
+            }
             if(!"appearance".equals(detailKey) && (key==KeyEvent.KEYCODE_DPAD_CENTER || key==KeyEvent.KEYCODE_ENTER || key==KeyEvent.KEYCODE_BUTTON_A)){
                 View selected=findFocus();if(selected!=null && selected.isClickable())selected.performClick();return true;
             }

@@ -8027,7 +8027,9 @@ public class LauncherActivity extends Activity {
         if (controlCenter != null && controlCenter.isVisible()) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 if (controlCenter.key(event.getKeyCode())) return true;
-                return super.dispatchKeyEvent(event);
+                // Match the other modal panels: only device-control keys may
+                // pass through to Android while the sheet owns navigation.
+                return isLetThroughKey(event.getKeyCode()) ? super.dispatchKeyEvent(event) : true;
             }
             return isLetThroughKey(event.getKeyCode()) ? super.dispatchKeyEvent(event) : true;
         }
