@@ -240,8 +240,11 @@ public class SidePanelFocusTest {
                     assertTrue(controls(a).isTransitioning());
                     if (framework) a.onBackPressed(); else press(a, KeyEvent.KEYCODE_BACK);
                 });
-                await(scenario, "queued second Back closes the sheet", a -> !controls(a).isVisible());
-                scenario.onActivity(a -> assertSame(anchor, a.getCurrentFocus()));
+                await(scenario, "queued second Back closes the sheet",
+                        a -> !controls(a).isVisible() ? anchor : null);
+                scenario.onActivity(a -> assertSame("Back restores anchor (framework="+framework
+                        +", touchMode="+anchor.isInTouchMode()+", anchorShown="+anchor.isShown()+")",
+                        anchor, a.getCurrentFocus()));
             }
         }
     }

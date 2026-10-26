@@ -22,7 +22,8 @@ import org.junit.runner.RunWith;
 public class MirageIdentityTest {
     @Test public void newPackageRegistersHomeAndRemoteKeyboard() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertEquals("tv.mirage.launcher.debug", context.getPackageName());
+        assertTrue("Mirage release or debug package", context.getPackageName().equals("tv.mirage.launcher")
+                || context.getPackageName().equals("tv.mirage.launcher.debug"));
         PackageManager pm = context.getPackageManager();
         Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
                 .setPackage(context.getPackageName());
