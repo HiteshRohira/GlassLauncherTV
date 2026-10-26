@@ -2749,7 +2749,7 @@ public class LauncherActivity extends Activity {
         if (btPanel != null && btPanel.isVisible()) { btPanel.handleKeyDown(KeyEvent.KEYCODE_BACK); return; }
         if (controlCenter != null && controlCenter.isVisible()
                 && (settingsOverlay == null || settingsOverlay.getVisibility()!=View.VISIBLE)) {
-            if(controlCenter.isTransitioning())return;
+            if(controlCenter.deferBack(this::onBackPressed))return;
             if(embeddedSettings && controlCenter.isDetailVisible("appearance"))handleSettingsKey(KeyEvent.KEYCODE_BACK);
             else controlCenter.key(KeyEvent.KEYCODE_BACK);
             return;
@@ -7997,9 +7997,14 @@ public class LauncherActivity extends Activity {
             return super.dispatchKeyEvent(event);
         }
         if (embeddedSettings && controlCenter != null && controlCenter.isDetailVisible("appearance")) {
-            // Keep the custom Appearance navigator attached when Back arrives
-            // during its entrance slide; backToControls cannot run yet.
-            if(controlCenter.isTransitioning() && !isLetThroughKey(event.getKeyCode()))return true;
+            // Keep its navigator attached until the slide ends, then honor Back.
+            if(controlCenter.isTransitioning() && !isLetThroughKey(event.getKeyCode())){
+                int key=event.getKeyCode();
+                if(event.getAction()==KeyEvent.ACTION_DOWN && event.getRepeatCount()==0
+                        && (key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE))
+                    controlCenter.deferBack(()->handleSettingsKey(key));
+                return true;
+            }
             if (event.getAction()==KeyEvent.ACTION_DOWN && handleSettingsKey(event.getKeyCode())) return true;
             if (!isLetThroughKey(event.getKeyCode())) return true;
         }

@@ -198,12 +198,6 @@ public class SidePanelFocusTest {
                 press(a, KeyEvent.KEYCODE_DPAD_RIGHT);
                 assertEquals("appearance", a.getCurrentFocus().getTag());
                 press(a, KeyEvent.KEYCODE_BUTTON_A);
-                assertTrue("exercise an active Appearance entrance", controls(a).isTransitioning());
-                press(a, KeyEvent.KEYCODE_BACK);
-                a.onBackPressed();
-                assertTrue("early Back keeps the custom navigator attached",
-                        (Boolean) field(a, "embeddedSettings"));
-                assertTrue(controls(a).isDetailVisible("appearance"));
             });
             awaitDetail(scenario, "appearance");
             scenario.onActivity(a -> {
@@ -219,6 +213,54 @@ public class SidePanelFocusTest {
             scenario.onActivity(a -> {
                 press(a, KeyEvent.KEYCODE_BACK);
                 assertFalse(controls(a).isVisible());
+            });
+        }
+    }
+
+    @Test
+    public void backDuringBothSlides_isHonoredAfterAnimation_forKeysAndFramework() {
+        for (boolean framework : new boolean[]{false, true}) {
+            try (ActivityScenario<LauncherActivity> scenario = launch()) {
+                View anchor = openControls(scenario);
+                scenario.onActivity(a -> {
+                    controls(a).openAppearance();
+                    assertTrue(controls(a).isTransitioning());
+                    if (framework) a.onBackPressed(); else press(a, KeyEvent.KEYCODE_BACK);
+                    assertTrue("navigator stays attached until entrance completes",
+                            (Boolean) field(a, "embeddedSettings"));
+                });
+                awaitControls(scenario, "appearance");
+                scenario.onActivity(a -> {
+                    assertFalse((Boolean) field(a, "embeddedSettings"));
+                    controls(a).openAirPlay();
+                });
+                awaitDetail(scenario, "airplay");
+                scenario.onActivity(a -> {
+                    if (framework) a.onBackPressed(); else press(a, KeyEvent.KEYCODE_BACK);
+                    assertTrue(controls(a).isTransitioning());
+                    if (framework) a.onBackPressed(); else press(a, KeyEvent.KEYCODE_BACK);
+                });
+                await(scenario, "queued second Back closes the sheet", a -> !controls(a).isVisible());
+                scenario.onActivity(a -> assertSame(anchor, a.getCurrentFocus()));
+            }
+        }
+    }
+
+    @Test
+    public void cancellingSlide_discardsPendingBack_beforeSheetReopens() {
+        try (ActivityScenario<LauncherActivity> scenario = launch()) {
+            View anchor = openControls(scenario);
+            scenario.onActivity(a -> {
+                ControlCenterPanel panel = controls(a);
+                panel.openAirPlay();
+                press(a, KeyEvent.KEYCODE_BACK);
+                panel.hide();
+                panel.show(anchor, "network", false);
+            });
+            SystemClock.sleep(650);
+            scenario.onActivity(a -> {
+                assertTrue("old transition must not close the reopened sheet", controls(a).isVisible());
+                assertFocusWithin(a, controls(a));
             });
         }
     }

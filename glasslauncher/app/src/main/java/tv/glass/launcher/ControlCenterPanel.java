@@ -44,6 +44,7 @@ final class ControlCenterPanel extends FrameLayout {
     private View returnFocus;
     private String focusKey="network", detailKey;
     private boolean sliding;
+    private Runnable pendingBack;
     /** Last AirPlay headline spoken to a screen reader. */
     private String lastAnnounced;
     ControlCenterPanel(Context c,Host host) {
@@ -55,6 +56,17 @@ final class ControlCenterPanel extends FrameLayout {
     }
     boolean isVisible(){return getVisibility()==VISIBLE;}
     boolean isTransitioning(){return sliding;}
+    /** Coalesce Back taps while a page moves, then use the caller's real navigator. */
+    boolean deferBack(Runnable action){
+        if(!sliding)return false;
+        pendingBack=action;return true;
+    }
+    private void finishTransition(Runnable finish){
+        sliding=false;
+        Runnable back=pendingBack;pendingBack=null;
+        finish.run();
+        if(back!=null && isVisible())back.run();
+    }
     boolean isDetailVisible(String key){return isVisible() && key.equals(detailKey);}
     void show(View anchor,String key){ show(anchor,key,true); }
     /** {@code animate=false} when returning from the Bluetooth sheet, which
@@ -202,11 +214,10 @@ final class ControlCenterPanel extends FrameLayout {
         controls.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
         controls.animate().translationX(-distance).alpha(0).setDuration(260).setInterpolator(new DecelerateInterpolator()).start();
         detail.animate().translationX(0).setDuration(260).setInterpolator(new DecelerateInterpolator())
-            .withEndAction(()->{
-                sliding=false;
+            .withEndAction(()->finishTransition(()->{
                 if("appearance".equals(key))content.requestFocus();
                 else{View first=firstFocusable(content);if(first!=null)first.requestFocus();else back.requestFocus();}
-            }).start();
+            })).start();
     }
     private static View firstFocusable(View v){
         if(v.isFocusable() && v.getVisibility()==VISIBLE && !(v instanceof ViewGroup && ((ViewGroup)v).getChildCount()>0 && !v.isClickable()))return v;
@@ -217,10 +228,10 @@ final class ControlCenterPanel extends FrameLayout {
         if(detailKey==null || sliding)return;
         sliding=true;final LinearLayout old=detail;
         controls.animate().translationX(0).alpha(1).setDuration(260).setInterpolator(new DecelerateInterpolator()).start();
-        old.animate().translationX(px(SHEET_W)).setDuration(260).setInterpolator(new DecelerateInterpolator()).withEndAction(()->{
-            card.removeView(old);detail=null;detailKey=null;sliding=false;
+        old.animate().translationX(px(SHEET_W)).setDuration(260).setInterpolator(new DecelerateInterpolator()).withEndAction(()->finishTransition(()->{
+            card.removeView(old);detail=null;detailKey=null;
             controls.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);rebuildKeepingPosition();
-        }).start();
+        })).start();
     }
     private void rebuildKeepingPosition(){rebuild();restoreFocus();}
     /** Dispatch both edges to native Appearance widgets without letting the
@@ -235,7 +246,10 @@ final class ControlCenterPanel extends FrameLayout {
         }
     }
     boolean key(int key){
-        if(sliding)return true;
+        if(sliding){
+            if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE)deferBack(()->key(key));
+            return true;
+        }
         if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE){if(detailKey!=null)backToControls();else hide();return true;}
         if(detailKey!=null){
             if(key==KeyEvent.KEYCODE_DPAD_UP || key==KeyEvent.KEYCODE_DPAD_DOWN){
@@ -268,7 +282,7 @@ final class ControlCenterPanel extends FrameLayout {
         }
         groups.get(row).get(Math.min(col,groups.get(row).size()-1)).requestFocus();return true;
     }
-    private void cancelMotion(){if(card!=null)card.animate().cancel();if(controls!=null)controls.animate().cancel();if(detail!=null)detail.animate().cancel();animate().cancel();sliding=false;}
+    private void cancelMotion(){pendingBack=null;if(card!=null)card.animate().cancel();if(controls!=null)controls.animate().cancel();if(detail!=null)detail.animate().cancel();animate().cancel();sliding=false;}
     private void rebuild(){
         cancelMotion();removeAllViews();groups.clear();actions.clear();tileParts.clear();detailKey=null;detail=null;
         card=NativeTheme.sheet(getContext());card.setOnClickListener(v->{});

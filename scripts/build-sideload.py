@@ -12,6 +12,14 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = ROOT / "glasslauncher"
+NATIVE_LIBRARIES = {"libairplay_native.so", "libcrypto.so", "liboboe.so", "libc++_shared.so"}
+
+
+def validate_native_payload(archive, expected_abis):
+    entries = [name for name in archive.namelist() if name.startswith("lib/") and not name.endswith("/")]
+    expected = {f"lib/{abi}/{name}" for abi in expected_abis for name in NATIVE_LIBRARIES}
+    if len(entries) != len(set(entries)) or set(entries) != expected:
+        raise SystemExit("Native libraries differ from the required ABI payload")
 
 
 def run(command, **kwargs):
@@ -30,6 +38,9 @@ def main():
     parser.add_argument("--gradle", default=os.environ.get("GRADLE", "gradle"))
     parser.add_argument("--sdk", type=Path, default=Path(os.environ.get("ANDROID_HOME", "/opt/homebrew/share/android-commandlinetools")))
     parser.add_argument("--key-dir", type=Path, default=Path.home() / ".android-signing/glass-launcher")
+    parser.add_argument("--keystore", type=Path, help="Signing keystore (defaults to glass-release.jks in --key-dir)")
+    parser.add_argument("--password-file", type=Path, help="Keystore password file (defaults to password.txt in --key-dir)")
+    parser.add_argument("--key-alias", default="glass", help="Alias in the supplied signing keystore")
     parser.add_argument("--output", type=Path, required=True)
     identity = parser.add_mutually_exclusive_group(required=True)
     identity.add_argument("--baseline-apk", type=Path)
@@ -40,6 +51,7 @@ def main():
     text = (PROJECT / "app/build.gradle.kts").read_text()
     version = re.search(r'^\s*versionName\s*=\s*"([^\"]+)"', text, re.M).group(1)
     code = int(re.search(r"^\s*versionCode\s*=\s*(\d+)", text, re.M).group(1))
+    package = re.search(r'^\s*applicationId\s*=\s*"([^\"]+)"', text, re.M).group(1)
     output = args.output.resolve()
     if output.exists() and any(output.iterdir()):
         raise SystemExit("Output directory is not empty; choose a new output directory")
@@ -65,7 +77,7 @@ def main():
              ":app:testReleaseUnitTest", ":app:lintRelease"], cwd=PROJECT)
     release = PROJECT / f".build/{args.profile}/app/outputs/apk/release"
     metadata = json.loads((release / "output-metadata.json").read_text())
-    if metadata["applicationId"] != "tv.glass.launcher":
+    if metadata["applicationId"] != package:
         raise SystemExit("Unexpected package identity")
     manifest = []
     selected = [entry for entry in metadata["elements"] if entry["filters"] or args.include_universal]
@@ -87,18 +99,16 @@ def main():
         if source.parent != release.resolve():
             raise SystemExit("Unexpected APK output path")
         with zipfile.ZipFile(source) as archive:
-            abis = {name.split("/")[1] for name in archive.namelist() if name.startswith("lib/")}
-        expected = {"armeabi-v7a", "arm64-v8a"} if abi == "universal" else {abi}
-        if abis != expected:
-            raise SystemExit("Native ABIs differ from output metadata")
+            expected = {"armeabi-v7a", "arm64-v8a"} if abi == "universal" else {abi}
+            validate_native_payload(archive, expected)
         badging = run([tools / "aapt2", "dump", "badging", source], capture_output=True, text=True).stdout
-        if not badging.startswith(f"package: name='tv.glass.launcher' versionCode='{code}' versionName='{version}'"):
+        if not badging.startswith(f"package: name='{package}' versionCode='{code}' versionName='{version}'"):
             raise SystemExit("Actual APK identity differs from source/metadata")
         destination = output / f"GlassLauncher-{version}-{abi}-{args.profile}.apk"
         with tempfile.TemporaryDirectory(prefix=".signing-", dir=output) as temporary:
             signed = Path(temporary) / "signed.apk"
-            run([signer, "sign", "--ks", args.key_dir / "glass-release.jks",
-                 "--ks-key-alias", "glass", "--ks-pass", f"file:{args.key_dir / 'password.txt'}",
+            run([signer, "sign", "--ks", args.keystore or args.key_dir / "glass-release.jks",
+                 "--ks-key-alias", args.key_alias, "--ks-pass", f"file:{args.password_file or args.key_dir / 'password.txt'}",
                  "--v4-signing-enabled", "false", "--out", signed, source])
             if certificate(signer, signed) != cert:
                 raise SystemExit("Signing certificate differs from the installed baseline")
