@@ -173,7 +173,7 @@ public class LauncherActivity extends Activity {
     private static final int    REQ_PERM_MEDIA = 71;   // runtime media-read permission
     private static final long   MEDIA_SCAN_TIMEOUT_SEC = 10;
     private static final int    REQ_PERM_BT    = 72;   // runtime Nearby devices permission
-    private static final String BACKUP_FILENAME   = "glasslauncher-backup.zip";
+    private static final String BACKUP_FILENAME   = "mirage-backup.zip";
     /** Slideshow duration steps (seconds):
      *  Off, 20s, 30s, 45s, 1m, 1.5m, 2m, 3m. */
     private static final int[]  SLIDESHOW_STEPS_SEC =
