@@ -42,6 +42,23 @@ Mirage replaces the stock Google TV home with a calm, glass-styled launcher: a c
   - nothing is hosted in the cloud.
 - **Gentle on old hardware.** Designed and tuned on a 2021 TCL Google TV (Android 11, 32-bit ARM, ~1.4 GB RAM). It works around that firmware's app freezer and boot-start restrictions.
 
+## Downloads
+
+Get the signed **[1.1.9-airplay.11 release](https://github.com/HiteshRohira/Mirage/releases/tag/v1.1.9-airplay.11)**:
+
+| Android ABI | Standalone APK | Size |
+|---|---|---:|
+| 32-bit ARM (`armeabi-v7a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.9-airplay.11/Mirage-1.1.9-airplay.11-armeabi-v7a-compact.apk) | 3.75 MB |
+| 64-bit ARM (`arm64-v8a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.9-airplay.11/Mirage-1.1.9-airplay.11-arm64-v8a-compact.apk) | 5.30 MB |
+
+Requires Android 8/API 26 or newer. Install only the APK matching your TV's
+Android ABI; some 64-bit processors run 32-bit Android. The release includes
+SHA-256 checksums. Use an in-place update to keep existing settings and pairings.
+
+This release reduces APK size by 34.8% on ARMv7 and 37.5% on ARM64 compared with
+1.1.8-airplay.9, while retaining the existing media, audio, remote and launcher
+features. It also fixes clipping around expanded Control Center tiles.
+
 ## Building
 
 Requirements:
@@ -52,7 +69,8 @@ Requirements:
 - CMake `3.31.6`
 - Gradle `8.14.5` (installed separately; wrapper scripts are not included)
 
-The AirPlay engine pulls UxPlay, libplist, OpenSSL and FFmpeg as git submodules:
+The AirPlay engine pulls UxPlay, libplist, the OpenSSL build helper, FFmpeg and
+Oboe as pinned git submodules:
 
 ```sh
 git clone --recursive https://github.com/HiteshRohira/Mirage.git
@@ -62,10 +80,10 @@ gradle --no-daemon :app:assembleRelease :app:testReleaseUnitTest :app:lintReleas
 
 For an existing clone, initialize dependencies with
 `git submodule update --init --recursive`. The first build compiles OpenSSL and
-FFmpeg for the selected ABIs. The size-focused build produces standalone APKs
+FFmpeg and Oboe for the selected ABIs. The size-focused build produces standalone APKs
 for both ARM ABIs by default; `-PtargetAbis=armeabi-v7a` or
 `-PtargetAbis=arm64-v8a` builds only that ABI. Its release APKs are under
-`glasslauncher/.build/crypto-size/app/outputs/apk/release/` with the default
+`glasslauncher/.build/compact/app/outputs/apk/release/` with the default
 native profile. Use fresh native build state when comparing variants.
 
 To select a standalone APK for a TV, check its supported ABIs over ADB:
@@ -86,9 +104,11 @@ update to an existing package, use the **same signing certificate** as that
 installation; a different key cannot update it. JVM tests and lint do not execute
 device tests.
 Native profiles have separate outputs: `baseline` keeps the previous native
-settings, `exports` localizes internal receiver symbols, and the default
-`crypto-size` also builds OpenSSL with `-Os`, preserving its algorithms and media
-fallbacks. Select with `-PnativeProfile=PROFILE`; `-PuniversalApk=true` adds a
+settings, `exports` localizes internal receiver symbols, and `crypto-size`
+also builds OpenSSL with `-Os`. The default `compact` profile links OpenSSL
+3.5 LTS, Oboe and the C++ runtime into one receiver library with packed Android
+relocations and dead-code removal. It keeps all existing AirPlay crypto and media
+fallbacks; the new, unused OpenSSL 3.5 post-quantum algorithms are not built. Select with `-PnativeProfile=PROFILE`; `-PuniversalApk=true` adds a
 universal APK. `-PtvAbiOnly` remains an ARMv7-only alias.
 
 For checked local signing of **both ABI APKs**, from the repository root:

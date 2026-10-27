@@ -15,9 +15,9 @@ PROJECT = ROOT / "glasslauncher"
 NATIVE_LIBRARIES = {"libairplay_native.so", "libcrypto.so", "liboboe.so", "libc++_shared.so"}
 
 
-def validate_native_payload(archive, expected_abis):
+def validate_native_payload(archive, expected_abis, libraries=NATIVE_LIBRARIES):
     entries = [name for name in archive.namelist() if name.startswith("lib/") and not name.endswith("/")]
-    expected = {f"lib/{abi}/{name}" for abi in expected_abis for name in NATIVE_LIBRARIES}
+    expected = {f"lib/{abi}/{name}" for abi in expected_abis for name in libraries}
     if len(entries) != len(set(entries)) or set(entries) != expected:
         raise SystemExit("Native libraries differ from the required ABI payload")
 
@@ -34,7 +34,7 @@ def certificate(signer, apk):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=["baseline", "exports", "crypto-size"], default="crypto-size")
+    parser.add_argument("--profile", choices=["baseline", "exports", "crypto-size", "compact"], default="compact")
     parser.add_argument("--gradle", default=os.environ.get("GRADLE", "gradle"))
     parser.add_argument("--sdk", type=Path, default=Path(os.environ.get("ANDROID_HOME", "/opt/homebrew/share/android-commandlinetools")))
     parser.add_argument("--key-dir", type=Path, default=Path.home() / ".android-signing/glass-launcher")
@@ -100,7 +100,7 @@ def main():
             raise SystemExit("Unexpected APK output path")
         with zipfile.ZipFile(source) as archive:
             expected = {"armeabi-v7a", "arm64-v8a"} if abi == "universal" else {abi}
-            validate_native_payload(archive, expected)
+            validate_native_payload(archive, expected, {"libairplay_native.so"} if args.profile == "compact" else NATIVE_LIBRARIES)
         badging = run([tools / "aapt2", "dump", "badging", source], capture_output=True, text=True).stdout
         if not badging.startswith(f"package: name='{package}' versionCode='{code}' versionName='{version}'"):
             raise SystemExit("Actual APK identity differs from source/metadata")
@@ -109,7 +109,7 @@ def main():
             signed = Path(temporary) / "signed.apk"
             run([signer, "sign", "--ks", args.keystore or args.key_dir / "glass-release.jks",
                  "--ks-key-alias", args.key_alias, "--ks-pass", f"file:{args.password_file or args.key_dir / 'password.txt'}",
-                 "--v4-signing-enabled", "false", "--out", signed, source])
+                 "--v1-signing-enabled", "false", "--v2-signing-enabled", "true", "--v3-signing-enabled", "true", "--v4-signing-enabled", "false", "--out", signed, source])
             if certificate(signer, signed) != cert:
                 raise SystemExit("Signing certificate differs from the installed baseline")
             run([tools / "zipalign", "-c", "-P", "16", "4", signed], capture_output=True)

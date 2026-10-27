@@ -1,4 +1,5 @@
 import java.security.MessageDigest
+import java.io.File
 
 // Built-in AirPlay receiver engine. Native UxPlay core, renderers, discovery
 // and the receiver service are adapted from jqssun/android-airplay-server
@@ -23,11 +24,12 @@ android {
         }
         externalNativeBuild {
             cmake {
-                arguments += "-DANDROID_STL=c++_shared"
+                arguments += "-DANDROID_STL=" + if (rootProject.extra["glassNativeProfile"] == "compact") "c++_static" else "c++_shared"
                 arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
                 val profile = rootProject.extra["glassNativeProfile"] as String
+                arguments += "-DGLASS_COMPACT_NATIVE=${if (profile == "compact") "ON" else "OFF"}"
                 arguments += "-DGLASS_HIDE_INTERNAL_SYMBOLS=${if (profile == "baseline") "OFF" else "ON"}"
-                arguments += "-DGLASS_CRYPTO_SIZE_OPT=${if (profile == "crypto-size") "ON" else "OFF"}"
+                arguments += "-DGLASS_CRYPTO_SIZE_OPT=${if (profile in listOf("crypto-size", "compact")) "ON" else "OFF"}"
             }
         }
     }
@@ -65,7 +67,13 @@ tasks.register("applyUxplayPatches") {
         val patches = patchDir.listFiles { f -> f.extension == "patch" }!!.sorted()
         val touched = patches.flatMap { git("apply", "--numstat", it.path).trim().lines() }
             .map { it.substringAfterLast("\t") }.distinct()
-        git("checkout", "--", *touched.toTypedArray())
+        val tracked = git("ls-files", "--", *touched.toTypedArray()).trim().lines().filter { it.isNotBlank() }
+        if (tracked.isNotEmpty()) git("checkout", "--", *tracked.toTypedArray())
+        (touched - tracked.toSet()).forEach { relative ->
+            val generated = uxplay.resolve(relative)
+            check(generated.canonicalPath.startsWith(uxplay.canonicalPath + File.separator))
+            check(!generated.exists() || (generated.isFile && generated.delete())) { "Cannot reset generated patch file $relative" }
+        }
         patches.forEach { git("apply", "--unidiff-zero", it.path) }
     }
 }
@@ -109,5 +117,5 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.kotlinx.coroutines)
-    implementation(libs.oboe)
+    if (rootProject.extra["glassNativeProfile"] != "compact") implementation(libs.oboe)
 }

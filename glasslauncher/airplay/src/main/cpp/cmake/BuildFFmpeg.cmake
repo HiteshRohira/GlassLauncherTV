@@ -31,11 +31,11 @@ endif()
 set(FFMPEG_INSTALL ${CMAKE_BINARY_DIR}/ffmpeg)
 
 # instrument ffmpeg with the same sanitizers; built with --disable-asm
-set(_ffmpeg_sanitize "")
+set(_ffmpeg_sanitize "--extra-cflags=-ffunction-sections -fdata-sections")
 if(SANITIZE)
     string(REPLACE ";" " " _ff_scflags "${SANITIZE_CFLAGS}")
     string(REPLACE ";" " " _ff_sldflags "${SANITIZE_LDFLAGS}")
-    set(_ffmpeg_sanitize "--extra-cflags=${_ff_scflags}" "--extra-ldflags=${_ff_sldflags}")
+    set(_ffmpeg_sanitize "--extra-cflags=-ffunction-sections -fdata-sections ${_ff_scflags}" "--extra-ldflags=${_ff_sldflags}")
 endif()
 
 ExternalProject_Add(ffmpeg_ep

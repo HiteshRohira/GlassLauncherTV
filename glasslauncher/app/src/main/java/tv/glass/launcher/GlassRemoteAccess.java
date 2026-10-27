@@ -48,7 +48,7 @@ final class GlassRemoteAccess {
             // the file (its version is how other processes notice changes).
             String before = dirty ? null : serialize(book);
             T result = change.apply(book);
-            if (dirty || !serialize(book).equals(before)) write(file, book);
+            if (dirty || !serialize(book).equals(before)) { book.revision++; write(file, book); }
             return result;
         }
     }
@@ -57,7 +57,9 @@ final class GlassRemoteAccess {
     static void forgetAll(Context context) throws Exception { update(context, book -> { book.forgetAll(RANDOM); return null; }); }
 
     /** Changes whenever the pairing material is rewritten. */
-    static long version(Context context) { return new File(context.getNoBackupFilesDir(), FILE).lastModified(); }
+    static long version(Context context) {
+        try { return load(context).revision; } catch (Exception ignored) { return -1; }
+    }
     static boolean enabled(Context context) { return !new File(context.getNoBackupFilesDir(), DISABLED).exists(); }
     static void setEnabled(Context context, boolean on) throws IOException {
         File flag = new File(context.getNoBackupFilesDir(), DISABLED);
@@ -70,6 +72,7 @@ final class GlassRemoteAccess {
         String pin = json.getString("pin");
         if (!pin.matches("[0-9]{6}")) throw new IOException("Invalid pairing material");
         PairingBook book = new PairingBook(pin);
+        book.revision = json.optLong("revision", 0);
         // Up to 1.1.6 every phone shared one token: keep it as a device so
         // phones paired before this version stay connected.
         String legacy = json.optString("token", "");
@@ -92,7 +95,7 @@ final class GlassRemoteAccess {
         for (PairingBook.Device d : book.devices) devices.put(new JSONObject().put("token", d.token).put("since", d.since));
         JSONArray installs = new JSONArray();
         for (PairingBook.Install i : book.installs) installs.put(new JSONObject().put("token", i.token).put("expires", i.expires));
-        return new JSONObject().put("pin", book.pin).put("devices", devices).put("installs", installs).toString();
+        return new JSONObject().put("revision", book.revision).put("pin", book.pin).put("devices", devices).put("installs", installs).toString();
     }
 
     private static void write(AtomicFile file, PairingBook book) throws Exception {

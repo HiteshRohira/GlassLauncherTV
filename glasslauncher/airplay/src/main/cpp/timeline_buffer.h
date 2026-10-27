@@ -26,8 +26,8 @@ public:
 
     // producer: push up to n samples, drops what doesn't fit
     size_t write(const int16_t *src, size_t n) {
-        const size_t w = mWrite.load(std::memory_order_relaxed);
-        const size_t r = mRead.load(std::memory_order_acquire);
+        const uint64_t w = mWrite.load(std::memory_order_relaxed);
+        const uint64_t r = mRead.load(std::memory_order_acquire);
         const size_t freeSpace = mCapacity - (w - r);
         if (n > freeSpace) n = freeSpace;
         const size_t wi = w % mCapacity;
@@ -40,8 +40,8 @@ public:
 
     // consumer: pop up to n samples
     size_t read(int16_t *dst, size_t n) {
-        const size_t r = mRead.load(std::memory_order_relaxed);
-        const size_t w = mWrite.load(std::memory_order_acquire);
+        const uint64_t r = mRead.load(std::memory_order_relaxed);
+        const uint64_t w = mWrite.load(std::memory_order_acquire);
         const size_t avail = w - r;
         if (n > avail) n = avail;
         const size_t ri = r % mCapacity;
@@ -54,8 +54,8 @@ public:
 
     // consumer: discard up to n oldest samples
     void skip(size_t n) {
-        const size_t r = mRead.load(std::memory_order_relaxed);
-        const size_t w = mWrite.load(std::memory_order_acquire);
+        const uint64_t r = mRead.load(std::memory_order_relaxed);
+        const uint64_t w = mWrite.load(std::memory_order_acquire);
         const size_t avail = w - r;
         if (n > avail) n = avail;
         mRead.store(r + n, std::memory_order_release);
@@ -64,8 +64,8 @@ public:
 private:
     const size_t mCapacity;
     std::unique_ptr<int16_t[]> mBuf;
-    std::atomic<size_t> mWrite{0};
-    std::atomic<size_t> mRead{0};
+    std::atomic<uint64_t> mWrite{0};
+    std::atomic<uint64_t> mRead{0};
 };
 
 /*

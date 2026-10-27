@@ -16,8 +16,6 @@ final class GlassRemoteServer implements AutoCloseable {
     static final int PORT=48633;
     private final Context context;
     private final TvRemoteClient tv;
-    private volatile PairingBook access;
-    private volatile long accessVersion;
     private final Runnable onLockout;
     private final ThreadPoolExecutor requests=new ThreadPoolExecutor(2,4,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
     private final ThreadPoolExecutor nativeWork=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(3));
@@ -27,7 +25,7 @@ final class GlassRemoteServer implements AutoCloseable {
     private final Map<String,Integer> peers=new ConcurrentHashMap<>();
     private static final int COMMAND_QUEUE=24;
     /** Whole request (line, headers, body) must arrive within this, not just each read. */
-    private static final long REQUEST_DEADLINE_MS=10_000;
+    private static final long REQUEST_DEADLINE_MS=3_000;
     private static final int MAX_CONNECTIONS_PER_PEER=6;
     private static final long TEXT_WAIT_MS=15_000;
     private final PairGuard guard=new PairGuard(SystemClock::elapsedRealtime);
@@ -39,14 +37,13 @@ final class GlassRemoteServer implements AutoCloseable {
     private static final Map<String,Integer> KEYS;
     static{Map<String,Integer> keys=new HashMap<>();keys.put("up",19);keys.put("down",20);keys.put("left",21);keys.put("right",22);keys.put("ok",23);keys.put("back",4);keys.put("home",3);keys.put("playPause",85);keys.put("volumeUp",24);keys.put("volumeDown",25);keys.put("mute",164);keys.put("rewind",89);keys.put("forward",90);keys.put("delete",67);keys.put("enter",66);KEYS=Collections.unmodifiableMap(keys);}
     /** @param onLockout runs (on a request thread) when repeated wrong codes close pairing. */
-    GlassRemoteServer(Context context,Runnable onLockout)throws Exception{this.context=context.getApplicationContext();this.onLockout=onLockout;access=GlassRemoteAccess.load(context);accessVersion=GlassRemoteAccess.version(context);tv=new TvRemoteClient(context);}
-    /** Current pairing material; picks up "Forget paired phones" from the launcher process.
+    GlassRemoteServer(Context context,Runnable onLockout)throws Exception{this.context=context.getApplicationContext();this.onLockout=onLockout;GlassRemoteAccess.load(context);tv=new TvRemoteClient(context);}
+    /** Current authoritative pairing material, including cross-process revocation.
      *  The brute-force guard is never reset here: the file also changes on
      *  every pairing, and a reset would hand a guesser a fresh budget. */
     private PairingBook access()throws Exception{
-        long version=GlassRemoteAccess.version(context);
-        if(version!=accessVersion){synchronized(this){if(version!=accessVersion){access=GlassRemoteAccess.load(context);accessVersion=version;}}}
-        return access;
+        // Revocation is authoritative under the cross-process lock, not a timestamp cache.
+        return GlassRemoteAccess.load(context);
     }
     /** Pairs a phone if {@code pin} is the current code, under the shared
      *  brute-force budget. Returns {device token, install token} or null.
@@ -57,11 +54,10 @@ final class GlassRemoteServer implements AutoCloseable {
         long now=System.currentTimeMillis();
         String[] paired=GlassRemoteAccess.update(context,book->constant(pin,book.pin)
                 ?new String[]{book.pair(GlassRemoteAccess.RANDOM,now),book.newInstall(GlassRemoteAccess.RANDOM,now)}:null);
-        if(paired!=null){guard.succeed(ip);reloadAccess();return paired;}
+        if(paired!=null){guard.succeed(ip);return paired;}
         if(guard.fail(ip,pin)){Log.w("GlassRemote","Pairing locked after repeated wrong codes");if(onLockout!=null)onLockout.run();}
         return null;
     }
-    private synchronized void reloadAccess()throws Exception{access=GlassRemoteAccess.load(context);accessVersion=GlassRemoteAccess.version(context);}
     private boolean installValid(String token)throws Exception{return token!=null&&token.length()==43&&access().installValid(token,System.currentTimeMillis());}
     private static final String COOKIE="; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000\r\n";
     void start()throws IOException{
@@ -128,7 +124,6 @@ final class GlassRemoteServer implements AutoCloseable {
                 long now=System.currentTimeMillis();
                 String device=token.length()==43?GlassRemoteAccess.update(context,book->book.redeem(token,GlassRemoteAccess.RANDOM,now)):null;
                 if(device==null){reply(out,401,"application/json","{\"error\":\"This link was already used or has expired. Enter the code on the TV.\"}");return;}
-                reloadAccess();
                 reply(out,200,"application/json","{\"ok\":true}","Set-Cookie: glass_remote="+device+COOKIE);return;
             }
             if(path.startsWith("/api/")){
@@ -153,11 +148,17 @@ final class GlassRemoteServer implements AutoCloseable {
                 }
                 else if(path.equals("/api/text")){
                     String text=data.optString("text");
+                    java.util.concurrent.atomic.AtomicInteger deliveryState=new java.util.concurrent.atomic.AtomicInteger();
                     Future<?> done;
-                    try{done=commands.submit(()->{tv.sendText(text);return null;});}
+                    try{done=commands.submit(()->{if(deliveryState.compareAndSet(0,1))tv.sendText(text);return null;});}
                     catch(RejectedExecutionException busy){reply(out,503,"application/json","{\"error\":\"The TV is busy. Try again shortly.\"}");return;}
                     try{done.get(TEXT_WAIT_MS,TimeUnit.MILLISECONDS);}
-                    catch(TimeoutException slow){reply(out,504,"application/json","{\"error\":\"The TV is taking too long. Try again.\"}");return;}
+                    catch(TimeoutException slow){
+                        if(deliveryState.compareAndSet(0,2)){ done.cancel(false);
+                            reply(out,504,"application/json","{\"error\":\"Text was cancelled before delivery.\"}"); }
+                        else reply(out,202,"application/json","{\"ok\":true,\"pending\":true,\"message\":\"Text is still being delivered. Avoid sending it twice.\"}");
+                        return;
+                    }
                     catch(ExecutionException failed){Throwable c=failed.getCause();throw c instanceof IOException?(IOException)c:new IOException("Text could not be sent.");}
                 }
                 else{reply(out,404,"text/plain","Not found");return;}
@@ -208,8 +209,20 @@ final class GlassRemoteServer implements AutoCloseable {
     private static boolean constant(String a,String b){return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),b.getBytes(StandardCharsets.UTF_8));}
     private static boolean allowedHost(String host){
         if(!host.endsWith(":"+PORT))return false;String name=host.substring(0,host.length()-(":"+PORT).length());
-        if(name.equals("127.0.0.1")||name.equals("localhost")||name.equals("10.0.2.2"))return true;
-        try{Enumeration<NetworkInterface> interfaces=NetworkInterface.getNetworkInterfaces();while(interfaces.hasMoreElements()){Enumeration<InetAddress> addresses=interfaces.nextElement().getInetAddresses();while(addresses.hasMoreElements())if(name.equals(addresses.nextElement().getHostAddress()))return true;}}catch(Exception ignored){}return false;
+        if(name.startsWith("[")&&name.endsWith("]"))name=name.substring(1,name.length()-1);
+        if(name.equals("::1")||name.equals("127.0.0.1")||name.equals("localhost")||name.equals("10.0.2.2"))return true;
+        String numeric=name;
+        int scope=numeric.indexOf('%');if(scope>=0)numeric=numeric.substring(0,scope);
+        if(numeric.indexOf(':')<0&&!numeric.matches("[0-9.]+"))return false;
+        if(!numeric.matches("[0-9a-fA-F:.]+"))return false;
+        try{
+            byte[] requested=InetAddress.getByName(numeric).getAddress();
+            Enumeration<NetworkInterface> interfaces=NetworkInterface.getNetworkInterfaces();
+            while(interfaces.hasMoreElements()){
+                Enumeration<InetAddress> addresses=interfaces.nextElement().getInetAddresses();
+                while(addresses.hasMoreElements())if(Arrays.equals(requested,addresses.nextElement().getAddress()))return true;
+            }
+        }catch(Exception ignored){}return false;
     }
     private interface Work{void run()throws Exception;}
     private boolean runCommand(Work work){

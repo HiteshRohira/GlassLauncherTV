@@ -288,6 +288,8 @@ final class ControlCenterPanel extends FrameLayout {
         card=NativeTheme.sheet(getContext());card.setOnClickListener(v->{});
         addView(card,NativeTheme.sheetParams(getContext()));
         controls=new LinearLayout(getContext());controls.setOrientation(LinearLayout.VERTICAL);
+        // Focus grows tiles into the existing gutters, inside the sheet outline.
+        controls.setClipChildren(false);controls.setClipToPadding(false);
         controls.setPadding(px(PAD),px(PAD+4),px(PAD),px(PAD));card.addView(controls,new FrameLayout.LayoutParams(-1,-1));
         TextView title=text("Control Center",30,false);title.setTypeface(NativeTheme.light());
         controls.addView(title);
@@ -309,6 +311,7 @@ final class ControlCenterPanel extends FrameLayout {
     }
     private void addTiles(int top,View a,View b){
         LinearLayout line=new LinearLayout(getContext());
+        line.setClipChildren(false);line.setClipToPadding(false);
         LinearLayout.LayoutParams ap=new LinearLayout.LayoutParams(0,-1,1);ap.setMarginEnd(px(12));
         line.addView(a,ap);line.addView(b,new LinearLayout.LayoutParams(0,-1,1));
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,px(104));lp.topMargin=px(top);

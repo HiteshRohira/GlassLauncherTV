@@ -9,58 +9,41 @@ import com.google.common.util.concurrent.SettableFuture
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
-/**
- * Sends DACP (Digital Audio Control Protocol) commands back to the AirPlay sender.
- * Resolves the sender's control port via mDNS, then sends HTTP GET requests.
- */
+/** Ordered sender controls. Resolution and queued work belong to one sender generation. */
 class DacpController(ctx: Context) {
-
     private val nsdManager = ctx.getSystemService(Context.NSD_SERVICE) as NsdManager
-    private val exec = Executors.newSingleThreadExecutor()
+    private val exec = ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(16))
+    private val deadlines = Executors.newSingleThreadScheduledExecutor()
+    private val pending = ConcurrentHashMap.newKeySet<SettableFuture<Unit>>()
+    private val connections = ConcurrentHashMap.newKeySet<HttpURLConnection>()
+    private data class Endpoint(val host: String, val port: Int, val token: String, val generation: Long)
+    private var generation = 0L
+    private var endpoint: Endpoint? = null
+    private var closed = false
 
-    @Volatile var dacpId = ""
-    @Volatile var activeRemote = ""
-    @Volatile private var host = ""
-    @Volatile private var port = 0
-
-    val ready: Boolean get() = host.isNotEmpty() && activeRemote.isNotEmpty()
+    @Volatile var dacpId = ""; private set
+    @Volatile var activeRemote = ""; private set
+    val ready: Boolean get() = synchronized(this) { !closed && endpoint != null }
 
     fun update(dacpId: String, activeRemote: String) {
-        this.dacpId = dacpId
-        this.activeRemote = activeRemote
-        _resolve()
-    }
-
-    fun play() = _send("/ctrl-int/1/play")
-    fun pause() = _send("/ctrl-int/1/pause")
-    fun nextItem() = _send("/ctrl-int/1/nextitem")
-    fun prevItem() = _send("/ctrl-int/1/previtem")
-    fun volumeUp() = _send("/ctrl-int/1/volumeup")
-    fun volumeDown() = _send("/ctrl-int/1/volumedown")
-    fun beginFastForward() = _send("/ctrl-int/1/beginff")
-    fun beginRewind() = _send("/ctrl-int/1/beginrew")
-    fun playResume() = _send("/ctrl-int/1/playresume")
-
-    fun reset() {
-        dacpId = ""
-        activeRemote = ""
-        host = ""
-        port = 0
-    }
-
-    fun release() {
-        reset()
-        exec.shutdownNow()
-    }
-
-    private fun _resolve() {
-        if (dacpId.isEmpty()) return
-        val serviceName = "iTunes_Ctrl_$dacpId"
+        val gen = synchronized(this) {
+            if (closed) return
+            if (this.dacpId == dacpId && this.activeRemote == activeRemote && endpoint != null) return
+            this.dacpId = dacpId
+            this.activeRemote = activeRemote
+            endpoint = null
+            ++generation
+        }
+        if (dacpId.isEmpty() || activeRemote.isEmpty()) return
         val info = NsdServiceInfo().apply {
             serviceType = "_dacp._tcp"
-            this.serviceName = serviceName
+            serviceName = "iTunes_Ctrl_$dacpId"
         }
         try {
             nsdManager.resolveService(info, object : NsdManager.ResolveListener {
@@ -68,53 +51,92 @@ class DacpController(ctx: Context) {
                     Log.w(TAG, "DACP resolve failed: $code")
                 }
                 override fun onServiceResolved(si: NsdServiceInfo) {
-                    host = si.host.hostAddress ?: return
-                    port = si.port
-                    Log.i(TAG, "DACP resolved: $host:$port")
+                    val host = si.host?.hostAddress ?: return
+                    if (si.port !in 1..65535) return
+                    synchronized(this@DacpController) {
+                        if (!closed && generation == gen)
+                            endpoint = Endpoint(host, si.port, activeRemote, gen)
+                    }
                 }
             })
-        } catch (e: Exception) {
-            Log.w(TAG, "DACP resolve error", e)
-        }
+        } catch (e: Exception) { Log.w(TAG, "DACP resolve failed", e) }
     }
 
-    private fun _send(path: String): ListenableFuture<Unit> {
+    fun play() = send("/ctrl-int/1/play")
+    fun pause() = send("/ctrl-int/1/pause")
+    fun nextItem() = send("/ctrl-int/1/nextitem")
+    fun prevItem() = send("/ctrl-int/1/previtem")
+    fun volumeUp() = send("/ctrl-int/1/volumeup")
+    fun volumeDown() = send("/ctrl-int/1/volumedown")
+    fun beginFastForward() = send("/ctrl-int/1/beginff")
+    fun beginRewind() = send("/ctrl-int/1/beginrew")
+    fun playResume() = send("/ctrl-int/1/playresume")
+
+    @Synchronized fun reset() {
+        generation++
+        endpoint = null
+        dacpId = ""
+        activeRemote = ""
+    }
+
+    fun release() {
+        synchronized(this) { closed = true; reset() }
+        exec.shutdownNow()
+        deadlines.shutdownNow()
+        Thread({
+            connections.forEach { it.disconnect() }
+            connections.clear()
+        }, "mirage-dacp-close").apply { isDaemon = true; start() }
+        pending.forEach { it.setException(IOException("Sender controls closed")) }
+        pending.clear()
+    }
+
+    private fun send(path: String): ListenableFuture<Unit> {
         val result = SettableFuture.create<Unit>()
-        if (!ready) {
-            result.setException(IOException("dacp endpoint not resolved"))
+        val target = synchronized(this) { if (closed) null else endpoint }
+        if (target == null) {
+            result.setException(IOException("Sender controls are not connected"))
             return result
         }
+        pending.add(result)
         try {
             exec.execute {
+                var connection: HttpURLConnection? = null
+                var deadline: java.util.concurrent.ScheduledFuture<*>? = null
                 try {
-                    val url = "http://$host:$port$path"
-                    val conn = URL(url).openConnection() as HttpURLConnection
+                    synchronized(this) {
+                        if (closed || generation != target.generation || result.isCancelled)
+                            throw IOException("Sender changed")
+                    }
+                    val conn = URL("http", target.host, target.port, path).openConnection() as HttpURLConnection
+                    connection = conn
+                    connections.add(conn)
                     conn.requestMethod = "GET"
-                    conn.setRequestProperty("Active-Remote", activeRemote)
-                    conn.setRequestProperty("Host", "$host:$port")
+                    conn.setRequestProperty("Active-Remote", target.token)
                     conn.connectTimeout = 2000
                     conn.readTimeout = 2000
+                    deadline = deadlines.schedule({
+                        result.setException(IOException("Sender control timed out"))
+                        conn.disconnect()
+                    }, 5, TimeUnit.SECONDS)
                     val code = conn.responseCode
-                    try { conn.inputStream.readBytes() } catch (_: Exception) {}
-                    conn.disconnect()
-                    if (code in 200..299) {
-                        result.set(Unit)
-                    } else {
-                        Log.w(TAG, "DACP $path -> HTTP $code")
-                        result.setException(IOException("HTTP $code"))
-                    }
+                    // The body is unused. Do not allocate or drain an untrusted stream.
+                    if (code in 200..299) result.set(Unit)
+                    else result.setException(IOException("HTTP $code"))
                 } catch (e: Exception) {
-                    Log.w(TAG, "DACP send failed: $path", e)
                     result.setException(e)
+                } finally {
+                    deadline?.cancel(false)
+                    connection?.let { connections.remove(it); it.disconnect() }
+                    pending.remove(result)
                 }
             }
         } catch (e: Exception) {
+            pending.remove(result)
             result.setException(e)
         }
         return result
     }
 
-    companion object {
-        private const val TAG = "DacpController"
-    }
+    companion object { private const val TAG = "DacpController" }
 }

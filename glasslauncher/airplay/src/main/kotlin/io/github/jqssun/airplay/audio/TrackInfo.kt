@@ -25,11 +25,12 @@ data class TrackInfo(
         }
 
         @Suppress("UNCHECKED_CAST")
-        private fun _flatten(map: Map<String, Any>): Map<String, Any> {
+        private fun _flatten(map: Map<String, Any>, depth: Int = 0): Map<String, Any> {
+            require(depth <= 16) { "DMAP nesting limit" }
             val result = mutableMapOf<String, Any>()
             for ((k, v) in map) {
                 if (v is Map<*, *>) {
-                    result.putAll(_flatten(v as Map<String, Any>))
+                    result.putAll(_flatten(v as Map<String, Any>, depth + 1))
                 } else {
                     result[k] = v
                 }

@@ -82,7 +82,7 @@ $('pairForm').addEventListener('submit',event=>{event.preventDefault();const pin
 $('pairButton').addEventListener('click',()=>openSheet('pairPanel'));
 $('startNative').addEventListener('click',()=>action(async()=>{await api('native/start',{});feedback('Approve the prompt on your TV.');setTimeout(poll,1500);}));
 $('reconnect').addEventListener('click',()=>action(async()=>{await api('reconnect',{});setTimeout(poll,800);}));
-$('textForm').addEventListener('submit',event=>{event.preventDefault();const text=$('tvText').value;if(!text)return;action(async()=>{await api('text',{text},20000);$('tvText').value='';haptic();feedback('Sent to the TV.');});});
+$('textForm').addEventListener('submit',event=>{event.preventDefault();const text=$('tvText').value;if(!text)return;action(async()=>{const result=await api('text',{text},20000);$('tvText').value='';haptic();feedback(result.pending?'Text is still being delivered. Avoid sending it twice.':'Sent to the TV.');});});
 $('tvText').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();$('textForm').requestSubmit();}});
 
 // Settings toggles

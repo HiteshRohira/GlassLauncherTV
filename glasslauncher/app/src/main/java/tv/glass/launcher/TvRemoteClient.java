@@ -46,7 +46,9 @@ final class TvRemoteClient implements AutoCloseable {
     /** Serialises connecting, which may wait minutes for the TV-side prompt,
      *  without holding the lock that key presses need. */
     private final Object connectLock = new Object();
-    private Dadb adb;
+    private final Object lifecycleLock = new Object();
+    private volatile Dadb adb;
+    private volatile boolean closed;
     private AdbShellStream injector;
     private BlockingQueue<String> injectorReplies;
     private long injectorAttemptAt;
@@ -58,17 +60,25 @@ final class TvRemoteClient implements AutoCloseable {
     void startPairing()throws Exception{connect();}
     void connect()throws Exception{
         synchronized(connectLock){
+            if(closed)throw new IOException("Remote is closed.");
             if(connected)return;
-            close();pairing=true;message="Approve the Android debugging authorization on your TV.";
+            disconnect();pairing=true;message="Approve the Android debugging authorization on your TV.";
             try{
                 Dadb fresh=GoogleTvSetup.connect(context);
                 AdbShellResponse response=fresh.shell("echo glass-remote-ready");
                 if(response.getExitCode()!=0 || !response.getAllOutput().contains("glass-remote-ready")){try{fresh.close();}catch(Exception ignored){}throw new IOException("TV controls could not be enabled.");}
-                synchronized(this){adb=fresh;connected=true;}
+                synchronized(this){
+                    boolean accepted;
+                    synchronized(lifecycleLock){
+                        accepted=!closed;
+                        if(accepted){adb=fresh;connected=true;}
+                    }
+                    if(!accepted){fresh.close();throw new IOException("Remote is closed.");}
+                }
                 prefs.edit().putBoolean("local_authorized",true).apply();message="Connected";
                 recoverKeyboard();
                 synchronized(this){startInjector();}
-            }catch(Exception e){close();throw new IOException("TV controls could not connect. Approve Android's authorization on the TV, then retry.",e);}
+            }catch(Exception e){disconnect();throw new IOException("TV controls could not connect. Approve Android's authorization on the TV, then retry.",e);}
             finally{pairing=false;}
         }
     }
@@ -93,7 +103,7 @@ final class TvRemoteClient implements AutoCloseable {
             }
             if(!hold&&localKey(code,false))return;
             try{check(adb.shell(hold?"input keyevent --longpress "+code:"input keyevent "+code));}
-            catch(IOException e){close();throw e;}
+            catch(IOException e){disconnect();throw e;}
             // The injector may have died with adbd or the freezer; retry now and then.
             if(injector==null&&SystemClock.elapsedRealtime()-injectorAttemptAt>60_000)startInjector();
         }
@@ -235,5 +245,15 @@ final class TvRemoteClient implements AutoCloseable {
     private static void check(AdbShellResponse response)throws IOException{
         if(response.getExitCode()!=0)throw new IOException("The TV could not complete that action.");
     }
-    @Override public synchronized void close(){connected=false;stopInjector();if(adb!=null)try{adb.close();}catch(Exception ignored){}adb=null;}
+    private synchronized void disconnect(){connected=false;stopInjector();if(adb!=null)try{adb.close();}catch(Exception ignored){}adb=null;}
+    @Override public void close(){
+        synchronized(lifecycleLock){
+            if(closed)return;
+            closed=true;
+            connected=false;
+        }
+        // Let an in-flight text command restore the previous IME before retiring I/O.
+        Thread cleanup=new Thread(this::disconnect,"mirage-remote-close");
+        cleanup.setDaemon(true);cleanup.start();
+    }
 }

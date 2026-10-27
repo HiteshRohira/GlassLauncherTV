@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <permission android:name="${applicationId}.permission.INTERNAL_STATUS" android:protectionLevel="signature" />
+    <uses-permission android:name="${applicationId}.permission.INTERNAL_STATUS" />
     <!-- PERMISSIONS -->
 
     <!-- Wallpaper reading on legacy Android (12 and below). On Android 13+

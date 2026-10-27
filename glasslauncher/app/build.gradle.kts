@@ -10,8 +10,8 @@ android {
         applicationId = "tv.mirage.launcher"
         minSdk        = 26
         targetSdk     = 36
-        versionCode   = 24
-        versionName   = "1.1.8-airplay.9"
+        versionCode   = 26
+        versionName   = "1.1.9-airplay.11"
         resourceConfigurations += listOf("en")
 
         // Instrumentation test runner. Required so :app:connectedDebugAndroidTest

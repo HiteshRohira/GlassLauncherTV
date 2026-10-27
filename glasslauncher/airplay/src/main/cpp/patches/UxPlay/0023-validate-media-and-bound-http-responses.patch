@@ -1,0 +1,899 @@
+diff --git a/lib/control_query.h b/lib/control_query.h
+new file mode 100644
+index 0000000..9b7fdfa
+--- /dev/null
++++ b/lib/control_query.h
+@@ -0,0 +1,26 @@
++#ifndef CONTROL_QUERY_H
++#define CONTROL_QUERY_H
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++#include <errno.h>
++static int http_control_number(const char *url, const char *key, double *value) {
++    const char *p = strchr(url, '?');
++    if (!p) return 0;
++    size_t n = strlen(key);
++    for (++p; *p;) {
++        const char *next = strchr(p, '&');
++        size_t len = next ? (size_t)(next-p) : strlen(p);
++        if (len > n+1 && !strncmp(p, key, n) && p[n] == '=') {
++            char *end = NULL;
++            errno = 0;
++            double v = strtod(p+n+1, &end);
++            if (errno || end == p+n+1 || end != p+len || !isfinite(v)) return 0;
++            *value = v; return 1;
++        }
++        if (!next) break;
++        p = next+1;
++    }
++    return 0;
++}
++#endif
+diff --git a/lib/fcup_request.h b/lib/fcup_request.h
+index bbb2e75..c41e0f1 100644
+--- a/lib/fcup_request.h
++++ b/lib/fcup_request.h
+@@ -90,24 +90,13 @@ int fcup_request(void *conn_opaque, const char *media_url, const char *client_se
+ 
+     free(plist_xml);
+ 
+-    const char *http_request = http_response_get_data(request, &requestlen); 
+-    int send_len = send(socket_fd, http_request, requestlen, 0);
+-    if (send_len < 0) {
+-        int sock_err = SOCKET_GET_ERROR();
+-	logger_log(raop->logger, LOGGER_ERR, "fcup_request: send  error %d:%s\n",
+-		 sock_err, SOCKET_ERROR_STRING(sock_err));
+-	http_response_destroy(request);
+-        /* shut down connection? */
++    /* All bytes on PTTH use the same FIFO as its upgrade response.
++     * A direct send here can interleave with a partially written response. */
++    if (httpd_queue_by_type(raop->httpd, CONNECTION_TYPE_PTTH, request) < 0) {
++        logger_log(raop->logger, LOGGER_ERR, "fcup_request: reverse channel unavailable or busy");
++        http_response_destroy(request);
+         return -1;
+     }
+-
+-    if (logger_get_level(raop->logger) >= LOGGER_DEBUG) {
+-      char *request_str =  utils_data_to_text(http_request, requestlen);
+-        logger_log(raop->logger, LOGGER_DEBUG, "\n%s", request_str);
+-        free (request_str);
+-    }
+-    http_response_destroy(request);
+-    logger_log(raop->logger, LOGGER_DEBUG,"fcup_request: send sent Request of %d bytes from socket %d\n",
+-               send_len, socket_fd);
++    logger_log(raop->logger, LOGGER_DEBUG, "fcup_request: queued request %d", request_id);
+     return 0;
+ }
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index af947d7..3913927 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -1,3 +1,6 @@
++#include <float.h>
++#include <math.h>
++#include <errno.h>
+ /**
+  * Copyright (c) 2024 fduncanh
+  * All Rights Reserved.
+@@ -102,47 +105,26 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+     free(hw_addr);
+ }    
+ 
++#include "control_query.h"
+ static void
+ http_handler_scrub(raop_conn_t *conn, http_request_t *request, http_response_t *response,
+-                   char **response_data, int *response_datalen) {
+-    raop_t *raop = conn->raop;
+-    const char *url = http_request_get_url(request);
+-    const char *data = strstr(url, "?");
+-    float scrub_position = 0.0f;
+-    if (data) {
+-        data++;
+-        const char *position = strstr(data, "=") + 1;
+-        char *end = NULL;
+-        double value = strtod(position, &end);
+-        if (end && end != position) {
+-            scrub_position = (float) value;
+-            logger_log(raop->logger, LOGGER_DEBUG, "http_handler_scrub: got position = %.6f",
+-                       scrub_position);	  
+-        }
++                  char **response_data, int *response_datalen) {
++    double value;
++    if (!http_control_number(http_request_get_url(request), "position", &value) ||
++        value < 0 || value > FLT_MAX) {
++        http_response_init(response, "HTTP/1.1", 400, "Bad Request"); return;
+     }
+-    logger_log(raop->logger, LOGGER_DEBUG, "**********************SCRUB %f ***********************",scrub_position);
+-    raop->callbacks.on_video_scrub(raop->callbacks.cls, scrub_position);
++    conn->raop->callbacks.on_video_scrub(conn->raop->callbacks.cls, (float)value);
+ }
+-
+ static void
+ http_handler_rate(raop_conn_t *conn, http_request_t *request, http_response_t *response,
+-                  char **response_data, int *response_datalen) {
+-
+-    raop_t *raop = conn->raop;
+-    const char *url = http_request_get_url(request);
+-    const char *data = strstr(url, "?");
+-    float rate_value = 0.0f;
+-    if (data) {
+-        data++;
+-        const char *rate = strstr(data, "=") + 1;
+-        char *end = NULL;
+-        float value = strtof(rate, &end);
+-        if (end && end != rate) {
+-            rate_value =  value;
+-            logger_log(raop->logger, LOGGER_DEBUG, "http_handler_rate: got rate = %.6f", rate_value);
+-        }
++                 char **response_data, int *response_datalen) {
++    double value;
++    if (!http_control_number(http_request_get_url(request), "value", &value) ||
++        value < 0 || value > FLT_MAX) {
++        http_response_init(response, "HTTP/1.1", 400, "Bad Request"); return;
+     }
+-    raop->callbacks.on_video_rate(raop->callbacks.cls, rate_value);
++    conn->raop->callbacks.on_video_rate(conn->raop->callbacks.cls, (float)value);
+ }
+ 
+ static void
+diff --git a/lib/httpd.c b/lib/httpd.c
+index 6dcfc7a..29990ef 100644
+--- a/lib/httpd.c
++++ b/lib/httpd.c
+@@ -30,6 +30,7 @@
+ #include "utils.h"
+ #ifndef _WIN32
+ #include <netinet/tcp.h>
++#include <sys/time.h>
+ #endif
+ 
+ static const char *typename[] = {
+@@ -50,6 +51,12 @@ struct http_connection_s {
+     char staging[8];
+     int staging_len;
+     time_t last_active;
++    http_response_t *output;
++    int output_offset;
++    time_t output_started;
++    http_response_t *queued_output[16];
++    int queued_count;
++    size_t queued_bytes;
+ };
+ typedef struct http_connection_s http_connection_t;
+ 
+@@ -225,6 +232,14 @@ httpd_remove_connection(httpd_t *httpd, http_connection_t *connection, int sock_
+         logger_log(httpd->logger, LOGGER_DEBUG, "connection removal was requested");
+         connection->pending_remove = 0;
+     }
++    for (int i = 0; i < connection->queued_count; ++i)
++        http_response_destroy(connection->queued_output[i]);
++    connection->queued_count = 0;
++    connection->queued_bytes = 0;
++    if (connection->output) {
++        http_response_destroy(connection->output);
++        connection->output = NULL;
++    }
+     if (connection->request) {
+         http_request_destroy(connection->request);
+         connection->request = NULL;
+@@ -326,6 +341,8 @@ httpd_accept_connection(httpd_t *httpd, int server_fd, int is_ipv6)
+     }
+ #endif
+ 
++    struct timeval send_timeout = {0, 250000};
++    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof(send_timeout));
+     local_saddrlen = sizeof(local_saddr);
+     ret = getsockname(fd, (struct sockaddr *)&local_saddr, &local_saddrlen);
+     if (ret == -1) {
+@@ -360,6 +377,29 @@ httpd_nohold(httpd_t *httpd) {
+     return (httpd->nohold ? true: false);
+ }
+ 
++int
++httpd_queue_by_type(httpd_t *httpd, connection_type_t type, http_response_t *response)
++{
++    int length = 0;
++    http_response_get_data(response, &length);
++    if (length <= 0 || length > 1024 * 1024) return -1;
++    for (int i = 0; i < httpd->max_connections; ++i) {
++        http_connection_t *c = &httpd->connections[i];
++        if (!c->connected || c->pending_remove || c->type != type) continue;
++        if (!c->output) {
++            c->output = response;
++            c->output_offset = 0;
++            c->output_started = time(NULL);
++            return 0;
++        }
++        if (c->queued_count == 16 || c->queued_bytes + length > 1024 * 1024) return -1;
++        c->queued_output[c->queued_count++] = response;
++        c->queued_bytes += length;
++        return 0;
++    }
++    return -1;
++}
++
+ void
+ httpd_remove_known_connections(httpd_t *httpd) {
+     for (int i = 0; i < httpd->max_connections; i++) {
+@@ -398,7 +438,7 @@ httpd_thread(void *arg)
+     assert(httpd);
+ 
+     while (1) {
+-        fd_set rfds;
++        fd_set rfds, wfds;
+         struct timeval tv;
+         int nfds = 0;
+         int nfds_set = 0;
+@@ -416,6 +456,7 @@ httpd_thread(void *arg)
+ 
+         /* Get the correct nfds value and set rfds */
+         FD_ZERO(&rfds);
++        FD_ZERO(&wfds);
+         if (httpd->open_connections < httpd->max_connections) {
+             if (httpd->server_fd4 != -1) {
+                 FD_SET(httpd->server_fd4, &rfds);
+@@ -452,14 +493,20 @@ httpd_thread(void *arg)
+                 httpd_remove_connection(httpd, &httpd->connections[i], 0);
+                 continue;
+             }
+-            socket_fd = httpd->connections[i].socket_fd;
+-            FD_SET(socket_fd, &rfds);
++            http_connection_t *c = &httpd->connections[i];
++            if (c->output && time(NULL) - c->output_started > 10) {
++                httpd_remove_connection(httpd, c, 0);
++                continue;
++            }
++            socket_fd = c->socket_fd;
++            if (c->output) FD_SET(socket_fd, &wfds);
++            if (!c->output || c->type == CONNECTION_TYPE_PTTH) FD_SET(socket_fd, &rfds);
+             if (nfds <= socket_fd) {
+                 nfds = socket_fd+1;
+             }
+         }
+ 
+-        nfds_set = select(nfds, &rfds, NULL, NULL, &tv);
++        nfds_set = select(nfds, &rfds, &wfds, NULL, &tv);
+         if (nfds_set == 0) {
+             /* Timeout happened */
+             continue;
+@@ -497,6 +544,38 @@ httpd_thread(void *arg)
+             if (!connection->connected) {
+                 continue;
+             }
++            if (connection->output) {
++                if (FD_ISSET(connection->socket_fd, &wfds)) {
++                    int length = 0;
++                    const char *bytes = http_response_get_data(connection->output, &length);
++                    int left = length - connection->output_offset;
++                    int count = left > 65536 ? 65536 : left;
++                    int sent = send(connection->socket_fd, bytes + connection->output_offset,
++                                    count, MSG_DONTWAIT);
++                    if (sent > 0) connection->output_offset += sent;
++                    else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
++                        httpd_remove_connection(httpd, connection, 0); continue;
++                    }
++                    if (connection->output_offset == length) {
++                        int disconnect = http_response_get_disconnect(connection->output);
++                        http_response_destroy(connection->output); connection->output = NULL;
++                        if (disconnect) { httpd_remove_connection(httpd, connection, 0); continue; }
++                        if (connection->queued_count) {
++                            int next_length = 0;
++                            connection->output = connection->queued_output[0];
++                            http_response_get_data(connection->output, &next_length);
++                            connection->queued_bytes -= next_length;
++                            connection->queued_count--;
++                            memmove(connection->queued_output, connection->queued_output + 1,
++                                    connection->queued_count * sizeof(connection->queued_output[0]));
++                            connection->output_offset = 0;
++                            connection->output_started = time(NULL);
++                        }
++                    }
++                }
++                if (connection->type != CONNECTION_TYPE_PTTH ||
++                    !FD_ISSET(connection->socket_fd, &rfds)) continue;
++            }
+             if (!FD_ISSET(connection->socket_fd, &rfds)) {
+                 continue;
+             }
+@@ -584,10 +663,9 @@ httpd_thread(void *arg)
+                 /* this is a response from the client to a
+                  * GET /event reverse HTTP request from the server */
+                 if (recv_datalen && logger_debug) {
+-                    buffer[recv_datalen] = '\0';
+                     logger_log(httpd->logger, LOGGER_INFO, "<<<< received response from client"
+                                " (reversed HTTP = \"PTTH/1.0\") connection"
+-                               " on socket %d:\n%s\n", connection->socket_fd, buffer);
++                               " on socket %d:\n%.*s\n", connection->socket_fd, recv_datalen, buffer);
+                 }
+                 if (recv_datalen == 0) {
+                     httpd_remove_connection(httpd, connection, 0);
+@@ -625,32 +703,12 @@ httpd_thread(void *arg)
+                 connection->request = NULL;
+ 
+                 if (response) {
+-                    const char *data;
+-                    int datalen;
+-                    int written;
+-                    int ret;
+-
+-                    /* Get response data and datalen */
+-                    data = http_response_get_data(response, &datalen);
+-
+-                    written = 0;
+-                    while (written < datalen) {
+-                        ret = send(connection->socket_fd, data+written, datalen-written, 0);
+-                        if (ret == -1) {
+-                            logger_log(httpd->logger, LOGGER_ERR, "httpd error in sending data");
+-                            break;
+-                        }
+-                        written += ret;
+-                    }
+-
+-                    if (http_response_get_disconnect(response)) {
+-                        logger_log(httpd->logger, LOGGER_INFO, "Disconnecting on software request");
+-                        httpd_remove_connection(httpd, connection, 0);
+-                    }
++                    connection->output = response;
++                    connection->output_offset = 0;
++                    connection->output_started = time(NULL);
+                 } else {
+                     logger_log(httpd->logger, LOGGER_WARNING, "httpd didn't get response");
+                 }
+-                http_response_destroy(response);
+             } else {
+                 logger_log(httpd->logger, LOGGER_DEBUG, "Request not complete, waiting for more data...");
+             }
+@@ -762,7 +820,7 @@ httpd_stop(httpd_t *httpd)
+     assert(httpd);
+ 
+     MUTEX_LOCK(httpd->run_mutex);
+-    if (!httpd->running || httpd->joined) {
++    if (httpd->joined) {
+         MUTEX_UNLOCK(httpd->run_mutex);
+         return;
+     }
+diff --git a/lib/httpd.h b/lib/httpd.h
+index 72cc137..f24ac3c 100644
+--- a/lib/httpd.h
++++ b/lib/httpd.h
+@@ -49,6 +49,9 @@ const char *httpd_get_connection_typename (connection_type_t type);
+ void *httpd_get_connection_by_type (httpd_t *httpd, connection_type_t type, int instance);
+ httpd_t *httpd_init(logger_t *logger, httpd_callbacks_t *callbacks, int  nohold);
+ 
++/* Worker-thread only. Owns response on success; ordered after pending bytes. */
++int httpd_queue_by_type(httpd_t *httpd, connection_type_t type, http_response_t *response);
++
+ int httpd_is_running(httpd_t *httpd);
+ 
+ int httpd_start(httpd_t *httpd, unsigned short *port);
+diff --git a/lib/mirror_config.h b/lib/mirror_config.h
+new file mode 100644
+index 0000000..6429e89
+--- /dev/null
++++ b/lib/mirror_config.h
+@@ -0,0 +1,48 @@
++/* Bounds-checked codec configuration; no decoder/session policy. */
++#ifndef MIRROR_CONFIG_H
++#define MIRROR_CONFIG_H
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++static int mirror_config_parse(const unsigned char *data, size_t size,
++                               unsigned char *out, size_t capacity,
++                               size_t *written, int *hevc) {
++    size_t offsets[3], lengths[3], count = 0, total = 0;
++    *written = 0;
++    if (!data || size < 8) return 0;
++    *hevc = !memcmp(data + 4, "hvc1", 4);
++    if (*hevc) {
++        size_t pos = 0x75;
++        for (size_t i = 0; i < 3; ++i) {
++            if (pos > size || size - pos < 5) return 0;
++            if (data[pos] != 0xa0 + i || data[pos+1] != 0 || data[pos+2] != 1) return 0;
++            size_t n = ((size_t)data[pos+3] << 8) | data[pos+4];
++            pos += 5;
++            if (!n || n > size - pos) return 0;
++            offsets[count] = pos; lengths[count++] = n; pos += n;
++        }
++    } else {
++        size_t n = ((size_t)data[6] << 8) | data[7];
++        if (!n || n > size - 8) return 0;
++        offsets[0] = 8; lengths[0] = n;
++        size_t pos = 8 + n;
++        if (size - pos < 3) return 0;
++        n = ((size_t)data[pos+1] << 8) | data[pos+2];
++        pos += 3;
++        if (!n || n > size - pos) return 0;
++        offsets[1] = pos; lengths[1] = n; count = 2;
++    }
++    for (size_t i = 0; i < count; ++i) {
++        if (capacity - total < 4 || lengths[i] > capacity - total - 4) return 0;
++        total += 4 + lengths[i];
++    }
++    size_t pos = 0;
++    for (size_t i = 0; i < count; ++i) {
++        const unsigned char start[] = {0,0,0,1};
++        memcpy(out+pos,start,4); pos += 4;
++        memcpy(out+pos,data+offsets[i],lengths[i]); pos += lengths[i];
++    }
++    *written = total;
++    return 1;
++}
++#endif
+diff --git a/lib/pairing.c b/lib/pairing.c
+index c83200e..95c8fbd 100644
+--- a/lib/pairing.c
++++ b/lib/pairing.c
+@@ -34,6 +34,7 @@ typedef struct srp_s {
+     unsigned char verifier[SRP_VERIFIER_SIZE];
+     unsigned char session_key[SRP_SESSION_KEY_SIZE];
+     unsigned char private_key[SRP_PRIVATE_KEY_SIZE];
++    bool proof_valid;
+ } srp_t;
+ 
+ struct pairing_s {
+@@ -145,6 +146,12 @@ pairing_session_set_setup_status(pairing_session_t *session)
+     session->status = STATUS_SETUP;
+ }
+ 
++int
++pairing_session_authorized(pairing_session_t *session)
++{
++    return session && (session->pair_setup || session->status == STATUS_FINISHED);
++}
++
+ int
+ pairing_session_check_handshake_status(pairing_session_t *session)
+ {
+@@ -500,7 +507,7 @@ random_pin() {
+ int
+ srp_new_user(pairing_session_t *session, pairing_t *pairing, const char *device_id, const char *pin,
+              const char **salt, int *len_salt, const char **pk, int *len_pk) {
+-    if (strlen(device_id) > SRP_USERNAME_SIZE) {
++    if (!session || !pairing || !device_id || !pin || strlen(device_id) > SRP_USERNAME_SIZE) {
+         return -1;
+     }
+ 
+@@ -530,7 +537,8 @@ srp_new_user(pairing_session_t *session, pairing_t *pairing, const char *device_
+                                        (const unsigned char **) &srp_s, &len_s,
+                                        (const unsigned char **) &srp_v, &len_v,
+                                        NULL, NULL);
+-    if (len_s != SRP_SALT_SIZE || len_v != SRP_VERIFIER_SIZE) {
++    if (!srp_s || !srp_v || len_s != SRP_SALT_SIZE || len_v != SRP_VERIFIER_SIZE) {
++        free(srp_s); free(srp_v); free(session->srp); session->srp = NULL;
+         return -3;
+     }
+ 
+@@ -546,6 +554,11 @@ srp_new_user(pairing_session_t *session, pairing_t *pairing, const char *device_
+                                     (const unsigned char **) &srp_B, &len_B,
+                                     NULL, NULL, 1);
+ 
++    free(srp_s); free(srp_v);
++    if (!srp_B || len_B <= 0 || len_B > SRP_PK_SIZE) {
++        free(srp_B); free(session->srp); session->srp = NULL;
++        return -4;
++    }
+     *pk = (char *) srp_B;
+     *len_pk = len_B;
+ 
+@@ -555,6 +568,8 @@ srp_new_user(pairing_session_t *session, pairing_t *pairing, const char *device_
+ int
+ srp_validate_proof(pairing_session_t *session, pairing_t *pairing, const unsigned char *A,
+                     int len_A, unsigned char *proof, int client_proof_len, int proof_len) {
++    if (!session || !session->srp || !A || len_A <= 0 || len_A > SRP_PK_SIZE ||
++        !proof || client_proof_len != 20 || proof_len < 20) return -1;
+     int authenticated  = 0;
+     const unsigned char *B =  NULL;
+     const unsigned char *b = session->srp->private_key;
+@@ -571,6 +586,10 @@ srp_validate_proof(pairing_session_t *session, pairing_t *pairing, const unsigne
+                                                     b, len_b,
+                                                     &B, &len_B, NULL, NULL, 1);
+ 
++    if (!verifier) {
++        free(session->srp); session->srp = NULL;
++        return -1;
++    }
+     srp_verifier_verify_session(verifier, proof, &M2);
+     authenticated = srp_verifier_is_authenticated(verifier);
+     if (authenticated == 0) {
+@@ -581,17 +600,21 @@ srp_validate_proof(pairing_session_t *session, pairing_t *pairing, const unsigne
+         return -1;
+     }
+     session_key = srp_verifier_get_session_key(verifier, &len_K);
+-    if (len_K != SRP_SESSION_KEY_SIZE) {
++    if (!session_key || !M2 || len_K != SRP_SESSION_KEY_SIZE) {
++        srp_verifier_delete(verifier);
++        free(session->srp); session->srp = NULL;
+         return -2;
+     }
+     memcpy(session->srp->session_key, session_key, len_K);
+-    memcpy(proof, M2, proof_len);
++    memcpy(proof, M2, 20);
++    session->srp->proof_valid = true;
+     srp_verifier_delete(verifier);
+     return 0;
+ }
+ int
+ srp_confirm_pair_setup(pairing_session_t *session, pairing_t *pairing,
+                        unsigned char *epk, unsigned char *auth_tag) {
++    if (!session || !session->srp || !session->srp->proof_valid || !epk || !auth_tag) return -1;
+     unsigned char aesKey[16] = {0}, aesIV[16] = {0};
+     unsigned char hash[SHA512_DIGEST_LENGTH] = {0};
+     unsigned char pk[ED25519_KEY_SIZE] = {0};
+@@ -620,10 +643,7 @@ srp_confirm_pair_setup(pairing_session_t *session, pairing_t *pairing,
+ 
+     /* decrypt client epk to authenticate client using auth_tag */
+     int pk_len_client  = gcm_decrypt(epk, ED25519_KEY_SIZE, pk, aesKey, aesIV, auth_tag);
+-    if (pk_len_client <= 0) {
+-       /* authentication failed */
+-         return pk_len_client;
+-    }
++    if (pk_len_client != ED25519_KEY_SIZE) return -1;
+ 
+     /* success, from server viewpoint */
+     memcpy(session->client_pk, pk, ED25519_KEY_SIZE);
+diff --git a/lib/pairing.h b/lib/pairing.h
+index cdb1374..e6d1be5 100644
+--- a/lib/pairing.h
++++ b/lib/pairing.h
+@@ -42,6 +42,7 @@ void pairing_get_public_key(pairing_t *pairing, unsigned char public_key[ED25519
+ pairing_session_t *pairing_session_init(pairing_t *pairing);
+ void pairing_session_set_setup_status(pairing_session_t *session);
+ int pairing_session_check_handshake_status(pairing_session_t *session);
++int pairing_session_authorized(pairing_session_t *session);
+ int pairing_session_handshake(pairing_session_t *session, const unsigned char ecdh_key[X25519_KEY_SIZE],
+                               const unsigned char ed_key[ED25519_KEY_SIZE]);
+ int pairing_session_get_public_key(pairing_session_t *session, unsigned char ecdh_key[X25519_KEY_SIZE]);
+diff --git a/lib/raop.c b/lib/raop.c
+index 07564e1..9cbec27 100644
+--- a/lib/raop.c
++++ b/lib/raop.c
+@@ -266,7 +266,17 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+ 
+     const char *client_session_id = http_request_get_header(request, "X-Apple-Session-ID");
+     const char *host = http_request_get_header(request, "Host");
+-    hls_request =  (host && !cseq && !client_session_id);
++    bool internal_request = host && !cseq && !client_session_id;
++    static const unsigned char loop6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
++    bool loopback = (conn->remotelen == 4 && conn->remote[0] == 127) ||
++                    (conn->remotelen == 16 && !memcmp(conn->remote, loop6, 16));
++    hls_request = internal_request && loopback && !strcmp(method, "GET");
++    if (internal_request && !hls_request) {
++        *response = http_response_create();
++        http_response_init(*response, protocol, 403, "Forbidden");
++        http_response_finish(*response, NULL, 0);
++        return;
++    }
+ 
+     if (conn->connection_type == CONNECTION_TYPE_UNKNOWN) {
+         if (cseq || ble) {
+@@ -443,7 +453,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+         }
+     } else if (!hls_request && !strcmp(protocol, "HTTP/1.1")) {
+         if (!strcmp(method, "POST")) {
+-            if (!strcmp(url, "/reverse")) {
++            if (!strcmp(url, "/pair-pin-start")) {
++                handler = &raop_handler_pairpinstart;
++            } else if (!strcmp(url, "/pair-setup-pin")) {
++                handler = &raop_handler_pairsetup_pin;
++            } else if (!strcmp(url, "/pair-setup")) {
++                handler = &raop_handler_pairsetup;
++            } else if (!strcmp(url, "/pair-verify")) {
++                handler = &raop_handler_pairverify;
++            } else if (!strcmp(url, "/reverse")) {
+                 handler = &http_handler_reverse;
+             } else if (!strcmp(url, "/play")) {
+                 handler = &http_handler_play;
+@@ -476,7 +494,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
+         handler = &http_handler_hls;
+     }
+ 
+-    if (handler != NULL) {
++    bool protected_operation = !strcmp(method, "SETUP") || !strcmp(method, "RECORD") ||
++        !strcmp(method, "SET_PARAMETER") || !strcmp(method, "FLUSH") ||
++        (!strcmp(method, "POST") && strcmp(url, "/pair-pin-start") &&
++         strcmp(url, "/pair-setup-pin") && strcmp(url, "/pair-setup") &&
++         strcmp(url, "/pair-verify") && strcmp(url, "/fp-setup") && strcmp(url, "/feedback"));
++    if (!hls_request && raop->use_pin && protected_operation &&
++        !pairing_session_authorized(conn->session)) {
++        http_response_init(*response, protocol, 403, "Forbidden");
++    } else if (handler != NULL) {
+         handler(conn, request, *response, &response_data, &response_datalen);
+     } else {
+         logger_log(raop->logger, LOGGER_INFO,
+@@ -855,7 +881,7 @@ raop_start_httpd(raop_t *raop, unsigned short *port) {
+ void
+ raop_stop_httpd(raop_t *raop) {
+     assert(raop);
+-    httpd_stop(raop->httpd);
++    if (raop->httpd) httpd_stop(raop->httpd);
+ }
+ 
+ void raop_remove_known_connections(raop_t * raop) {
+diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
+index b6cc825..09ae512 100644
+--- a/lib/raop_handlers.h
++++ b/lib/raop_handlers.h
+@@ -316,7 +316,7 @@ raop_handler_pairsetup_pin(raop_conn_t *conn,
+         char *method = NULL;
+         char *user = NULL;
+         plist_get_string_val(req_method_node, &method);
+-        if (strncmp(method, "pin", strlen (method))) {
++        if (!method || strcmp(method, "pin")) {
+             logger_log(raop->logger, LOGGER_ERR, "error, required method is \"pin\", client requested \"%s\"", method);
+             free (method);
+             plist_free (req_root_node);
+@@ -342,6 +342,7 @@ raop_handler_pairsetup_pin(raop_conn_t *conn,
+         plist_t res_root_node = plist_new_dict();
+         plist_t res_salt_node = plist_new_data(salt, len_salt);
+         plist_t res_pk_node = plist_new_data(pk, len_pk);
++        free((void *)pk);
+         plist_dict_set_item(res_root_node, "pk", res_pk_node);	
+         plist_dict_set_item(res_root_node, "salt", res_salt_node);
+         plist_to_bin(res_root_node, response_data, (uint32_t*) response_datalen);
+@@ -358,7 +359,8 @@ raop_handler_pairsetup_pin(raop_conn_t *conn,
+         uint64_t client_proof_len = 0;
+         plist_get_data_val(req_pk_node, &client_pk, &client_pk_len); 
+         plist_get_data_val(req_proof_node, &client_proof, &client_proof_len);
+-        if (client_proof_len > sizeof(proof)) {
++        if (!client_pk || client_pk_len == 0 || client_pk_len > SRP_PK_SIZE ||
++            !client_proof || client_proof_len != 20) {
+             logger_log(raop->logger, LOGGER_ERR, "Client Authentication Failure (client_proof_len %d invalid)", (int) client_proof_len);
+             free (client_proof);
+             free (client_pk);
+@@ -403,10 +405,16 @@ raop_handler_pairsetup_pin(raop_conn_t *conn,
+         int ret = 0;
+         plist_get_data_val(req_epk_node, &client_epk, &client_epk_len); 
+         plist_get_data_val(req_authtag_node, &client_authtag, &client_authtag_len);
++        if (!client_epk || client_epk_len != ED25519_KEY_SIZE ||
++            !client_authtag || client_authtag_len != GCM_AUTHTAG_SIZE) {
++            free(client_epk); free(client_authtag); plist_free(req_root_node);
++            goto authentication_failed;
++        }
+ 
+         if (logger_debug) {
+             char *str = utils_data_to_string((const unsigned char *) client_epk, client_epk_len, 16);
+             logger_log(raop->logger, LOGGER_DEBUG, "client_epk %d:\n%s\n", (int) client_epk_len, str);
++            free(str);
+             str = utils_data_to_string((const unsigned char *) client_authtag, client_authtag_len, 16);
+             logger_log(raop->logger, LOGGER_DEBUG, "client_authtag  %d:\n%s\n", (int) client_authtag_len, str);
+             free (str);
+@@ -473,10 +481,10 @@ raop_handler_pairverify(raop_conn_t *conn,
+                         char **response_data, int *response_datalen)
+ {
+     raop_t *raop = conn->raop;
+-    bool register_check = false;  
++    bool register_check = raop->use_pin && !pairing_session_authorized(conn->session);
+     if (pairing_session_check_handshake_status(conn->session)) {
+         pairing_session_set_setup_status(conn->session);
+-        register_check = raop->use_pin;
++        /* Authorization check remains required after legacy pair-setup. */
+     }
+     unsigned char public_key[X25519_KEY_SIZE];
+     unsigned char signature[PAIRING_SIG_SIZE];
+@@ -515,6 +523,8 @@ raop_handler_pairverify(raop_conn_t *conn,
+             }
+ 
+             if (!registered_client) {
++                http_response_init(response, "RTSP/1.0", 403, "Forbidden");
++                http_response_set_disconnect(response, 1);
+                 return;
+             }
+         }
+@@ -786,6 +796,16 @@ raop_handler_setup(raop_conn_t *conn,
+         }
+ 
+         plist_get_data_val(req_eiv_node, &eiv, &eiv_len);
++        char *validated_ekey = NULL;
++        uint64_t validated_ekey_len = 0;
++        plist_get_data_val(req_ekey_node, &validated_ekey, &validated_ekey_len);
++        if (!eiv || eiv_len != 16 || !validated_ekey || validated_ekey_len != 72) {
++            free(eiv); free(validated_ekey);
++            plist_free(res_root_node); plist_free(req_root_node);
++            http_response_init(response, "RTSP/1.0", 400, "Bad Request");
++            return;
++        }
++        free(validated_ekey);
+         memcpy(aesiv, eiv, 16);
+         free(eiv);	
+         logger_log(raop->logger, LOGGER_DEBUG, "eiv_len = %llu", eiv_len);
+@@ -803,7 +823,7 @@ raop_handler_setup(raop_conn_t *conn,
+         logger_log(raop->logger, LOGGER_DEBUG, "ekey_len = %llu", ekey_len);
+         // eaeskey is 72 bytes, aeskey is 16 bytes
+         if (logger_debug) {
+-            char *str = utils_data_to_string((unsigned char *) eaeskey, ekey_len, 16);
++            char *str = utils_data_to_string((unsigned char *) eaeskey, sizeof(eaeskey), 16);
+             logger_log(raop->logger, LOGGER_DEBUG, "ekey:\n%s", str);
+             free (str);
+         }
+diff --git a/lib/raop_rtp_mirror.c b/lib/raop_rtp_mirror.c
+index 2c361b5..151e43f 100644
+--- a/lib/raop_rtp_mirror.c
++++ b/lib/raop_rtp_mirror.c
+@@ -21,6 +21,7 @@
+ #define MIRROR_MAX_PAYLOAD (8 * 1024 * 1024)
+ 
+ #include <stdlib.h>
++#include "mirror_config.h"
+ #include <stdio.h>
+ #include <string.h>
+ #include <assert.h>
+@@ -633,159 +634,27 @@ raop_rtp_mirror_thread(void *arg)
+                     unsupported_codec = true;
+                     break;
+                 }
+-                /* test for a H265 VPS/SPS/PPS */
+-                unsigned char hvc1[] = { 0x68, 0x76, 0x63, 0x31 };
+-
+-                if (!memcmp(payload + 4, hvc1, 4)) {
+-                    /* hvc1 HECV detected */
+-                    if (codec == VIDEO_CODEC_UNKNOWN) {
+-                        codec = VIDEO_CODEC_H265;
+-                        h265_video = true;
+-                        if (raop_rtp_mirror->callbacks.video_set_codec(raop_rtp_mirror->callbacks.cls, codec) < 0) {
+-                            logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "failed to set video codec as H265 ");
+-                            /* drop connection */
+-                            conn_reset = true;
+-                            break;
+-                        }
+-                    } else if (codec != VIDEO_CODEC_H265) {
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "invalid video codec change to H265: codec was set previously");
+-                        /* drop connection */
+-                        conn_reset = true;
+-                        break;
+-                    }
+-                    unsigned char vps_start_code[] = { 0xa0, 0x00, 0x01, 0x00 };
+-                    unsigned char sps_start_code[] = { 0xa1, 0x00, 0x01, 0x00 };
+-                    unsigned char pps_start_code[] = { 0xa2, 0x00, 0x01, 0x00 };
+-
+-                    unsigned char * ptr = payload + 0x75;
+- 
+-                    if (memcmp(ptr, vps_start_code, 4)) {
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "non-conforming HEVC VPS/SPS/PPS payload (VPS)");
+-                        raop_rtp_mirror->callbacks.video_pause(raop_rtp_mirror->callbacks.cls);
+-                        break;
+-                    }
+-                    short vps_size = byteutils_get_short_be(ptr, 3);
+-                    ptr += 5;
+-                    unsigned char *vps = ptr;
+-                    if (logger_debug) {
+-                        char *str = utils_data_to_string(vps, vps_size, 16);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "h265 vps size %d\n%s",vps_size, str);
+-                        free(str);
+-                    }
+-                    ptr += vps_size;
+-                    if (memcmp(ptr, sps_start_code, 4)) {
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "non-conforming HEVC VPS/SPS/PPS payload (SPS)");
+-                        raop_rtp_mirror->callbacks.video_pause(raop_rtp_mirror->callbacks.cls);
+-                        break;
+-                    }
+-                    short sps_size = byteutils_get_short_be(ptr, 3);
+-                    ptr += 5;
+-                    unsigned char *sps = ptr;
+-                    if (logger_debug) {
+-                        char *str = utils_data_to_string(sps, sps_size, 16);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "h265 sps size %d\n%s",vps_size, str);
+-                        free(str);
+-                    }
+-                    ptr += sps_size;
+-                    if (memcmp(ptr, pps_start_code, 4)) {
+-                       logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "non-conforming HEVC VPS/SPS/PPS payload (PPS)");			
+-                        raop_rtp_mirror->callbacks.video_pause(raop_rtp_mirror->callbacks.cls);
+-                        break;
+-                    }
+-                    short pps_size = byteutils_get_short_be(ptr, 3);
+-                    ptr += 5;
+-                    unsigned char *pps = ptr;
+-                    if (logger_debug) {
+-                        char *str = utils_data_to_string(pps, pps_size, 16);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "h265 pps size %d\n%s",pps_size, str);
+-                        free(str);
+-                    }
+-                    sps_pps_len = vps_size + sps_size + pps_size + 12;
+-                    if (sps_pps_len > sizeof(sps_pps)) {
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "\nInvalid SPS+PPS length %zu exceeds limit %zu, aborting",
+-                                   sps_pps_len, sizeof(sps_pps));
+-                        break;
+-                    }
+-                    ptr = sps_pps;
+-                    memcpy(ptr, nal_start_code, 4);
+-                    ptr += 4;
+-			   
+-                    memcpy(ptr, vps, vps_size);
+-                    ptr += vps_size;
+-			   
+-                    memcpy(ptr, nal_start_code, 4);
+-                    ptr += 4
+-			   ;
+-                    memcpy(ptr, sps, sps_size);
+-                    ptr += sps_size;
+-			   
+-                    memcpy(ptr, nal_start_code, 4);
+-                    ptr += 4;
+-			   
+-                    memcpy(ptr, pps, pps_size);
+-                } else {
+-                    if (codec == VIDEO_CODEC_UNKNOWN) {
+-                        codec = VIDEO_CODEC_H264;
+-                        h265_video = false;
+-                        if (raop_rtp_mirror->callbacks.video_set_codec(raop_rtp_mirror->callbacks.cls, codec) < 0) {
+-                            logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "failed to set video codec as H264 ");
+-                            /* drop connection */
+-                            conn_reset = true;
+-                            break;
+-                        }
+-                    } else if (codec != VIDEO_CODEC_H264) {
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "invalid codec change to H264: codec was set previously");
+-                        /* drop connection */
++                size_t config_size = 0;
++                int config_hevc = 0;
++                if (!mirror_config_parse(payload, payload_size, sps_pps,
++                                         sizeof(sps_pps), &config_size, &config_hevc)) {
++                    sps_pps_len = 0;
++                    logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "Invalid codec configuration");
++                    break;
++                }
++                sps_pps_len = config_size;
++                int requested_codec = config_hevc ? VIDEO_CODEC_H265 : VIDEO_CODEC_H264;
++                if (codec == VIDEO_CODEC_UNKNOWN) {
++                    codec = requested_codec;
++                    h265_video = config_hevc;
++                    if (raop_rtp_mirror->callbacks.video_set_codec(raop_rtp_mirror->callbacks.cls, codec) < 0) {
+                         conn_reset = true;
+                         break;
+                     }
+-                    short sps_size = byteutils_get_short_be(payload,6);
+-                    unsigned char *sequence_parameter_set = payload + 8;
+-                    short pps_size = byteutils_get_short_be(payload, sps_size + 9);
+-                    unsigned char *picture_parameter_set = payload + sps_size + 11;
+-                    int data_size = 6;
+-                    if (logger_debug) {
+-                        char *str = utils_data_to_string(payload, data_size, 16);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "raop_rtp_mirror: SPS+PPS header size = %d", data_size);		
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "raop_rtp_mirror h264 SPS+PPS header:\n%s", str);
+-                        free(str);
+-                        str = utils_data_to_string(sequence_parameter_set, sps_size,16);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "raop_rtp_mirror SPS NAL size = %d",  sps_size);		
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "raop_rtp_mirror h264 Sequence Parameter Set:\n%s", str);
+-                        free(str);
+-                        str = utils_data_to_string(picture_parameter_set, pps_size, 16);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "raop_rtp_mirror PPS NAL size = %d", pps_size);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "raop_rtp_mirror h264 Picture Parameter Set:\n%s", str);
+-                        free(str);
+-                    }
+-                    data_size = payload_size - sps_size - pps_size - 11; 
+-                    if (data_size > 0 && logger_debug) {
+-                        char *str = utils_data_to_string (picture_parameter_set + pps_size, data_size, 16);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "remainder size = %d", data_size);
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "remainder of SPS+PPS packet:\n%s", str);
+-                        free(str);
+-                    } else if (data_size < 0) {
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_ERR, " pps_sps error: packet remainder size = %d < 0", data_size);
+-                    }
+-
+-                    // Copy the sps and pps into a buffer to prepend to the next NAL unit.
+-                    sps_pps_len = sps_size + pps_size + 8;
+-                    if (sps_pps_len > sizeof(sps_pps)) {
+-                        logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "\nInvalid SPS+PPS length %zu exceeds limit %zu, aborting",
+-                                   sps_pps_len, sizeof(sps_pps));
+-                        break;
+-                    }
+-                    unsigned char *ptr = sps_pps;
+-                    memcpy(ptr, nal_start_code, 4);
+-                    ptr += 4;
+-
+-                    memcpy(ptr, sequence_parameter_set, sps_size);
+-                    ptr += sps_size;
+-
+-                    memcpy(ptr, nal_start_code, 4);
+-                    ptr += 4;
+-
+-                    memcpy(ptr, picture_parameter_set, pps_size);
++                } else if (codec != requested_codec) {
++                    sps_pps_len = 0;
++                    conn_reset = true;
++                    break;
+                 }
+                 // h264codec_t h264;
+                 // h264.version = payload[0];

@@ -21,6 +21,7 @@ import java.util.List;
  * </ul>
  */
 final class PairingBook {
+    long revision;
     interface Random { String token(); String pin(); }
 
     static final int MAX_DEVICES = 16;

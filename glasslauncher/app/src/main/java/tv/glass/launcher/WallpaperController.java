@@ -490,8 +490,28 @@ final class WallpaperController {
                 // display via toHardwareOrSelf — the ARGB intermediate
                 // is recycled inside that helper.
                 opts.inPreferredConfig  = Bitmap.Config.ARGB_8888;
+                int sourceWidth=opts.outWidth, sourceHeight=opts.outHeight;
+                int[] crop = centerCropRegion(sourceWidth, sourceHeight, screenW, screenH);
                 try (InputStream is = host.getContentResolver().openInputStream(uri)) {
-                    if (is != null) argb = BitmapFactory.decodeStream(is, null, opts);
+                    if (is != null) {
+                        android.graphics.BitmapRegionDecoder decoder = null;
+                        try {
+                            decoder = android.graphics.BitmapRegionDecoder.newInstance(is, false);
+                            opts.inSampleSize = computeSampleSizeAtLeast(crop[2]-crop[0], crop[3]-crop[1], screenW, screenH);
+                            argb = decoder.decodeRegion(new android.graphics.Rect(crop[0], crop[1], crop[2], crop[3]), opts);
+                        } finally { if (decoder != null) decoder.recycle(); }
+                    }
+                } catch (Exception unsupportedRegion) {
+                    // Some decoders cannot crop. Bound their intermediate allocation.
+                }
+                if (argb == null) {
+                    opts.inSampleSize = calcSampleSize(sourceWidth, sourceHeight);
+                    long budget = Math.max(1L, (long)screenW * screenH) * 4;
+                    while ((long)(sourceWidth / opts.inSampleSize) * (sourceHeight / opts.inSampleSize) > budget
+                            && opts.inSampleSize < 32768) opts.inSampleSize *= 2;
+                    try (InputStream is = host.getContentResolver().openInputStream(uri)) {
+                        if (is != null) argb = BitmapFactory.decodeStream(is, null, opts);
+                    }
                 }
             } catch (Exception | OutOfMemoryError ignored) {
                 argb = null;
@@ -878,6 +898,17 @@ final class WallpaperController {
      *
      * <p>Package-private + static so it is exercised by JVM unit tests.
      */
+    static int[] centerCropRegion(int width, int height, int displayW, int displayH) {
+        if (width <= 0 || height <= 0 || displayW <= 0 || displayH <= 0)
+            return new int[]{0,0,Math.max(1,width),Math.max(1,height)};
+        int cropW=width, cropH=height;
+        if ((long)width*displayH > (long)height*displayW)
+            cropW=(int)Math.min(width, ((long)height*displayW+displayH-1)/displayH);
+        else cropH=(int)Math.min(height, ((long)width*displayH+displayW-1)/displayW);
+        int left=(width-cropW)/2, top=(height-cropH)/2;
+        return new int[]{left,top,left+cropW,top+cropH};
+    }
+
     static int computeSampleSizeAtLeast(int srcW, int srcH, int screenW, int screenH) {
         if (screenW <= 0 || screenH <= 0 || srcW <= 0 || srcH <= 0) return 1;
         int ss = 1;

@@ -119,6 +119,13 @@ final class AppInfo {
         tvInputId   = tvInput;
     }
 
+    boolean sameSource(AppInfo other) {
+        return other != null && packageName.equals(other.packageName)
+                && java.util.Objects.equals(component, other.component)
+                && java.util.Objects.equals(sourceLabel, other.sourceLabel)
+                && java.util.Objects.equals(tvInputId, other.tvInputId);
+    }
+
     /** Apply a sanitized local name, or restore the source label when null. */
     void setCustomLabel(String customLabel) {
         label = customLabel != null ? customLabel : sourceLabel;

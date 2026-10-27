@@ -9,15 +9,17 @@ package io.github.jqssun.airplay.renderer
  */
 class FrameBufferPool @JvmOverloads constructor(private val maxPooled: Int = 24, private val maxPooledBytes: Int = 2 * 1024 * 1024) {
     private val free = ArrayList<ByteArray>()
+    private var freeBytes = 0
+    private val totalBudget = 4 * 1024 * 1024
 
     /** An array of at least [size] bytes; contents are undefined. */
     @Synchronized fun obtain(size: Int): ByteArray {
         var best = -1
         for (i in free.indices) {
             val a = free[i]
-            if (a.size >= size && (best < 0 || a.size < free[best].size)) best = i
+            if (a.size >= size && a.size <= maxOf(roundUp(size).toLong() * 4, STEP.toLong()) && (best < 0 || a.size < free[best].size)) best = i
         }
-        if (best >= 0) return free.removeAt(best)
+        if (best >= 0) return free.removeAt(best).also { freeBytes -= it.size }
         return ByteArray(roundUp(size))
     }
 
@@ -25,11 +27,15 @@ class FrameBufferPool @JvmOverloads constructor(private val maxPooled: Int = 24,
     @Synchronized fun recycle(a: ByteArray) {
         if (a.size > maxPooledBytes) return
         if (free.any { it === a }) return          // defensive: double recycle
-        if (free.size >= maxPooled) free.removeAt(0)
-        free.add(a)
+        while (free.isNotEmpty() && (free.size >= maxPooled || freeBytes + a.size > totalBudget))
+            freeBytes -= free.removeAt(0).size
+        if (maxPooled <= 0 || a.size > totalBudget) return
+        free.add(a); freeBytes += a.size
     }
 
     @Synchronized fun pooled(): Int = free.size
+    @Synchronized fun retainedBytes(): Int = freeBytes
+    @Synchronized fun trim() { free.clear(); freeBytes = 0 }
 
     companion object {
         private const val STEP = 32 * 1024

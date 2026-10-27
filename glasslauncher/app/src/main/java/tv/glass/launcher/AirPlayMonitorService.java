@@ -414,14 +414,14 @@ public final class AirPlayMonitorService extends Service {
                 File dst = new File(getFilesDir(), STATUS_FILE);
                 File tmp = new File(getFilesDir(), STATUS_FILE + ".tmp");
                 try (FileOutputStream out = new FileOutputStream(tmp)) {
-                    out.write(String.format(java.util.Locale.ROOT, record, wallClock).getBytes(StandardCharsets.UTF_8));
+                    out.write(record.replaceFirst("%d", Long.toString(wallClock)).getBytes(StandardCharsets.UTF_8));
                     out.getFD().sync();
                 } catch (Exception e) {
                     Log.w(TAG, "status write failed", e);
                     return;
                 }
                 if (!tmp.renameTo(dst)) { Log.w(TAG, "status rename failed"); return; }
-                if (changed) sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName()));
+                if (changed) sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName()), getPackageName() + ".permission.INTERNAL_STATUS");
             });
         } catch (java.util.concurrent.RejectedExecutionException ignored) { }
     }

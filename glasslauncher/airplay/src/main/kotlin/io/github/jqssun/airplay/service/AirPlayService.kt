@@ -43,7 +43,6 @@ import io.github.jqssun.airplay.get
 import io.github.jqssun.airplay.observe
 import io.github.jqssun.airplay.realDisplaySize
 import io.github.jqssun.airplay.audio.DacpController
-import io.github.jqssun.airplay.audio.DacpPlayer
 import io.github.jqssun.airplay.audio.DmapParser
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.audio.VolumeBroadcast
@@ -170,8 +169,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     var dacpController: DacpController? = null
-        private set
-    lateinit var dacpPlayer: DacpPlayer
         private set
     private val _mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var _coverArtBytes: ByteArray? = null
@@ -388,21 +385,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         }
         createNotificationChannel()
         dacpController = DacpController(this)
-        dacpPlayer = DacpPlayer(
-            mainLooper,
-            dacp = { dacpController },
-            snapshot = {
-                DacpPlayer.Snapshot(
-                    track = _trackInfo.value,
-                    artworkData = _coverArtBytes,
-                    durationMs = _durationMs.value,
-                    playing = _playing.value,
-                    active = _audioOnly.value && _connectionCount.value > 0,
-                )
-            },
-            positionMs = ::currentPositionMs,
-            setPlaying = ::_setPlaying,
-        )
         mediaSession = MediaSessionCompat(this, "AirPlay").apply {
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() {
@@ -737,7 +719,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _clientVol = null
         _clientVolDriveEnd()
         _applyClientVol()
-        _refreshDacpPlayer()
         log("Server stopped")
     }
 
@@ -793,6 +774,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         log(message)
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) videoRenderer.framePool.trim()
+    }
+
     override fun onDestroy() {
         if (instance === this) instance = null
         networkCallback?.let {
@@ -801,7 +787,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         networkCallback = null
         _mainHandler.removeCallbacks(_networkRestart)
         stopServer()
-        dacpPlayer.release()
         mediaReceiver?.let {
             try { unregisterReceiver(it) } catch (_: Exception) {}
         }
@@ -1007,7 +992,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
                 _applyClientVol()
             }
             mediaSession?.isActive = false
-            _refreshDacpPlayer()
             _updateMediaNotification()
             if (_networkRestartPending) {
                 _mainHandler.removeCallbacks(_networkRestart)
@@ -1035,7 +1019,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _trackInfo.value = info
         if (info.durationMs > 0) _durationMs.value = info.durationMs
         _updateMediaMetadata()
-        _refreshDacpPlayer()
         log("Track: ${info.artist} - ${info.title}")
     }
 
@@ -1044,7 +1027,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _coverArtBytes = data
         _trackInfo.value = _trackInfo.value.copy(coverArt = bmp)
         _updateMediaMetadata()
-        _refreshDacpPlayer()
     }
 
     /** Sender-supplied artwork, downsampled to at most ~1024 px so a huge image
@@ -1075,7 +1057,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _progressBaseTime = SystemClock.elapsedRealtime()
         _playing.value = true
         _updatePlaybackState()
-        _refreshDacpPlayer()
     }
 
     override fun onAudioTeardown() {
@@ -1099,7 +1080,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private fun _setAudioOnly(audioOnly: Boolean) {
         val prev = _audioOnly.value
         _audioOnly.value = audioOnly
-        _refreshDacpPlayer()
         if (audioOnly && !prev) {
             mediaSession?.isActive = true
             log("Audio mode")
@@ -1134,7 +1114,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private fun _setPlaying(playing: Boolean) {
         _playing.value = playing
-        _refreshDacpPlayer()
         if (playing) {
             // resume extrapolation from current position
             _progressBaseMs = _positionMs.value
@@ -1202,9 +1181,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private var _lastVideoStatePosMs = 0L
     private var _lastVideoStateAtMs = 0L
 
-    private fun _refreshDacpPlayer() {
-        _mainHandler.post { dacpPlayer.refresh() }
-    }
 
     private fun clearPin() {
         _lastPin = null

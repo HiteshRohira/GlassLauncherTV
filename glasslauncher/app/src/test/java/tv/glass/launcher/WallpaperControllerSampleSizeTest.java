@@ -30,6 +30,16 @@ import org.junit.Test;
  */
 public class WallpaperControllerSampleSizeTest {
 
+    @Test public void panoramaRegionRetainsOnlyDisplayAspectBeforeDecode() {
+        int[] crop=WallpaperController.centerCropRegion(30000,3000,1920,1080);
+        assertTrue(crop[0]>0);
+        assertEquals(3000,crop[3]-crop[1]);
+        assertTrue(crop[2]-crop[0]<=5334);
+        int sample=WallpaperController.computeSampleSizeAtLeast(crop[2]-crop[0],crop[3]-crop[1],1280,720);
+        assertEquals(4,sample);
+        assertTrue((long)((crop[2]-crop[0])/sample)*((crop[3]-crop[1])/sample)*4<5_000_000);
+    }
+
     // ── Trivial / fits-already cases ─────────────────────────────────────
 
     @Test public void sourceSmallerThanScreen_returnsOne() {

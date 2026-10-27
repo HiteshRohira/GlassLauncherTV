@@ -11,7 +11,9 @@ set(UXPLAY_LIB third_party/UxPlay/lib)
 
 # ---------- OpenSSL (built from source via openssl-cmake) ----------
 set(BUILD_OPENSSL ON CACHE BOOL "" FORCE)
-set(OPENSSL_BUILD_VERSION "3.4.4" CACHE STRING "" FORCE)
+set(OPENSSL_BUILD_VERSION "3.5.9" CACHE STRING "" FORCE)
+set(OPENSSL_BUILD_HASH "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a" CACHE STRING "" FORCE)
+option(GLASS_COMPACT_NATIVE "Static dependencies and packed Android relocations" OFF)
 set(CROSS_ANDROID ON CACHE BOOL "" FORCE)
 string(REGEX MATCH "[0-9]+" AIRPLAY_ANDROID_API "${ANDROID_PLATFORM}")
 option(GLASS_HIDE_INTERNAL_SYMBOLS "Only export the receiver JNI API" ON)
@@ -20,13 +22,20 @@ set(GLASS_OPENSSL_FLAGS "-D__ANDROID_API__=${AIRPLAY_ANDROID_API}")
 if(GLASS_CRYPTO_SIZE_OPT)
     string(APPEND GLASS_OPENSSL_FLAGS " -Os")
 endif()
+if(GLASS_COMPACT_NATIVE)
+    # Keep every existing AirPlay algorithm. PQC is new in 3.5 and no
+    # Mirage protocol path negotiates or calls these new algorithms.
+    string(APPEND GLASS_OPENSSL_FLAGS " -ffunction-sections -fdata-sections -Wl,--pack-dyn-relocs=android no-ml-dsa no-ml-kem no-slh-dsa")
+endif()
 set(OPENSSL_PARAMS "${GLASS_OPENSSL_FLAGS}" CACHE STRING "" FORCE)
 # Keep linkage explicit so a stale static preference cannot silently change it.
-set(OPENSSL_USE_STATIC_LIBS OFF CACHE STRING "" FORCE)
+set(OPENSSL_USE_STATIC_LIBS ${GLASS_COMPACT_NATIVE} CACHE STRING "" FORCE)
 set(FORWARD_ANDROID_NDK_ROOT "${ANDROID_NDK}" CACHE STRING "" FORCE) # CI
 
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
-add_subdirectory(third_party/openssl-cmake)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildOpenSSL.cmake")
+# Version the native cache: never reuse a prior security release's archive.
+add_subdirectory(third_party/openssl-cmake "third_party/openssl-${OPENSSL_BUILD_VERSION}")
 
 # ---------- Sanitizers (opt-in via -DSANITIZE=ON) ----------
 # OpenSSL uninstrumented; HWASan is arm64-only
@@ -42,8 +51,15 @@ if(SANITIZE)
     add_link_options(${SANITIZE_LDFLAGS})
 endif()
 
-# ---------- Oboe (low-latency audio output, via prefab AAR) ----------
-find_package(oboe REQUIRED CONFIG)
+# ---------- Oboe (pinned source for compact; prefab for comparison profiles) ----------
+if(GLASS_COMPACT_NATIVE)
+    set(BUILD_SHARED_LIBS OFF)
+    add_subdirectory(third_party/oboe)
+    add_library(oboe::oboe ALIAS oboe)
+    target_compile_options(oboe PRIVATE -ffunction-sections -fdata-sections)
+else()
+    find_package(oboe REQUIRED CONFIG)
+endif()
 
 # ---------- ffmpeg (software ALAC decoder) ----------
 include(BuildFFmpeg)
@@ -152,6 +168,9 @@ target_compile_definitions(airplay_native PRIVATE
 )
 
 target_link_options(airplay_native PRIVATE "-Wl,--build-id=none")
+if(GLASS_COMPACT_NATIVE)
+    target_link_options(airplay_native PRIVATE "-Wl,--pack-dyn-relocs=android" "-Wl,--gc-sections")
+endif()
 
 target_link_libraries(airplay_native
     llhttp

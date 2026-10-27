@@ -466,6 +466,7 @@ public class LauncherActivity extends Activity {
     private String airRecord = "";
     /** Package-scoped "status changed" ping from the monitor process. */
     private BroadcastReceiver  airReceiver = null;
+    private boolean reloadAfterReorder;
     private FavoritesBlurView   favoritesBlurLayer;
     /** Temporary full-screen blur overlay. Legacy TVs keep the cached bitmap
      *  here while the drawer is open; modern TVs use it only during the
@@ -2529,40 +2530,28 @@ public class LauncherActivity extends Activity {
             catch (Throwable ignored) { /* best-effort */ }
             backInvokedCallback = null;
         }
-        // Parallel shutdown of every executor the launcher owns.
-        //
-        // Pre-1.4.x serialised the four shutdowns: each one called
-        // {@code shutdown()} + {@code awaitTermination(300, MS)} +
-        // {@code shutdownNow()} in turn, so the worst-case wall-clock
-        // cost was 4 × 300 ms = 1.2 seconds of UI-thread block at
-        // {@code onDestroy} — visible to the user as a stutter when
-        // navigating from the launcher into another activity. Now we:
-        //   1. Phase 1 — call {@code shutdown()} on every executor up
-        //      front (non-blocking; flips internal "shutting down" flags
-        //      so future submits are rejected).
-        //   2. Phase 2 — share a single 300 ms deadline across every
-        //      {@code awaitTermination} call, decrementing the remaining
-        //      budget as each one elapses. Total cap stays 300 ms
-        //      regardless of how many executors are involved.
-        //   3. Phase 3 — force-stop any survivors with {@code shutdownNow}
-        //      and release the wallpaper bitmaps last (so a runnable
-        //      from an in-flight cross-fade — which short-circuits on
-        //      {@code destroyed} anyway — has already run by then).
+        // Reject new work now; wait/retire in the background. The old wallpaper
+        // remains owned until its workers retire, then its drawables are released on UI.
         if (iconExecutor   != null) try { iconExecutor.shutdown(); } catch (Throwable ignored) { /* best-effort */ }
         if (appExecutor    != null) try { appExecutor .shutdown(); } catch (Throwable ignored) { /* best-effort */ }
         if (iconDiskCache  != null) iconDiskCache.beginShutdown();
         if (bannerDiskCache != null) bannerDiskCache.beginShutdown();
         if (wallpaperCtl   != null) wallpaperCtl .beginShutdown();
-        long deadlineNs = System.nanoTime()
-                + TimeUnit.MILLISECONDS.toNanos(300);
-        awaitOrSkip(iconExecutor,  deadlineNs);
-        awaitOrSkip(appExecutor,   deadlineNs);
-        if (iconDiskCache != null) iconDiskCache.awaitShutdown(remainingMs(deadlineNs));
-        if (bannerDiskCache != null) bannerDiskCache.awaitShutdown(remainingMs(deadlineNs));
-        if (wallpaperCtl  != null) wallpaperCtl .awaitShutdown(remainingMs(deadlineNs));
-        // Phase 3 — force-stop survivors and release wallpaper bitmaps.
-        if (iconExecutor != null) try { iconExecutor.shutdownNow(); } catch (Throwable ignored) { /* best-effort */ }
-        if (appExecutor  != null) try { appExecutor .shutdownNow(); } catch (Throwable ignored) { /* best-effort */ }
+        final java.util.concurrent.ExecutorService retiringIcons=iconExecutor, retiringApps=appExecutor;
+        final IconDiskCache retiringIconDisk=iconDiskCache, retiringBannerDisk=bannerDiskCache;
+        final WallpaperController retiringWallpaper=wallpaperCtl;
+        wallpaperCtl=null;
+        Thread retirement=new Thread(()->{
+            long deadlineNs=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(300);
+            awaitOrSkip(retiringIcons,deadlineNs);awaitOrSkip(retiringApps,deadlineNs);
+            if(retiringIconDisk!=null)retiringIconDisk.awaitShutdown(remainingMs(deadlineNs));
+            if(retiringBannerDisk!=null)retiringBannerDisk.awaitShutdown(remainingMs(deadlineNs));
+            if(retiringWallpaper!=null)retiringWallpaper.awaitShutdown(remainingMs(deadlineNs));
+            if(retiringIcons!=null)retiringIcons.shutdownNow();
+            if(retiringApps!=null)retiringApps.shutdownNow();
+            if(retiringWallpaper!=null)uiHandler.post(retiringWallpaper::releaseBitmaps);
+        },"mirage-worker-retirement");
+        retirement.setDaemon(true);retirement.start();
         if (iconDiskCache != null) iconDiskCache = null;
         bannerDiskCache = null;
         customIconStore = null;
@@ -3787,7 +3776,7 @@ public class LauncherActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
             registerReceiver(airReceiver, f, Context.RECEIVER_NOT_EXPORTED);
         else
-            registerReceiver(airReceiver, f);
+            registerReceiver(airReceiver, f, getPackageName() + ".permission.INTERNAL_STATUS", null);
     }
 
     private void unregisterAirReceiver() {
@@ -4652,6 +4641,7 @@ public class LauncherActivity extends Activity {
             moveActive  = false;
             hideContextMenu();
             if (persist) saveOrder();
+            if (reloadAfterReorder) { reloadAfterReorder = false; loadApps(); }
             syncReorderVisuals();
             // syncReorderVisuals() requests focus on focusedIndex. Post an
             // explicit reposition so the ring remains aligned even when the
@@ -7163,6 +7153,12 @@ public class LauncherActivity extends Activity {
                         // its custom-name snapshot. Re-apply on the UI thread
                         // before publishing fresh AppInfo objects so that scan
                         // can never revert the just-saved label.
+                        if (shelf != null && shelf.reorderMode) {
+                            // Retain the current drag; retry against the final saved order.
+                            reloadAfterReorder = true;
+                            return;
+                        }
+                        applyStoredOrder(freshFinal);
                         applyCustomNames(freshFinal);
                         // Build the "fresh package set" exactly ONCE per
                         // reconcile and share it across the icon-cache
@@ -7206,7 +7202,7 @@ public class LauncherActivity extends Activity {
                         boolean changed = freshFinal.size() != appList.size();
                         if (!changed) {
                             for (int i = 0; i < freshFinal.size(); i++) {
-                                if (!freshFinal.get(i).packageName.equals(appList.get(i).packageName)) {
+                                if (!freshFinal.get(i).sameSource(appList.get(i))) {
                                     changed = true; break;
                                 }
                             }
@@ -10613,6 +10609,10 @@ public class LauncherActivity extends Activity {
         IconDiskCache disk = bannerDiskCache;
         String apk = app.ri != null && app.ri.activityInfo != null && app.ri.activityInfo.applicationInfo != null
                 ? app.ri.activityInfo.applicationInfo.sourceDir : null;
+        if (apk == null) {
+            try { apk = pm.getApplicationInfo(app.packageName, 0).sourceDir; }
+            catch (PackageManager.NameNotFoundException ignored) { }
+        }
         int diskKey = apk == null ? 0 : (((w * 31 + h) * 31 + corner) * 31 + apk.hashCode()) & 0x7FFFFFFF;
         if (disk != null && diskKey > 0) {
             Bitmap cached = disk.tryRead(app.packageName, diskKey);

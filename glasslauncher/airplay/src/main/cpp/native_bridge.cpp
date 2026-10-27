@@ -83,6 +83,12 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     int ret = raop_init2(ctx->raop, nohold ? 1 : 0, device_id, keyfile_c);
     if (ret < 0) {
         LOGE("raop_init2 failed: %d", ret);
+        env->ReleaseStringUTFChars(keyFile, keyfile_c);
+        env->ReleaseStringUTFChars(name, name_c);
+        raop_destroy(ctx->raop);
+        android_callbacks_destroy(&ctx->cb_ctx, env);
+        delete ctx;
+        return 0;
     }
 
     if (requirePin) {
@@ -90,7 +96,12 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
         int pin = random_pin();
         if (pin < 0) {
             LOGE("Failed to generate random pin");
-            pin = 1234;
+            env->ReleaseStringUTFChars(keyFile, keyfile_c);
+            env->ReleaseStringUTFChars(name, name_c);
+            raop_destroy(ctx->raop);
+            android_callbacks_destroy(&ctx->cb_ctx, env);
+            delete ctx;
+            return 0;
         }
         raop_set_plist(ctx->raop, "pin", pin + 10000);
     }

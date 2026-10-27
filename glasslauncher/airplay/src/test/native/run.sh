@@ -14,12 +14,18 @@ L=$WORK/lib
 CFLAGS=(-std=gnu11 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
         -w -I$L -I$L/llhttp -DHTTPD_IDLE_TIMEOUT=2)
 LL=($L/llhttp/llhttp.c $L/llhttp/api.c $L/llhttp/http.c)
+HOST_SSL=${HOST_SSL:-/opt/homebrew/opt/openssl@3}
+cc $CFLAGS -I$HOST_SSL/include -L$HOST_SSL/lib -Wl,-rpath,$HOST_SSL/lib \
+   -o $WORK/test_pairing_state $HERE/test_pairing_state.c $L/crypto.c $L/utils.c $L/compat.c -lcrypto
+cc $CFLAGS -o $WORK/test_media_validation $HERE/test_media_validation.c
 cc $CFLAGS -o $WORK/test_hls $HERE/test_hls.c
 cc $CFLAGS -o $WORK/test_httpd $HERE/test_httpd.c $L/httpd.c $L/http_request.c $L/http_response.c \
    $L/logger.c $L/netutils.c $L/utils.c $L/compat.c $LL
 cc $CFLAGS -o $WORK/test_raop_buffer_nodata $HERE/test_raop_buffer_nodata.c
 c++ -std=c++17 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined \
    -I$CPP -o $WORK/test_timeline_flush $HERE/test_timeline_flush.cpp
+$WORK/test_pairing_state $WORK/pairing.pem
+$WORK/test_media_validation
 $WORK/test_hls
 $WORK/test_httpd
 $WORK/test_raop_buffer_nodata

@@ -199,7 +199,6 @@ class VideoRenderer(ctx: Context) {
 
     /** Returns true once the queue owns [data]. */
     private fun _feedFrame(data: ByteArray, length: Int, ntpTimeNs: Long, isH265: Boolean): Boolean {
-        val idr = MirrorFrameQueue.isIdr(data, length, isH265)
         val gen: Int
         val target: Surface
         val wasDirect: Boolean
@@ -209,7 +208,7 @@ class VideoRenderer(ctx: Context) {
 
             if (codec != null && isH265 == currentH265) return _enqueue(data, length, ntpTimeNs, isH265)
             // a stale reference frame decodes to corruption, so wait for a keyframe to (re)start
-            if (!idr) {
+            if (!MirrorFrameQueue.isIdr(data, length, isH265)) {
                 if (codec != null) stopCodec()
                 return false
             }
@@ -441,6 +440,7 @@ class VideoRenderer(ctx: Context) {
 
     fun release() = synchronized(lock) {
         stopCodec()
+        framePool.trim()
         pipeline.release()
         direct = false
         codecThread?.quitSafely()

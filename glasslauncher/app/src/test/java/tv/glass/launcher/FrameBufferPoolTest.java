@@ -39,6 +39,16 @@ public class FrameBufferPoolTest {
         assertEquals(3, pool.pooled());
     }
 
+    @Test public void retainedStorageHasAnAggregateByteBudget() {
+        FrameBufferPool pool=new FrameBufferPool();
+        List<byte[]> arrays=new ArrayList<>();
+        for(int i=0;i<24;i++)arrays.add(pool.obtain(2*1024*1024));
+        for(byte[] a:arrays)pool.recycle(a);
+        assertTrue(pool.retainedBytes()<=4*1024*1024);
+        assertTrue(pool.obtain(10).length<2*1024*1024);
+        pool.trim();assertEquals(0,pool.retainedBytes());
+    }
+
     @Test public void queueReturnsDroppedAndClearedFramesToThePool() {
         List<byte[]> released = new ArrayList<>();
         MirrorFrameQueue q = new MirrorFrameQueue(Long.MAX_VALUE, Long.MAX_VALUE, 2, b -> { released.add(b); return kotlin.Unit.INSTANCE; });

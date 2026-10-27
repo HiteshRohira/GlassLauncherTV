@@ -25,7 +25,7 @@ def main():
     p.add_argument('--abi', choices=['host', 'armeabi-v7a', 'arm64-v8a'], required=True)
     p.add_argument('--openssl-include', type=Path, required=True)
     p.add_argument('--libcrypto', type=Path, required=True)
-    p.add_argument('--expected-version', default='3.4.4')
+    p.add_argument('--expected-version', default='3.5.9')
     p.add_argument('--ndk', type=Path, default=Path('/opt/homebrew/share/android-commandlinetools/ndk/27.0.12077973'))
     p.add_argument('--api', type=int, default=26)
     p.add_argument('--out-dir', type=Path, required=True)
@@ -59,6 +59,8 @@ def main():
         triple = {'armeabi-v7a': 'armv7a-linux-androideabi', 'arm64-v8a': 'aarch64-linux-android'}[args.abi]
         cc = str(args.ndk/'toolchains/llvm/prebuilt/darwin-x86_64/bin'/(triple+str(args.api)+'-clang'))
         linkflags = ['-Wl,-rpath,$ORIGIN', '-Wl,--no-undefined', '-Wl,-z,max-page-size=16384']
+    if crypto.suffix == '.a':
+        linkflags += ['-ldl', '-pthread']
     cmd = [cc, *flags, *map(str, sources), str(crypto), *linkflags, '-o', str(binary)]
     metadata = {'abi': args.abi, 'api': args.api if args.abi != 'host' else None,
                 'expectedOpenSSLVersion': args.expected_version,
