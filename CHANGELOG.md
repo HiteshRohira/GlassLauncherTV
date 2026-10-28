@@ -7,6 +7,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.1.10] — 2026-10-28
+
+- Limit drawer fading layers to edge bands and cache the moving drawer surface.
+- Prepare and retain Control Center views, avoid redundant tile text updates,
+  and retain Bluetooth profile connections while panels are hidden.
+- Cache Bluetooth status and skip redundant blur for ambient gradients.
+- Add disabled-by-default bounded Home, panel, remote-input, and receiver timing
+  diagnostics with no uploads or typed-text capture.
+- Add bounded mirroring presentation scheduling and adaptive audio headroom;
+  preserve decoder/session-reset behavior. Media quality remains unverified
+  against the proposed timing targets.
+- Publish matching ARMv7 and ARM64 standalone APKs with the existing package
+  and signing identity for normal in-place updates.
+- Document seven-run physical-TV rendering results and the remaining first-use,
+  physical input-response, network-recovery, and direct QuickTime casting gaps.
+
+## Earlier source changes
+
 - Use the Mirage name across the launcher, TV banner, phone remote and AirPlay fallback.
 - Change the Android application ID to `tv.mirage.launcher`; existing installations require a separate setup.
 

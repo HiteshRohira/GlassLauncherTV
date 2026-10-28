@@ -42,6 +42,8 @@ final class ControlCenterPanel extends FrameLayout {
     private FrameLayout card;
     private LinearLayout controls, detail;
     private View returnFocus;
+    private TextView deviceLabel;
+    private android.animation.ValueAnimator scrimMotion;
     private String focusKey="network", detailKey;
     private boolean sliding;
     private Runnable pendingBack;
@@ -54,6 +56,7 @@ final class ControlCenterPanel extends FrameLayout {
         setContentDescription("Control Center");setOnClickListener(v->hide());
         setBackgroundColor(0x40000000);
     }
+    void prepare(){if(card==null)rebuild();}
     boolean isVisible(){return getVisibility()==VISIBLE;}
     boolean isTransitioning(){return sliding;}
     /** Coalesce Back taps while a page moves, then use the caller's real navigator. */
@@ -72,10 +75,22 @@ final class ControlCenterPanel extends FrameLayout {
     /** {@code animate=false} when returning from the Bluetooth sheet, which
      *  occupies the same place, so the switch reads as a page change. */
     void show(View anchor,String key,boolean animate){
+        if(io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED && getContext() instanceof LauncherActivity)
+            ((LauncherActivity)getContext()).measurePanel("control_center",this::isVisible,
+                    ()->isVisible() && !sliding && card!=null && card.isLaidOut()
+                            && card.getAlpha()>=.999f && Math.abs(card.getTranslationX())<.5f && findFocus()!=null);
         returnFocus=anchor;if(key!=null)focusKey=key;
-        rebuild();setVisibility(VISIBLE);bringToFront();host.shown(true);
-        if(animate){NativeTheme.sheetIn(card);setAlpha(0);animate().alpha(1).setDuration(160).start();}
-        else{setAlpha(1);}
+        prepareControls();setVisibility(VISIBLE);bringToFront();host.shown(true);
+        setAlpha(1f);
+        if(animate){
+            NativeTheme.sheetIn(card);
+            // Fade the drawable without compositing the entire full-screen group.
+            getBackground().setAlpha(0);
+            scrimMotion=android.animation.ValueAnimator.ofInt(0,255);
+            scrimMotion.setDuration(160);
+            scrimMotion.addUpdateListener(a->getBackground().setAlpha((Integer)a.getAnimatedValue()));
+            scrimMotion.start();
+        } else {getBackground().setAlpha(255);}
         restoreFocus();
         if("airplay".equals(key))post(this::openAirPlay);
     }
@@ -102,7 +117,8 @@ final class ControlCenterPanel extends FrameLayout {
     }
     private void setTile(String key,String title,String status,int dotColor){
         View[] parts=tileParts.get(key);if(parts==null)return;
-        ((TextView)parts[0]).setText(title);((TextView)parts[1]).setText(status);
+        if(!android.text.TextUtils.equals(((TextView)parts[0]).getText(),title))((TextView)parts[0]).setText(title);
+        if(!android.text.TextUtils.equals(((TextView)parts[1]).getText(),status))((TextView)parts[1]).setText(status);
         if(parts[2]!=null&&dotColor!=0)((GradientDrawable)parts[2].getBackground()).setColor(dotColor);
         parts[3].setContentDescription(title+", "+status);
     }
@@ -282,7 +298,18 @@ final class ControlCenterPanel extends FrameLayout {
         }
         groups.get(row).get(Math.min(col,groups.get(row).size()-1)).requestFocus();return true;
     }
-    private void cancelMotion(){pendingBack=null;if(card!=null)card.animate().cancel();if(controls!=null)controls.animate().cancel();if(detail!=null)detail.animate().cancel();animate().cancel();sliding=false;}
+    private void cancelMotion(){pendingBack=null;if(scrimMotion!=null){scrimMotion.cancel();scrimMotion=null;}if(card!=null)card.animate().cancel();if(controls!=null)controls.animate().cancel();if(detail!=null)detail.animate().cancel();animate().cancel();sliding=false;}
+    private void prepareControls(){
+        cancelMotion();
+        if(card==null){rebuild();return;}
+        if(detail!=null)card.removeView(detail);
+        detail=null;detailKey=null;
+        card.setAlpha(1f);card.setTranslationX(0f);
+        controls.setAlpha(1f);controls.setTranslationX(0f);
+        controls.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        if(deviceLabel!=null)deviceLabel.setText(host.deviceName());
+        updateTiles();
+    }
     private void rebuild(){
         cancelMotion();removeAllViews();groups.clear();actions.clear();tileParts.clear();detailKey=null;detail=null;
         card=NativeTheme.sheet(getContext());card.setOnClickListener(v->{});
@@ -293,7 +320,7 @@ final class ControlCenterPanel extends FrameLayout {
         controls.setPadding(px(PAD),px(PAD+4),px(PAD),px(PAD));card.addView(controls,new FrameLayout.LayoutParams(-1,-1));
         TextView title=text("Control Center",30,false);title.setTypeface(NativeTheme.light());
         controls.addView(title);
-        TextView device=text(host.deviceName(),14,true);
+        TextView device=text(host.deviceName(),14,true);deviceLabel=device;
         LinearLayout.LayoutParams dp=new LinearLayout.LayoutParams(-2,-2);dp.topMargin=px(6);controls.addView(device,dp);
 
         AirPlayMonitorService.Snapshot air=host.air();

@@ -2,6 +2,7 @@
 const $=id=>document.getElementById(id);
 const standalone=navigator.standalone===true||matchMedia('(display-mode: standalone)').matches;
 let authenticated=false,connected=false,busy=false,pollTimer,lastStatus=null,polled=false,lastReconnect=0;
+let performanceDiagnostics=null,performanceLoading=false;
 const store={get:(k,d)=>{try{return localStorage.getItem(k)??d;}catch{return d;}},set:(k,v)=>{try{localStorage.setItem(k,v);}catch{}}};
 let navMode=store.get('glass.nav','pad'),haptics=store.get('glass.haptics','on')==='on';
 const feedback=text=>{$('feedback').textContent=text;};
@@ -56,6 +57,12 @@ async function poll(){
   polling=false;
   polled=true;
   render();
+  if(connected&&lastStatus?.performanceEnabled&&!performanceLoading&&!performanceDiagnostics
+      &&new URLSearchParams(location.search).get('perf')==='1'){
+    performanceLoading=true;
+    import('/perf.js').then(m=>m.create(api)).then(p=>{performanceDiagnostics=p;})
+      .catch(()=>{}).finally(()=>{performanceLoading=false;});
+  }
   pollTimer=setTimeout(poll,document.hidden?15000:connected?4000:2000);
 }
 async function action(fn){if(busy)return;busy=true;feedback('');try{await fn();}catch(e){feedback(e.message);}finally{busy=false;}}
@@ -103,7 +110,8 @@ function sendKey(key,long=false){
   if(!connected||queued>12)return;
   queued++;haptic();
   const body=long?{key,long:true}:{key};
-  commandQueue=commandQueue.then(()=>api('key',body,4000)).catch(e=>feedback(e.message)).finally(()=>queued--);
+  const stamp=performanceDiagnostics?.capture();
+  commandQueue=commandQueue.then(()=>api('key',performanceDiagnostics?.decorate(body,stamp)??body,4000)).catch(e=>feedback(e.message)).finally(()=>queued--);
 }
 const LONG_PRESS_MS=600;
 const repeatable=new Set(['volumeUp','volumeDown','delete','rewind','forward']);

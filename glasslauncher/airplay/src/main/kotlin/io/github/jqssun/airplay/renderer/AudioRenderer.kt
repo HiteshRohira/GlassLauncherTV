@@ -68,6 +68,22 @@ class AudioRenderer {
         if (serverHandle != 0L) NativeBridge.nativeServerAudioFormat(serverHandle, ct, spf)
     }
 
+    /** Read only on an explicit diagnostic dump; no polling or native layout changes. */
+    @Synchronized
+    fun performanceSnapshot(): String {
+        if (!io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED) return "{\"enabled\":false}"
+        if (serverHandle == 0L) return "{\"enabled\":true,\"engine\":false}"
+        val b = java.nio.ByteBuffer.allocateDirect(DEBUG_BUF_BYTES).order(java.nio.ByteOrder.nativeOrder())
+        if (!NativeBridge.nativeServerAudioDebug(serverHandle, b)) return "{\"enabled\":true,\"available\":false}"
+        return org.json.JSONObject().put("enabled", true).put("active", codecLabel.isNotEmpty())
+            .put("adaptive_percentile", config.percentilePct).put("configured_cushion_ms",config.cushionMs)
+            .put("backlog_ms", b.short.toInt() and 0xffff).put("cushion_ms", b.short.toInt() and 0xffff)
+            .put("trims", b.int.toLong() and 0xffffffffL).put("drops", b.int.toLong() and 0xffffffffL)
+            .put("silences", b.int.toLong() and 0xffffffffL).put("underruns", b.int.toLong() and 0xffffffffL)
+            .put("decode_mean_us", b.int).put("decode_max_us", b.int).put("decode_inflight", b.short.toInt() and 0xffff)
+            .put("output_xruns", b.int).put("decode_errors", b.int).toString()
+    }
+
     companion object {
         // must be >= native sizeof(AudioDebugData) (38 B)
         private const val DEBUG_BUF_BYTES = 64

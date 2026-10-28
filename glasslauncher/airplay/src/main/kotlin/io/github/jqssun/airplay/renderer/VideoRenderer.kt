@@ -10,6 +10,7 @@ import android.os.Process
 import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
+import io.github.jqssun.airplay.diagnostics.PerfTrace
 
 class VideoRenderer(ctx: Context) {
 
@@ -70,8 +71,15 @@ class VideoRenderer(ctx: Context) {
     private var _frameIntervalCount = 0
     private var _lastOutputFrameNs = 0L
     // anchors that map decoder PTS (us) to System.nanoTime() for scheduled rendering
-    private var _ptsBaseUs = Long.MIN_VALUE
-    private var _wallBaseNs = 0L
+    private val presentationClock=MirrorPresentationClock()
+    private val rendered = if (PerfTrace.ENABLED) RenderedFrameStats() else null
+    // Same bounded cadence calculation at each stage; allocated only in diagnostics.
+    // Arrival includes sender/network/native-clock effects; output adds decoder and
+    // presentation effects. Neither establishes the cause of an audible glitch.
+    private val arrivals = if (PerfTrace.ENABLED) RenderedFrameStats() else null
+    private val decoded = if (PerfTrace.ENABLED) RenderedFrameStats() else null
+    private var performanceSessionStartNs = 0L
+    private var performanceFirstRendered = false
 
     fun setResolution(w: Int, h: Int) = synchronized(lock) {
         if (w == videoWidth && h == videoHeight) return@synchronized
@@ -142,7 +150,7 @@ class VideoRenderer(ctx: Context) {
             .reduceOrNull { (w1, h1), (w2, h2) -> minOf(w1, w2) to minOf(h1, h2) } ?: (1920 to 1080)
 
     // codec per mirror session; pipeline persists across sessions
-    fun startSession() = synchronized(lock) { _resetStats() }
+    fun startSession() = synchronized(lock) { _resetStats(); performanceSessionStartNs = PerfTrace.begin() }
 
     fun stopSession() = synchronized(lock) { stopCodec() }
 
@@ -150,6 +158,12 @@ class VideoRenderer(ctx: Context) {
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
         droppedFrames = 0; framePacingJitterUs = 0; overloads = 0; droppedBeforeSession = 0; pending.resetStats()
         _framesThisSec = 0; _bytesThisSec = 0
+        rendered?.reset()
+        arrivals?.reset()
+        decoded?.reset()
+        _outFrames = 0
+        _outFramesAtLog = 0
+        performanceFirstRendered = false
     }
 
     private fun _updateStats(size: Int) {
@@ -167,7 +181,8 @@ class VideoRenderer(ctx: Context) {
                 _lastStatsLogMs = now
                 Log.i(TAG, "mirror in=${fps}fps out=${_outFrames - _outFramesAtLog}/5s " +
                     "kbps=${bitrateBps / 1000} pending=${pending.size} drops=$droppedFrames overloads=$overloads " +
-                    "jitter=${framePacingJitterUs}us ${if (direct) "direct" else "gl"}")
+                    "jitter=${framePacingJitterUs}us ${if (direct) "direct" else "gl"}" +
+                    (rendered?.let { " rendered=${it.frames} renderJitter=${it.jitterUs()}us renderErrorP95=${it.intervalErrorP95Us()}us" } ?: ""))
                 _outFramesAtLog = _outFrames
             }
         }
@@ -204,6 +219,7 @@ class VideoRenderer(ctx: Context) {
         val wasDirect: Boolean
         synchronized(lock) {
             _updateStats(length)
+            arrivals?.record(ntpTimeNs / 1000L, System.nanoTime())
             if (videoWidth == 0 || videoHeight == 0) return false
 
             if (codec != null && isH265 == currentH265) return _enqueue(data, length, ntpTimeNs, isH265)
@@ -325,11 +341,11 @@ class VideoRenderer(ctx: Context) {
             synchronized(lock) {
                 if (c !== codec) return
                 _recordOutputFrameTime()
+                decoded?.record(info.presentationTimeUs, System.nanoTime())
                 try {
                     if (scheduledOutputBufferRelease) {
-                        val ptsUs = info.presentationTimeUs
-                        if (_ptsBaseUs == Long.MIN_VALUE) { _ptsBaseUs = ptsUs; _wallBaseNs = System.nanoTime() }
-                        c.releaseOutputBuffer(index, _wallBaseNs + (ptsUs - _ptsBaseUs) * 1000L)
+                        c.releaseOutputBuffer(index,
+                            presentationClock.releaseTimeNs(info.presentationTimeUs,System.nanoTime()))
                     } else {
                         c.releaseOutputBuffer(index, true)
                     }
@@ -407,6 +423,23 @@ class VideoRenderer(ctx: Context) {
             if (handler == null) { c.release(); return null }
             c.setCallback(_callback(c), handler)
             c.configure(format, surface, null, 0)
+            if (rendered != null) try {
+                c.setOnFrameRenderedListener({ owner, ptsUs, renderNs ->
+                    synchronized(lock) {
+                        if (owner === codec && direct) {
+                            if (!performanceFirstRendered && performanceSessionStartNs != 0L) {
+                                PerfTrace.record("receiver_mirror_start_to_first_render", performanceSessionStartNs, renderNs, 0, 0, 0)
+                                performanceFirstRendered = true
+                            }
+                            rendered.record(ptsUs, renderNs)
+                            val wallToMonoNs = System.currentTimeMillis() * 1_000_000L - System.nanoTime()
+                            rendered.recordEstimatedDelay(renderNs - (ptsUs * 1000L - wallToMonoNs))
+                        }
+                    }
+                }, handler)
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "optional render timestamps unavailable", e)
+            }
             c.start()
         } catch (e: Exception) {
             synchronized(lock) { if (startingCodec === c) startingCodec = null }
@@ -420,8 +453,9 @@ class VideoRenderer(ctx: Context) {
         _frameIntervalIdx = 0
         _frameIntervalCount = 0
         _lastOutputFrameNs = 0L
-        _ptsBaseUs = Long.MIN_VALUE
-        _wallBaseNs = 0L
+        presentationClock.reset()
+        rendered?.reset()
+        decoded?.reset()
         freeInputs.clear()
         pending.clear()
         droppedBeforeSession = droppedFrames
@@ -451,6 +485,27 @@ class VideoRenderer(ctx: Context) {
 
     private var _outFrames = 0L
     private var _outFramesAtLog = 0L
+
+    fun performanceSnapshot(): String = synchronized(lock) {
+        val r = rendered ?: return@synchronized "{\"enabled\":false}"
+        org.json.JSONObject().put("enabled", true).put("direct", direct)
+            .put("scheduled_release_enabled", scheduledOutputBufferRelease)
+            .put("presentation_clock_resyncs", presentationClock.resyncs)
+            .put("late_decoded_outputs", presentationClock.lateOutputs)
+            .put("arrival_interval_jitter_us", arrivals?.jitterUs() ?: 0)
+            .put("arrival_vs_pts_error_p95_us", arrivals?.intervalErrorP95Us() ?: 0)
+            .put("decoded_vs_pts_error_p95_us", decoded?.intervalErrorP95Us() ?: 0)
+            .put("received_access_units", frameCount).put("decoded_output_frames", _outFrames)
+            .put("codec", codecName).put("width", videoWidth).put("height", videoHeight)
+            .put("pending_access_units", pending.size).put("overloads", overloads)
+            .put("rendered_frames", r.frames).put("render_jitter_us", r.jitterUs())
+            .put("source_adjusted_interval_error_p95_us", r.intervalErrorP95Us())
+            .put("estimated_source_to_output_p50_us", r.estimatedDelayUs(.5) ?: org.json.JSONObject.NULL)
+            .put("estimated_source_to_output_p95_us", r.estimatedDelayUs(.95) ?: org.json.JSONObject.NULL)
+            .put("decode_callback_jitter_us", framePacingJitterUs).put("queue_drops", droppedFrames)
+            .put("discontinuities", r.discontinuities).put("scope", "codec_output_surface_not_physical_scanout")
+            .put("av_sync", "external_capture_required").toString()
+    }
 
     private fun _recordOutputFrameTime() {
         _outFrames++

@@ -125,6 +125,8 @@ final class BluetoothPanel {
     private ImageView backGlyph;
 
     private final List<Row> rows = new ArrayList<>();
+    private final List<Row> renderedRows = new ArrayList<>();
+    private int paintedSelection = Integer.MIN_VALUE;
     private int selected = -1;
     /** Selection last spoken to a screen reader (the panel moves its own highlight, not focus). */
     private int announcedSelection = -1;
@@ -137,6 +139,8 @@ final class BluetoothPanel {
     private final Map<Integer, BluetoothProfile> proxies = new HashMap<>();
     private final Map<String, Integer> pendingAudio = new HashMap<>();
     private final Map<String, Runnable> audioTimeouts = new HashMap<>();
+    private final Map<String, Long> performanceAudioStarts =
+            io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED ? new HashMap<>() : null;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean btSettingsScreen;
     private boolean deviceSettingsScreen;
@@ -156,6 +160,10 @@ final class BluetoothPanel {
     void show() { show(true); }
 
     void show(boolean animate) {
+        if(io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED && activity instanceof LauncherActivity)
+            ((LauncherActivity)activity).measurePanel("bluetooth_panel",this::isVisible,
+                    ()->isVisible() && card!=null && card.isLaidOut() && card.getAlpha()>=.999f
+                            && Math.abs(card.getTranslationX())<.5f);
         if (overlay == null) build();
         FrameLayout ov = overlay;
         LinearLayout c = card;
@@ -198,7 +206,8 @@ final class BluetoothPanel {
         final LinearLayout c = card;
         if (ov == null || ov.getVisibility() != View.VISIBLE) return;
         stopDiscovery();
-        unregister();
+        // Profile binding is activity-scoped. Rebinding three system services
+        // on every open blocks the first animation frame on this TV.
         if (c != null && !host.returnsToControlCenter()) {
             c.animate().cancel();
             c.animate().alpha(0f).translationX(NativeTheme.px(activity, 36))
@@ -334,7 +343,15 @@ final class BluetoothPanel {
 
     /** The sheet always docks to the right edge, like Control Center. */
     private void anchorUnderPill(View c) {
-        c.setLayoutParams(NativeTheme.sheetParams(activity));
+        FrameLayout.LayoutParams wanted=NativeTheme.sheetParams(activity);
+        android.view.ViewGroup.LayoutParams existing=c.getLayoutParams();
+        if(existing instanceof FrameLayout.LayoutParams){
+            FrameLayout.LayoutParams have=(FrameLayout.LayoutParams)existing;
+            if(have.width==wanted.width && have.height==wanted.height && have.gravity==wanted.gravity
+                    && have.topMargin==wanted.topMargin && have.bottomMargin==wanted.bottomMargin
+                    && have.getMarginEnd()==wanted.getMarginEnd())return;
+        }
+        c.setLayoutParams(wanted);
     }
 
     private void renderHeader() {
@@ -526,7 +543,10 @@ final class BluetoothPanel {
         LinearLayout col = column;
         if (col == null) return;
         renderHeader();
+        if(sameRenderedRows()) {paintSelection();return;}
         col.removeAllViews();
+        renderedRows.clear();renderedRows.addAll(rows);
+        paintedSelection=Integer.MIN_VALUE;
         for (int i = 0; i < rows.size(); i++) {
             Row r = rows.get(i);
             View v = (r.type == ROW_LABEL) ? labelView(r) : rowView(r);
@@ -543,6 +563,18 @@ final class BluetoothPanel {
             col.addView(v);
         }
         paintSelection();
+    }
+
+    private boolean sameRenderedRows(){
+        if(renderedRows.size()!=rows.size())return false;
+        for(int i=0;i<rows.size();i++){
+            Row a=rows.get(i),b=renderedRows.get(i);
+            if(a.type!=b.type || a.action!=b.action || a.iconRes!=b.iconRes
+                    || a.statusColor!=b.statusColor || !sameDevice(a.device,b.device)
+                    || !java.util.Objects.equals(a.text,b.text)
+                    || !java.util.Objects.equals(a.status,b.status))return false;
+        }
+        return true;
     }
 
     private View labelView(Row r) {
@@ -622,6 +654,7 @@ final class BluetoothPanel {
     private void paintSelection() {
         LinearLayout col = column;
         if (col == null) return;
+        if(paintedSelection==selected)return;
         for (int i = 0; i < col.getChildCount() && i < rows.size(); i++) {
             Row r = rows.get(i);
             View v = col.getChildAt(i);
@@ -637,6 +670,7 @@ final class BluetoothPanel {
             int text = sel ? 0xFF222029 : (r.type == ROW_INFO ? 0xB3FFFFFF : 0xFFF8F7FA);
             paintRow(row, r, sel, text);
         }
+        paintedSelection=selected;
     }
 
     private void paintRow(View v, Row r, boolean sel, int text) {
@@ -747,7 +781,9 @@ final class BluetoothPanel {
         if (pendingAudio.containsKey(addr)) return;
         final BluetoothProfile profile=controlProfile(d);
         final boolean connect = profileState(profile,d) != BluetoothProfile.STATE_CONNECTED;
+        long performanceStart=io.github.jqssun.airplay.diagnostics.PerfTrace.begin();
         if (!invokeProfile(profile, connect, d)) {
+            io.github.jqssun.airplay.diagnostics.PerfTrace.end(connect?"bluetooth_connect_rejected":"bluetooth_disconnect_rejected",performanceStart,0,1);
             host.toast(activity.getString(connect ? R.string.toast_bt_connect_failed
                     : R.string.toast_bt_disconnect_failed, nameOf(d)));
             return;
@@ -755,7 +791,9 @@ final class BluetoothPanel {
         final int target = connect ? BluetoothProfile.STATE_CONNECTED
                 : BluetoothProfile.STATE_DISCONNECTED;
         pendingAudio.put(addr, target);
+        if(performanceAudioStarts!=null)performanceAudioStarts.put(addr,performanceStart);
         Runnable timeout = () -> {
+            finishAudioMeasurement(addr,"timeout",2);
             audioTimeouts.remove(addr);
             if (pendingAudio.remove(addr) == null || !isVisible()) return;
             if (profileState(profile,d) != target) {
@@ -776,16 +814,19 @@ final class BluetoothPanel {
         Integer target = pendingAudio.get(addr);
         if (target == null) return;
         if (state == target) {
+            finishAudioMeasurement(addr,"confirmed",0);
             clearPendingAudio(addr);
         } else if (target == BluetoothProfile.STATE_CONNECTED
                 && state == BluetoothProfile.STATE_DISCONNECTED
                 && prev == BluetoothProfile.STATE_CONNECTING) {
+            finishAudioMeasurement(addr,"failed",1);
             clearPendingAudio(addr);
             host.toast(activity.getString(R.string.toast_bt_connect_failed, nameOf(d)));
         }
     }
 
     private void clearPendingAudio(String addr) {
+        finishAudioMeasurement(addr,"canceled",3);
         pendingAudio.remove(addr);
         Runnable t = audioTimeouts.remove(addr);
         if (t != null) handler.removeCallbacks(t);
@@ -800,15 +841,27 @@ final class BluetoothPanel {
             try {
                 BluetoothDevice d = a.getRemoteDevice(addr);
                 Integer target = pendingAudio.get(addr);
-                if (target != null && profileState(controlProfile(d), d) == target) clearPendingAudio(addr);
+                if (target != null && profileState(controlProfile(d), d) == target) {
+                    finishAudioMeasurement(addr,"observed_after_reopen",0);clearPendingAudio(addr);
+                }
             } catch (RuntimeException e) { clearPendingAudio(addr); }
         }
     }
 
     private void clearPendingAudio() {
+        if(performanceAudioStarts!=null)for(String addr:new java.util.ArrayList<>(performanceAudioStarts.keySet()))
+            finishAudioMeasurement(addr,"canceled",3);
         for (Runnable t : audioTimeouts.values()) handler.removeCallbacks(t);
         audioTimeouts.clear();
         pendingAudio.clear();
+    }
+
+    private void finishAudioMeasurement(String addr,String outcome,int result){
+        if(performanceAudioStarts==null)return;
+        Long started=performanceAudioStarts.remove(addr);if(started==null)return;
+        Integer target=pendingAudio.get(addr);
+        String action=target!=null && target==BluetoothProfile.STATE_CONNECTED?"connect":"disconnect";
+        io.github.jqssun.airplay.diagnostics.PerfTrace.end("bluetooth_"+action+"_"+outcome,started,0,result);
     }
 
     /** BluetoothA2dp.connect/disconnect are hidden but on the unrestricted
@@ -952,7 +1005,7 @@ final class BluetoothPanel {
                     return;
                 }
                 proxies.put(profile, proxy);
-                if (!scanMode) rebuild();
+                if (isVisible() && !scanMode) rebuild();
             }
             @Override public void onServiceDisconnected(int profile) {
                 proxies.remove(profile);
@@ -964,7 +1017,6 @@ final class BluetoothPanel {
     }
 
     private void onBroadcast(Intent intent) {
-        if (!isVisible()) return;
         String act = intent.getAction();
         if (act == null) return;
         BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
@@ -1011,7 +1063,7 @@ final class BluetoothPanel {
                 break;
         }
         host.refreshPill();
-        rebuild();
+        if(isVisible())rebuild();
     }
 
     private void onBondChanged(BluetoothDevice d, int state) {

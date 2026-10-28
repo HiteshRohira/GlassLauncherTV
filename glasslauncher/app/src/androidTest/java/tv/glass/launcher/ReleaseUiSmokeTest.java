@@ -12,11 +12,13 @@ import android.view.ViewParent;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import org.junit.Test;
+import org.junit.Before;
 import org.junit.runner.RunWith;
 
 /** Public view semantics only: also runnable against minified release code. */
 @RunWith(AndroidJUnit4.class)
 public class ReleaseUiSmokeTest {
+    @Before public void useDpadFocusMode(){getInstrumentation().setInTouchMode(false);}
     @Test public void visibleSheetsKeepFocus_andBackRestoresHome() {
         try (ActivityScenario<LauncherActivity> scenario = ActivityScenario.launch(LauncherActivity.class)) {
             await(scenario, a -> a.hasWindowFocus() && a.getWindow().getDecorView().getWidth()

@@ -80,6 +80,7 @@ final class GlassRemoteServer implements AutoCloseable {
     }
     private void release(String peer){peers.computeIfPresent(peer,(k,n)->n>1?n-1:null);}
     private void serve(Socket socket){
+        final long performanceReceived=io.github.jqssun.airplay.diagnostics.PerfTrace.begin();
         try{
             InputStream in=new BufferedInputStream(new DeadlineInputStream(socket,SystemClock.elapsedRealtime()+REQUEST_DEADLINE_MS));OutputStream out=socket.getOutputStream();
             String line=readLine(in,2048);String[] request=line.split(" ");
@@ -131,7 +132,16 @@ final class GlassRemoteServer implements AutoCloseable {
                 if(method.equals("GET")&&path.equals("/api/status")){
                     JSONObject status=new JSONObject().put("authenticated",true).put("connected",tv.connected).put("paired",tv.isPaired()).put("pairing",tv.pairing)
                         .put("keyboardReady",tv.keyboardReady()).put("message",operationError.isEmpty()?tv.message:operationError);
+                    if(io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED)status.put("performanceEnabled",true);
                     reply(out,200,"application/json",status.toString());return;
+                }
+                if(io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED && method.equals("GET")){
+                    if(path.equals("/api/performance/clock")){
+                        reply(out,200,"application/json",new JSONObject().put("server_ms",System.nanoTime()/1e6).toString());return;
+                    }
+                    if(path.equals("/api/performance")){
+                        reply(out,200,"application/json",io.github.jqssun.airplay.diagnostics.PerfTrace.snapshot(false));return;
+                    }
                 }
                 if(!method.equals("POST")||origin==null||!headers.getOrDefault("content-type","").startsWith("application/json")){reply(out,403,"text/plain","Use the remote page.");return;}
                 JSONObject data=new JSONObject(new String(body,StandardCharsets.UTF_8));
@@ -143,7 +153,10 @@ final class GlassRemoteServer implements AutoCloseable {
                     boolean hold=data.optBoolean("long")&&(code==23||code==66);
                     // Accepted is not done: the reply goes out at once and the
                     // key follows in order; failures show up in /api/status.
-                    if(!runCommand(()->{if(hold)tv.longPress(code);else tv.key(code);})){reply(out,503,"application/json","{\"error\":\"The TV is busy. Try again shortly.\"}");return;}
+                    Work keyWork=()->{if(hold)tv.longPress(code);else tv.key(code);};
+                    if(io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED)
+                        keyWork=measuredKey(keyWork,performanceReceived,code,data.optJSONObject("_perf"));
+                    if(!runCommand(keyWork)){reply(out,503,"application/json","{\"error\":\"The TV is busy. Try again shortly.\"}");return;}
                     reply(out,202,"application/json","{\"ok\":true}");return;
                 }
                 else if(path.equals("/api/text")){
@@ -169,6 +182,7 @@ final class GlassRemoteServer implements AutoCloseable {
             switch(path){
                 case "/":case "/index.html":file="index.html";type="text/html; charset=utf-8";break;
                 case "/app.js":file="app.js";type="text/javascript; charset=utf-8";break;
+                case "/perf.js":file="perf.js";type="text/javascript; charset=utf-8";break;
                 case "/style.css":file="style.css";type="text/css; charset=utf-8";break;
                 case "/manifest.webmanifest":file="manifest.webmanifest";type="application/manifest+json";break;
                 case "/icon.png":file="icon.png";type="image/png";break;
@@ -225,6 +239,28 @@ final class GlassRemoteServer implements AutoCloseable {
         }catch(Exception ignored){}return false;
     }
     private interface Work{void run()throws Exception;}
+    private Work measuredKey(Work work,long received,int code,JSONObject client){
+        final long queued=System.nanoTime();
+        final int id=client==null?0:Math.max(0,client.optInt("sequence",0));
+        io.github.jqssun.airplay.diagnostics.PerfTrace.record("remote_request_parsed",received,queued,code,0,id);
+        if(client!=null){
+            double press=client.optDouble("pressed_tv_ms",Double.NaN),sent=client.optDouble("sent_tv_ms",Double.NaN);
+            double error=client.optDouble("uncertainty_ms",Double.NaN),age=client.optDouble("clock_age_ms",Double.NaN);
+            if(Double.isFinite(press)&&Double.isFinite(sent)&&Double.isFinite(error)&&error>=0&&error<=2000
+                    &&Double.isFinite(age)&&age>=0&&age<=60_000&&sent>=press&&Math.abs(queued/1e6-sent)<=60_000){
+                long uncertainty=(long)(error*1e6);
+                io.github.jqssun.airplay.diagnostics.PerfTrace.record("remote_client_queue",(long)(press*1e6),(long)(sent*1e6),code,0,id,uncertainty);
+                io.github.jqssun.airplay.diagnostics.PerfTrace.record("remote_client_network",(long)(sent*1e6),received,code,0,id,uncertainty);
+            }
+        }
+        return ()->{
+            long started=System.nanoTime();
+            io.github.jqssun.airplay.diagnostics.PerfTrace.record("remote_server_queue",queued,started,code,0,id);
+            boolean ok=false;
+            try{work.run();ok=true;}
+            finally{io.github.jqssun.airplay.diagnostics.PerfTrace.record("remote_injection_accepted",started,System.nanoTime(),code,ok?0:1,id);}
+        };
+    }
     private boolean runCommand(Work work){
         try{commands.execute(()->{try{work.run();operationError="";}catch(Exception e){Log.w("GlassRemote","Key failed",e);operationError=e.getMessage()==null?"The TV could not complete that action.":e.getMessage();}});return true;}
         catch(RejectedExecutionException full){return false;}

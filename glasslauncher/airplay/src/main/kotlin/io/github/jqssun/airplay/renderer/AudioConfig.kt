@@ -6,7 +6,7 @@ package io.github.jqssun.airplay.renderer
  */
 data class AudioConfig(
     val cushionMs: Int = 0,           // 0 = adaptive tuner, otherwise fixed cushion ms
-    val percentilePct: Int = 95,
+    val percentilePct: Int = 99,
     val oboeBufferFrames: Int = 0,    // 0 = auto (two bursts)
     val forceSwAlac: Boolean = true,
     val forceSwAac: Boolean = false,

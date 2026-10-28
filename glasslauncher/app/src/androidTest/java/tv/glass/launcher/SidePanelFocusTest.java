@@ -26,6 +26,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.LargeTest;
 
 import org.junit.Test;
+import org.junit.Before;
 import org.junit.runner.RunWith;
 
 import java.lang.reflect.Field;
@@ -48,6 +49,7 @@ import java.util.function.Function;
 @RunWith(AndroidJUnit4.class)
 @LargeTest
 public class SidePanelFocusTest {
+    @Before public void useDpadFocusMode(){getInstrumentation().setInTouchMode(false);}
     private static final long TIMEOUT_MS = 10_000;
     private static final int[] DIRECTIONS = {
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,

@@ -144,7 +144,9 @@ private:
         return (size_t)sampleRate * ms / 1000 * channels;
     }
 
-    static constexpr int MIN_CUSHION_MS = 0;             // algorithm already enforces effective floor
+    // On bursty TV Wi-Fi, one output burst is insufficient headroom even
+    // when the arrival histogram looks quiet. Fixed-cushion choices are unchanged.
+    static constexpr int MIN_CUSHION_MS = 80;
     static constexpr int MAX_CUSHION_MS = 1000;
     static constexpr int BUCKET_MS = 5;                  // histogram granularity
     static constexpr int NBUCKETS = MAX_CUSHION_MS / BUCKET_MS;

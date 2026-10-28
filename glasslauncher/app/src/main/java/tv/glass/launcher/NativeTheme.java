@@ -87,8 +87,9 @@ final class NativeTheme {
         return lp;
     }
     static void sheetIn(View card) {
+        card.animate().cancel();
         card.setAlpha(0f); card.setTranslationX(px(card.getContext(), 36));
-        card.animate().alpha(1f).translationX(0f).setDuration(200).setInterpolator(new DecelerateInterpolator(1.6f)).start();
+        card.animate().alpha(1f).translationX(0f).setDuration(200).setInterpolator(new DecelerateInterpolator(1.6f)).withLayer().start();
     }
     static Toggle toggle(Context c, boolean on) { return new Toggle(c, on); }
 

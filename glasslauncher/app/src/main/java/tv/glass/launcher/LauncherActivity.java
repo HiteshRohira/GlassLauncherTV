@@ -83,6 +83,38 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LauncherActivity extends Activity {
+    private WindowPerformanceProbe performanceProbe;
+    private final android.graphics.Rect performanceBounds =
+            io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED ? new android.graphics.Rect() : null;
+
+    void measurePanel(String name, java.util.function.BooleanSupplier visible,
+                      java.util.function.BooleanSupplier ready) {
+        if(performanceProbe!=null)performanceProbe.panel(name,visible,ready);
+    }
+
+    private boolean performanceHomeReady(){
+        RecyclingShelfView s=shelf;
+        if(uiPaused || s==null || !s.isShown() || getCurrentFocus()==null
+                || (appsLoading.get() && appList.isEmpty()))return false;
+        boolean visible=false;
+        for(int i=0;i<s.attached.size();i++){
+            RecyclingShelfView.CellView cell=s.attached.valueAt(i);
+            if(cell.getGlobalVisibleRect(performanceBounds)){
+                visible=true;
+                if(cell.iconBitmap==null || cell.iconBitmap.isRecycled())return false;
+            }
+        }
+        return visible || s.displayed.isEmpty();
+    }
+
+    @Override public void dump(String prefix,java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args){
+        if(args!=null)for(String arg:args)if("mirage-perf".equals(arg)||"mirage-perf-reset".equals(arg)){
+            out.println("MIRAGE_PERF "+io.github.jqssun.airplay.diagnostics.PerfTrace.snapshot("mirage-perf-reset".equals(arg)));
+            if(performanceProbe!=null)performanceProbe.dump(out);
+            return;
+        }
+        super.dump(prefix,fd,out,args);
+    }
 
     private static final int    ICON_DP        = 80;   // round chip/list icon cache size
     private static final int    RING_STROKE_DP = 3;
@@ -341,6 +373,7 @@ public class LauncherActivity extends Activity {
      *  by {@link #btReceiver} and on resume; UI-thread only. */
     private boolean            btOn        = false;
     private boolean            btConnected = false;
+    private String bluetoothSummaryCache="On";
     private android.bluetooth.BluetoothAdapter btAdapter = null;
     private BluetoothPanel btPanel = null;
     /** True once {@link PackageManager#FEATURE_BLUETOOTH} is confirmed; cached
@@ -376,7 +409,7 @@ public class LauncherActivity extends Activity {
         updateSelectedApp(shelf.displayed.get(toolbarHomeIndex),cell==null?null:cell.iconBitmap);
     }
 
-    private void showControlCenter(View anchor,String key) {
+    private void prepareControlCenter() {
         if(controlCenter==null) {
             controlCenter=new ControlCenterPanel(this,new ControlCenterPanel.Host() {
                 public String deviceName() {
@@ -413,6 +446,10 @@ public class LauncherActivity extends Activity {
             });
             root.addView(controlCenter);
         }
+        controlCenter.prepare();
+    }
+    private void showControlCenter(View anchor,String key) {
+        if(controlCenter==null)prepareControlCenter();
         boolean animate=!sheetHandoff;sheetHandoff=false;
         controlCenter.show(anchor,key,animate);
     }
@@ -429,7 +466,9 @@ public class LauncherActivity extends Activity {
 
     /** One line for the Control Center Bluetooth tile. */
     @android.annotation.SuppressLint("MissingPermission")
-    private String bluetoothTileSummary() {
+    private String bluetoothTileSummary() { return hasBluetooth?bluetoothSummaryCache:"Not available"; }
+
+    private String readBluetoothTileSummary() {
         android.bluetooth.BluetoothAdapter a=btAdapter();
         if(a==null)return "Not available";
         if(!isBtOn())return "Off";
@@ -1689,6 +1728,25 @@ public class LauncherActivity extends Activity {
         if (d.getVisibility() == View.VISIBLE) return;
         List<AppInfo> visible = buildVisibleList();
         if (visible.isEmpty()) return;
+        if(performanceProbe!=null){
+            java.util.function.BooleanSupplier active=()->d.getVisibility()==View.VISIBLE || legacyGridBlurCapturePending;
+            performanceProbe.panel("drawer_first_visible",active,
+                    ()->d.getVisibility()==View.VISIBLE && d.getAlpha()>0 && d.isLaidOut());
+            performanceProbe.panel("drawer",active,
+                    ()->d.getVisibility()==View.VISIBLE && !d.closing && d.getAlpha()>=.999f
+                            && Math.abs(d.getTranslationY())<.5f && d.findFocus()!=null);
+            performanceProbe.panel("drawer_artwork",active,()->{
+                if(d.getVisibility()!=View.VISIBLE || d.getAlpha()<=0)return false;
+                boolean seen=false;
+                for(int i=0;i<d.attached.size();i++){
+                    AppDrawer.DrawerCell cell=d.attached.valueAt(i);
+                    if(cell.getGlobalVisibleRect(performanceBounds)){
+                        seen=true;if(cell.iconBitmap==null || cell.iconBitmap.isRecycled())return false;
+                    }
+                }
+                return seen || d.displayed.isEmpty();
+            });
+        }
         resetHomeAlpha();   // clear any leftover alpha from an interrupted close-fade
         resolveHomeCount(visible.size());
         int hc = effectiveHomeCount(visible.size());
@@ -1881,6 +1939,7 @@ public class LauncherActivity extends Activity {
         ImageView layer = drawerBlurLayer;
         if (layer == null) return;
         if (systemWallpaper) on = false;   // nothing of ours to blur
+        if (ambientBackgroundEnabled) { on=false; animate=false; }
         final int generation = ++drawerBlurTransitionGeneration;
         layer.animate().cancel();
         layer.animate().setUpdateListener(null);
@@ -1992,6 +2051,13 @@ public class LauncherActivity extends Activity {
      *  legacy compositor never delivers its frame or callback. */
     private void prepareLegacyDrawerBlur(Runnable after) {
         if (systemWallpaper) {
+            after.run();
+            return;
+        }
+        if (ambientBackgroundEnabled) {
+            // The owned background is already broad, soft gradients. Blurring
+            // it again adds a full-screen GPU pass without revealing detail.
+            applyDrawerBlur(false,false);
             after.run();
             return;
         }
@@ -2198,6 +2264,7 @@ public class LauncherActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        long performanceCreatedNs=io.github.jqssun.airplay.diagnostics.PerfTrace.begin();
         super.onCreate(savedInstanceState);
         // Install the zero-dependency crash sink BEFORE we do anything
         // else that could fault. From this point on any uncaught throwable
@@ -2253,9 +2320,12 @@ public class LauncherActivity extends Activity {
         loadHiddenApps();
         if (systemWallpaper) applySystemWallpaperWindow(true);
         setContentView(buildLayout());
+        if(io.github.jqssun.airplay.diagnostics.PerfTrace.ENABLED)
+            performanceProbe=new WindowPerformanceProbe(this,performanceCreatedNs,this::performanceHomeReady);
         hideSystemUI();
         loadWallpaper();
         loadApps();
+        prepareControlCenter();
         registerPkgReceiver();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Predictive-back routes BACK gestures here INSTEAD of through
@@ -2325,6 +2395,7 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if(performanceProbe!=null)performanceProbe.resume();
         // Mark resumed BEFORE any of the receiver-touching helpers below
         // so a package broadcast that fires during the resume transition
         // sees us as resumed and schedules its reconcile normally instead
@@ -2507,6 +2578,7 @@ public class LauncherActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if(performanceProbe!=null){performanceProbe.close();performanceProbe=null;}
         destroyed = true;
         stopClock();
         uiHandler.removeCallbacksAndMessages(null);
@@ -4173,6 +4245,8 @@ public class LauncherActivity extends Activity {
             };
             IntentFilter f = new IntentFilter();
             f.addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED);
+            f.addAction(android.bluetooth.BluetoothDevice.ACTION_NAME_CHANGED);
+            f.addAction("android.bluetooth.device.action.ALIAS_CHANGED");
             f.addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED);
             f.addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED);
             f.addAction(android.bluetooth.BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
@@ -4203,6 +4277,7 @@ public class LauncherActivity extends Activity {
         if (!hasBluetooth) return;
         boolean on = isBtOn();
         boolean conn = on && isBtDeviceConnected();
+        bluetoothSummaryCache=readBluetoothTileSummary();
         if (on != btOn || conn != btConnected) {
             btOn = on;
             btConnected = conn;
@@ -6187,30 +6262,22 @@ public class LauncherActivity extends Activity {
             canvas.drawText(hint, getWidth() - left - drawerCountPaint.measureText(hint), baseline, drawerCountPaint);
         }
 
+        private final FadingEdges.Content gridContent=this::drawGridChildren;
+        private void drawGridChildren(Canvas canvas){super.dispatchDraw(canvas);}
         @Override protected void dispatchDraw(Canvas canvas) {
-            int top = topPad - NativeTheme.px(LauncherActivity.this, 14);
-            int save = canvas.saveLayer(0, top, getWidth(), getHeight(), null);
-            canvas.clipRect(0, top, getWidth(), getHeight());
-            super.dispatchDraw(canvas);
-            // Soft fade on the scroll edges so rows slide under the title and
-            // off the bottom instead of being cut on a hard line.
-            int fade = NativeTheme.px(LauncherActivity.this, 26);
-            int bottomFade = NativeTheme.px(LauncherActivity.this, 70);
-            if (topFadeShader == null || fadeHeight != getHeight()) {
-                fadeHeight = getHeight();
-                topFadeShader = new android.graphics.LinearGradient(0, top, 0, top + fade,
-                        0xFF000000, 0x00000000, Shader.TileMode.CLAMP);
-                bottomFadeShader = new android.graphics.LinearGradient(0, fadeHeight - bottomFade, 0, fadeHeight,
-                        0x00000000, 0xE6000000, Shader.TileMode.CLAMP);
+            int top=topPad-NativeTheme.px(LauncherActivity.this,14);
+            int fade=NativeTheme.px(LauncherActivity.this,26);
+            int bottomFade=NativeTheme.px(LauncherActivity.this,70);
+            if(topFadeShader==null || fadeHeight!=getHeight()){
+                fadeHeight=getHeight();
+                topFadeShader=new android.graphics.LinearGradient(0,top,0,top+fade,
+                        0xFF000000,0x00000000,Shader.TileMode.CLAMP);
+                bottomFadeShader=new android.graphics.LinearGradient(0,fadeHeight-bottomFade,0,fadeHeight,
+                        0x00000000,0xE6000000,Shader.TileMode.CLAMP);
                 drawerFadePaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT));
             }
-            if (scrollY > 0) {
-                drawerFadePaint.setShader(topFadeShader);
-                canvas.drawRect(0, top, getWidth(), top + fade, drawerFadePaint);
-            }
-            drawerFadePaint.setShader(bottomFadeShader);
-            canvas.drawRect(0, getHeight() - bottomFade, getWidth(), getHeight(), drawerFadePaint);
-            canvas.restoreToCount(save);
+            FadingEdges.draw(canvas,getWidth(),top,getHeight(),fade,bottomFade,scrollY>0,
+                    topFadeShader,bottomFadeShader,drawerFadePaint,gridContent);
         }
         private Shader topFadeShader, bottomFadeShader;
         private int fadeHeight;
@@ -6502,8 +6569,7 @@ public class LauncherActivity extends Activity {
                 requestFocusOnIndex(fi, true);
                 animate().alpha(1f).translationY(0f)
                         .setDuration(DRAWER_ANIM_MS).setInterpolator(SCROLL_EASE)
-                        // Flatten the full-screen drawer only while it moves;
-                        // there is no steady-state layer or allocation cost.
+                        // Cache the grid while the complete surface moves.
                         .withLayer()
                         // Keep the optional ring attached while its parent
                         // travels from the home row to the grid.
@@ -7965,6 +8031,7 @@ public class LauncherActivity extends Activity {
      *       storms on a held key. */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if(performanceProbe!=null)performanceProbe.key(event);
         // If the idle-hide UI is active, the first key wakes it up.
         // Swallow the key so it doesn't simultaneously open an app or
         // activate a button shortcut. Re-arm the idle timer so the UI

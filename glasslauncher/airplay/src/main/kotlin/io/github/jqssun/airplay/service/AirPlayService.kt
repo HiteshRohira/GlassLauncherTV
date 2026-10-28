@@ -30,6 +30,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import android.view.Surface
+import io.github.jqssun.airplay.diagnostics.PerfTrace
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -217,12 +218,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     @Volatile private var _advertisedName = ""
     @Volatile private var _startedAt = 0L
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var performanceNetworkReadyNs = 0L
+    private var performanceRestartStarted = false
     private var _lastNetworkKey: String? = null
     /** A network change arrived during a session; re-advertise once it ends. */
     @Volatile private var _networkRestartPending = false
     private val _networkRestart = Runnable {
         if (_serverState.value != ServerState.RUNNING) return@Runnable
         if (_connectionCount.value == 0) {
+            if (PerfTrace.ENABLED && performanceNetworkReadyNs != 0L) performanceRestartStarted = true
             _networkRestartPending = false
             log("Network changed; re-advertising")
             _restartServer()
@@ -327,7 +331,13 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     private fun _notifyChanged() {
-        _mainHandler.post { listeners.forEach { it.run() } }
+        _mainHandler.post {
+            if (PerfTrace.ENABLED && performanceRestartStarted && performanceNetworkReadyNs != 0L && isAdvertised()) {
+                PerfTrace.end("network_usable_to_receiver_advertised", performanceNetworkReadyNs, 0, 0)
+                performanceNetworkReadyNs = 0; performanceRestartStarted = false
+            }
+            listeners.forEach { it.run() }
+        }
     }
 
     private fun deviceName(): String =
@@ -349,6 +359,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             val trigger = if (previous != null) previous != key
                 else key != null && SystemClock.elapsedRealtime() - registeredAt > INITIAL_NETWORK_GRACE_MS
             if (trigger) {
+                if (PerfTrace.ENABLED) {
+                    if (key != null && key.contains('.')) {
+                        performanceNetworkReadyNs = PerfTrace.begin(); performanceRestartStarted = false
+                    } else PerfTrace.end("network_lost", PerfTrace.begin(), 0, 0)
+                }
                 _mainHandler.removeCallbacks(_networkRestart)
                 _mainHandler.postDelayed(_networkRestart, NETWORK_RESTART_DEBOUNCE_MS)
             }
@@ -510,6 +525,16 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
                 .debounce(SERVER_RESTART_DEBOUNCE_MS)
                 .collect { _restartServer() }
         }
+    }
+
+    override fun dump(fd: java.io.FileDescriptor, writer: java.io.PrintWriter, args: Array<out String>?) {
+        if (args?.any { it == "mirage-perf" || it == "mirage-perf-reset" } == true) {
+            writer.println("MIRAGE_PERF " + PerfTrace.snapshot(args.any { it == "mirage-perf-reset" }))
+            writer.println("MIRAGE_VIDEO_PERF " + videoRenderer.performanceSnapshot())
+            writer.println("MIRAGE_AUDIO_PERF " + audioRenderer.performanceSnapshot())
+            return
+        }
+        super.dump(fd, writer, args)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

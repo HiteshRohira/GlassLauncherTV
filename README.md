@@ -44,20 +44,20 @@ Mirage replaces the stock Google TV home with a calm, glass-styled launcher: a c
 
 ## Downloads
 
-Get the signed **[1.1.9-airplay.11 release](https://github.com/HiteshRohira/Mirage/releases/tag/v1.1.9-airplay.11)**:
+Get the signed **[1.1.10 release](https://github.com/HiteshRohira/Mirage/releases/tag/v1.1.10)**:
 
 | Android ABI | Standalone APK | Size |
 |---|---|---:|
-| 32-bit ARM (`armeabi-v7a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.9-airplay.11/Mirage-1.1.9-airplay.11-armeabi-v7a-compact.apk) | 3.75 MB |
-| 64-bit ARM (`arm64-v8a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.9-airplay.11/Mirage-1.1.9-airplay.11-arm64-v8a-compact.apk) | 5.30 MB |
+| 32-bit ARM (`armeabi-v7a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.10/Mirage-1.1.10-armeabi-v7a-compact.apk) | 3.77 MB |
+| 64-bit ARM (`arm64-v8a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.10/Mirage-1.1.10-arm64-v8a-compact.apk) | 5.32 MB |
 
 Requires Android 8/API 26 or newer. Install only the APK matching your TV's
 Android ABI; some 64-bit processors run 32-bit Android. The release includes
 SHA-256 checksums. Use an in-place update to keep existing settings and pairings.
 
-This release reduces APK size by 34.8% on ARMv7 and 37.5% on ARM64 compared with
-1.1.8-airplay.9, while retaining the existing media, audio, remote and launcher
-features. It also fixes clipping around expanded Control Center tiles.
+This release reduces repeated drawer and panel rendering work and adds opt-in,
+bounded performance diagnostics. Both ABI builds contain the same launcher changes.
+See [TV measurements and remaining limitations](docs/PERFORMANCE-RESULTS.md).
 
 ## Building
 
