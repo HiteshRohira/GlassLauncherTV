@@ -44,22 +44,22 @@ Mirage replaces the stock Google TV home with a calm, glass-styled launcher: a c
 
 ## Downloads
 
-Get the signed **[1.1.10 release](https://github.com/HiteshRohira/Mirage/releases/tag/v1.1.10)**:
+Get the signed **[1.1.13 release](https://github.com/HiteshRohira/Mirage/releases/tag/v1.1.13)**:
 
 | Android ABI | Standalone APK | Size |
 |---|---|---:|
-| 32-bit ARM (`armeabi-v7a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.10/Mirage-1.1.10-armeabi-v7a-compact.apk) | 3.77 MB |
-| 64-bit ARM (`arm64-v8a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.10/Mirage-1.1.10-arm64-v8a-compact.apk) | 5.32 MB |
+| 32-bit ARM (`armeabi-v7a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.13/Mirage-1.1.13-armeabi-v7a-compact.apk) | 3.79 MB |
+| 64-bit ARM (`arm64-v8a`) | [Download](https://github.com/HiteshRohira/Mirage/releases/download/v1.1.13/Mirage-1.1.13-arm64-v8a-compact.apk) | 5.34 MB |
 
 Requires Android 8/API 26 or newer. Install only the APK matching your TV's
 Android ABI; some 64-bit processors run 32-bit Android. The release includes
 SHA-256 checksums. Use an in-place update to keep existing settings and pairings.
 
-The pending 1.1.13 update preserves Safari's AirPlay reverse channel, hardens mirroring decoder
+The 1.1.13 update preserves Safari's AirPlay reverse channel, hardens mirroring decoder
 cleanup and keeps receiver health alarms on schedule. It also includes the
 [remote Settings button](docs/SETTINGS-KEY.md) and [Wi-Fi/Inputs sheets](docs/DEVICE-SHEETS.md).
 Both ABI builds contain the same launcher changes.
-See [AirPlay recovery fixes and validation](docs/AIRPLAY-RECOVERY.md). Its signed APKs remain a draft until emulator validation completes; the downloads above remain the published stable release.
+See [AirPlay recovery fixes and validation](docs/AIRPLAY-RECOVERY.md). New decoder instrumentation compiled but emulator execution was blocked; physical playback testing is pending.
 
 ## Building
 
