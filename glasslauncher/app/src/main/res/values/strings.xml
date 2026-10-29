@@ -200,4 +200,5 @@
     <string name="toast_slideshow_no_folders">No image folders found</string>
     <string name="folder_picker_title">Choose a slideshow folder</string>
     <string name="settings_row_ambient_background">App-colour ambient background</string>
+    <string name="settings_key_description">Open Mirage Control Center over your current app using the remote Settings button. Only Settings key presses are handled; screen content is not read.</string>
 </resources>

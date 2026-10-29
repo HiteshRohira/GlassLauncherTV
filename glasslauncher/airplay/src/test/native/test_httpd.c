@@ -43,7 +43,12 @@ static void conn_request(void *ptr, http_request_t *request, http_response_t **r
     *response = http_response_create();
     http_response_init(*response, "HTTP/1.1", 200, "OK");
     const char *url=http_request_get_url(request);
-    if (!strcmp(url,"/upgrade-large")) {
+    if (!strcmp(url,"/upgrade")) {
+        httpd_set_connection_type(server_under_test,ptr,CONNECTION_TYPE_PTTH);
+        http_response_init(*response,"HTTP/1.1",101,"Switching Protocols");
+        http_response_add_header(*response,"Upgrade","PTTH/1.0");
+        http_response_finish(*response,NULL,0);
+    } else if (!strcmp(url,"/upgrade-large")) {
         httpd_set_connection_type(server_under_test,ptr,CONNECTION_TYPE_PTTH);
         int fd=httpd_get_connection_socket(server_under_test,ptr),small=4096;
         setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&small,sizeof(small));
@@ -183,6 +188,33 @@ int main(void) {
     int ok = 0;
     for (int i = 0; i < 300; i++) ok += request_ok(port);
     CHECK(ok == 300, "only %d/300 sequential requests answered", ok);
+
+    /* Safari acknowledges /event after /reverse upgrades the same connection.
+     * Its first eight staged bytes still belong to the old POST request.
+     * ACKs can be fragmented or coalesced; none may close the reverse channel. */
+    int safari=dial(port);
+    const char *up="POST /upgrade HTTP/1.1\r\nUpgrade: PTTH/1.0\r\nConnection: Upgrade\r\nContent-Length: 0\r\n\r\n";
+    send(safari,up,strlen(up),0);
+    char ackbuf[2048]={0};size_t ah=0;
+    while(ah+1<sizeof(ackbuf)) {
+        if(recv(safari,ackbuf+ah,1,0)!=1)break;
+        ah++;if(ah>=4&&!memcmp(ackbuf+ah-4,"\r\n\r\n",4))break;
+    }
+    CHECK(strstr(ackbuf," 101 "),"reverse upgrade failed");
+    const char *ack="HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    for(size_t j=0;j<strlen(ack);j++) { send(safari,ack+j,1,MSG_NOSIGNAL);usleep(1000); }
+    send(safari,ack,strlen(ack),MSG_NOSIGNAL);
+    send(safari,ack,strlen(ack),MSG_NOSIGNAL);
+    usleep(50000);
+    for(int j=0;j<2;j++) {
+        int e=dial(port);const char *eq="GET /enqueue HTTP/1.1\r\n\r\n";
+        send(e,eq,strlen(eq),0);char b[512]={0};ssize_t n=recv(e,b,sizeof(b)-1,0);
+        CHECK(n>0&&strstr(b," 200 "),"Safari reverse socket lost after ACK");close(e);
+        memset(b,0,sizeof(b));n=recv(safari,b,sizeof(b)-1,0);
+        CHECK(n>0&&strstr(b,"POST /event HTTP/1.1"),"next playlist event missing");
+        send(safari,ack,strlen(ack),MSG_NOSIGNAL);
+    }
+    close(safari);
 
     /* A full reverse chunk must never need a byte beyond the receive buffer. */
     int reverse = dial(port);

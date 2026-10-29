@@ -210,6 +210,16 @@
 
         </activity>
 
+        <activity android:name=".ControlCenterActivity" android:exported="false"
+            android:theme="@style/Theme.GlassControls" android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.controls" android:launchMode="singleTask" />
+        <service android:name=".SettingsKeyService" android:exported="true" android:process=":airplay"
+            android:label="Mirage Settings button"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/settings_key_service" />
+        </service>
+
         <!-- Background host for the AirPlay engine and phone remote. Not
              exported; started by the launcher and the boot receiver below. -->
         <service

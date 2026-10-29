@@ -8109,6 +8109,7 @@ public class LauncherActivity extends Activity {
         if (controlCenter != null && controlCenter.isVisible()) {
             // Device controls must pass both edges even during page slides.
             if (isLetThroughKey(event.getKeyCode())) return super.dispatchKeyEvent(event);
+            if(controlCenter.dispatchAppearanceWidgetKey(event))return true;
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 if (controlCenter.key(event.getKeyCode())) return true;
             }

@@ -109,6 +109,8 @@ public final class AirPlayMonitorService extends Service {
     private GlassRemoteServer phoneRemote;
     /** When the last keep-alive tick ran, to spot ticks that came too late. */
     private long lastTickAt;
+    /** Preserve the pending deadline when ordinary service starts arrive. */
+    private long nextTickAt;
 
     // ── Entry points used by the launcher ─────────────────────────────────
 
@@ -203,8 +205,9 @@ public final class AirPlayMonitorService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         goForeground();
-        scheduleKeepAlive();
         String action = intent != null ? intent.getAction() : null;
+        if (ACTION_TICK.equals(action)) nextTickAt = 0;
+        scheduleKeepAlive();
         long now = SystemClock.elapsedRealtime();
         if (ACTION_TICK.equals(action)) {
             // TCL freezes us ~200 s after the last service start; a tick later
@@ -321,7 +324,9 @@ public final class AirPlayMonitorService extends Service {
     private void scheduleKeepAlive() {
         AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
         if (am == null) return;
-        long at = SystemClock.elapsedRealtime() + KEEPALIVE_MS;
+        long now = SystemClock.elapsedRealtime();
+        if (nextTickAt > now) return;
+        long at = now + KEEPALIVE_MS;
         boolean exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms();
         try {
             if (exact) am.setExact(AlarmManager.ELAPSED_REALTIME, at, tick());
@@ -329,6 +334,7 @@ public final class AirPlayMonitorService extends Service {
         } catch (SecurityException e) {
             am.set(AlarmManager.ELAPSED_REALTIME, at, tick());
         }
+        nextTickAt = at;
     }
 
     private boolean isInteractive() {

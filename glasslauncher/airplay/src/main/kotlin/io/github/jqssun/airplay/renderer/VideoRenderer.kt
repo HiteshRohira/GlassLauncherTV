@@ -44,6 +44,7 @@ class VideoRenderer(ctx: Context) {
     private var startingCodec: MediaCodec? = null
     /** Bumped whenever the codec is stopped, so a creation in flight knows it lost. */
     private var startGeneration = 0
+    private var sessionActive = false
     @Volatile var overloads = 0L; private set
     private var droppedBeforeSession = 0L
     @Volatile private var _lastStatsLogMs = 0L
@@ -150,9 +151,18 @@ class VideoRenderer(ctx: Context) {
             .reduceOrNull { (w1, h1), (w2, h2) -> minOf(w1, w2) to minOf(h1, h2) } ?: (1920 to 1080)
 
     // codec per mirror session; pipeline persists across sessions
-    fun startSession() = synchronized(lock) { _resetStats(); performanceSessionStartNs = PerfTrace.begin() }
+    fun startSession() = synchronized(lock) {
+        stopCodec()
+        sessionActive = true
+        _resetStats()
+        performanceSessionStartNs = PerfTrace.begin()
+    }
 
-    fun stopSession() = synchronized(lock) { stopCodec() }
+    fun stopSession() = synchronized(lock) {
+        sessionActive = false
+        stopCodec()
+        lock.notifyAll()
+    }
 
     private fun _resetStats() {
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
@@ -217,7 +227,10 @@ class VideoRenderer(ctx: Context) {
         val gen: Int
         val target: Surface
         val wasDirect: Boolean
+        val width: Int
+        val height: Int
         synchronized(lock) {
+            if (!sessionActive) return false
             _updateStats(length)
             arrivals?.record(ntpTimeNs / 1000L, System.nanoTime())
             if (videoWidth == 0 || videoHeight == 0) return false
@@ -231,12 +244,16 @@ class VideoRenderer(ctx: Context) {
             stopCodec()
             // The player activity starts with this first keyframe; give its
             // surface a moment so the codec starts on it, not on the GL copy.
+            val waitingGeneration = startGeneration
             val waitUntil = System.nanoTime() + SURFACE_WAIT_NS
-            while (displaySurface?.isValid != true) {
+            while (sessionActive && waitingGeneration == startGeneration && displaySurface?.isValid != true) {
                 val leftMs = (waitUntil - System.nanoTime()) / 1_000_000
                 if (leftMs <= 0) break
                 lock.wait(leftMs)
             }
+            if (!sessionActive || waitingGeneration != startGeneration) return false
+            width = videoWidth
+            height = videoHeight
             val display = displaySurface
             target = if (display != null && display.isValid) display else {
                 pipeline.start()
@@ -249,7 +266,7 @@ class VideoRenderer(ctx: Context) {
         // Creating and configuring a decoder takes ~0.5 s on this TV. Do it
         // without the lock, which the UI thread needs for surface changes.
         val created = try {
-            _createCodec(isH265, target, gen)
+            _createCodec(isH265, target, gen, width, height)
         } catch (e: Exception) {
             Log.w(TAG, "Codec start failed", e)
             onError?.invoke("video decoder failed to start")
@@ -349,12 +366,24 @@ class VideoRenderer(ctx: Context) {
                     } else {
                         c.releaseOutputBuffer(index, true)
                     }
-                } catch (e: Exception) { Log.w(TAG, "release failed", e) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "release failed; resetting decoder", e)
+                    stopCodec()
+                    onError?.invoke("video output failed; waiting for a keyframe")
+                }
             }
         }
         override fun onError(c: MediaCodec, e: MediaCodec.CodecException) {
-            Log.w(TAG, "decoder error (transient=${e.isTransient})", e)
-            synchronized(lock) { if (c === codec && !e.isTransient) { stopCodec(); onError?.invoke("video decoder error ${e.diagnosticInfo}") } }
+            synchronized(lock) {
+                if (c !== codec && c !== startingCodec) return
+                Log.w(TAG, "decoder error (transient=${e.isTransient})", e)
+                if (!e.isTransient) {
+                    // An error may arrive between start() and installation.
+                    // Invalidate that creation too; never install a failed codec.
+                    stopCodec()
+                    onError?.invoke("video decoder error ${e.diagnosticInfo}")
+                }
+            }
         }
         override fun onOutputFormatChanged(c: MediaCodec, format: MediaFormat) {
             Log.i(TAG, "decoder output format: $format")
@@ -370,23 +399,23 @@ class VideoRenderer(ctx: Context) {
 
     /** Creates, configures and starts a decoder for [s] without holding the
      *  lock. Returns the codec and its label, or null if this start was superseded. */
-    private fun _createCodec(h265: Boolean, s: Surface, gen: Int): Pair<MediaCodec, String>? {
+    private fun _createCodec(h265: Boolean, s: Surface, gen: Int, width: Int, height: Int): Pair<MediaCodec, String>? {
         val mime = if (h265) DecoderSelector.HEVC else DecoderSelector.AVC
         val info = synchronized(lock) { (if (h265) hevcDecoder else avcDecoder) } ?: error("no decoder selected for $mime")
         return try {
-            _startWithLadder(info, mime, s, h265, gen)
+            _startWithLadder(info, mime, s, h265, gen, width, height)
         } catch (e: Exception) {
             // strict hw decoders reject configs beyond their real limits
-            val sw = selector.software(mime, videoWidth, videoHeight) ?: throw e
+            val sw = selector.software(mime, width, height) ?: throw e
             Log.w(TAG, "Hardware decoder failed, trying software fallback", e)
-            _startWithLadder(sw, mime, s, h265, gen)
+            _startWithLadder(sw, mime, s, h265, gen, width, height)
         }
     }
 
-    private fun _startWithLadder(info: MediaCodecInfo, mime: String, s: Surface, h265: Boolean, gen: Int): Pair<MediaCodec, String>? {
+    private fun _startWithLadder(info: MediaCodecInfo, mime: String, s: Surface, h265: Boolean, gen: Int, width: Int, height: Int): Pair<MediaCodec, String>? {
         var tryNum = 0
         while (true) {
-            val format = _format(mime, info)
+            val format = _format(mime, info, width, height)
             val more = selector.lowLatencyOptions(format, info, mime, tryNum)
             try {
                 return _startDecoder(MediaCodec.createByCodecName(info.name), format, s, h265, gen)
@@ -398,13 +427,13 @@ class VideoRenderer(ctx: Context) {
         }
     }
 
-    private fun _format(mime: String, info: MediaCodecInfo) = MediaFormat.createVideoFormat(mime, videoWidth, videoHeight).apply {
+    private fun _format(mime: String, info: MediaCodecInfo, width: Int, height: Int) = MediaFormat.createVideoFormat(mime, width, height).apply {
         setInteger(MediaFormat.KEY_FRAME_RATE, maxFps)
         if (selector.adaptive(info, mime)) {
-            setInteger(MediaFormat.KEY_MAX_WIDTH, videoWidth)
-            setInteger(MediaFormat.KEY_MAX_HEIGHT, videoHeight)
+            setInteger(MediaFormat.KEY_MAX_WIDTH, width)
+            setInteger(MediaFormat.KEY_MAX_HEIGHT, height)
         }
-        setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(videoWidth * videoHeight * 3 / 4, 1024 * 1024))
+        setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height * 3 / 4, 1024 * 1024))
         if (enforceSdr) {
             setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
             setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
@@ -463,17 +492,18 @@ class VideoRenderer(ctx: Context) {
         startGeneration++
         startingCodec = null
         outSurface = null
-        codec?.let {
-            try {
-                it.stop()
-                it.release()
-            } catch (_: Exception) {}
-        }
+        val stopped = codec
         codec = null
+        if (stopped != null) {
+            try { stopped.stop() } catch (e: Exception) { Log.w(TAG, "decoder stop failed", e) }
+            finally { try { stopped.release() } catch (e: Exception) { Log.w(TAG, "decoder release failed", e) } }
+        }
     }
 
     fun release() = synchronized(lock) {
+        sessionActive = false
         stopCodec()
+        lock.notifyAll()
         framePool.trim()
         pipeline.release()
         direct = false

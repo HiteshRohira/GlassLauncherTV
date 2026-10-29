@@ -29,12 +29,15 @@ final class ControlCenterPanel extends FrameLayout {
         AirPlayMonitorService.Snapshot air(); boolean airLegacyInstalled();
         String bluetoothSummary(); String remoteSummary();
         void network(); void inputs(); void bluetooth(); void settings();
+        default boolean usesPictureTile(){return false;}
+        default void picture(){}
         void setAirEnabled(boolean on); void restartAir(); void showAirPlayer(); void setAirDebug(boolean on);
         View appearance(); View remote(); void shown(boolean visible);
     }
     static final int SHEET_W = 440;
     private static final int PAD = 26;
     private final Host host;
+    private final SystemControlPages systemPages;
     private final List<List<View>> groups=new ArrayList<>();
     private final List<View> actions=new ArrayList<>();
     /** key -> {title, status, dot or null, tile} for in-place updates. */
@@ -50,7 +53,7 @@ final class ControlCenterPanel extends FrameLayout {
     /** Last AirPlay headline spoken to a screen reader. */
     private String lastAnnounced;
     ControlCenterPanel(Context c,Host host) {
-        super(c);this.host=host;
+        super(c);this.host=host;systemPages=c instanceof android.app.Activity?new SystemControlPages((android.app.Activity)c):null;
         setLayoutParams(new FrameLayout.LayoutParams(-1,-1));
         setVisibility(GONE);setFocusable(true);setClickable(true);
         setContentDescription("Control Center");setOnClickListener(v->hide());
@@ -97,7 +100,7 @@ final class ControlCenterPanel extends FrameLayout {
     void hide(){ hide(true); }
     void hide(boolean restoreReturnFocus){
         if(!isVisible())return;
-        cancelMotion();setVisibility(GONE);host.shown(false);
+        cancelMotion();if(systemPages!=null)systemPages.cancel();setVisibility(GONE);host.shown(false);
         if(restoreReturnFocus && returnFocus!=null && returnFocus.isShown())returnFocus.requestFocus();
     }
     void refresh(){
@@ -213,6 +216,10 @@ final class ControlCenterPanel extends FrameLayout {
         if(s.inSession())return 0xFF7DB4FF;
         return s.state==AirPlayStatus.State.READY?0xFF6ED69A:s.state==AirPlayStatus.State.FAILED?0xFFFF7A6E:0xFFF2C46B;
     }
+    void openNetwork(){if(systemPages!=null)openDetail("network","Wi-Fi",systemPages.wifi(host::network));else host.network();}
+    void openInputs(){if(systemPages!=null)openDetail("input","Inputs",systemPages.inputs(host::inputs,this::hide));else host.inputs();}
+    void openPicture(){host.picture();}
+    @Override protected void onDetachedFromWindow(){if(systemPages!=null)systemPages.close();super.onDetachedFromWindow();}
     private void openDetail(String key,String title,View content){
         if(sliding || detailKey!=null)return;
         detailKey=key;focusKey=key;
@@ -242,6 +249,7 @@ final class ControlCenterPanel extends FrameLayout {
     }
     void backToControls(){
         if(detailKey==null || sliding)return;
+        if(systemPages!=null)systemPages.cancel();
         sliding=true;final LinearLayout old=detail;
         controls.animate().translationX(0).alpha(1).setDuration(260).setInterpolator(new DecelerateInterpolator()).start();
         old.animate().translationX(px(SHEET_W)).setDuration(260).setInterpolator(new DecelerateInterpolator()).withEndAction(()->finishTransition(()->{
@@ -253,6 +261,11 @@ final class ControlCenterPanel extends FrameLayout {
     /** Dispatch both edges to native Appearance widgets without letting the
      *  window's fallback focus search reach the home screen at a slider edge. */
     boolean dispatchAppearanceWidgetKey(KeyEvent event){
+        if(isDetailVisible("network") && findFocus() instanceof android.widget.EditText
+                && event.getKeyCode()!=KeyEvent.KEYCODE_BACK && event.getKeyCode()!=KeyEvent.KEYCODE_ESCAPE
+                && event.getKeyCode()!=KeyEvent.KEYCODE_DPAD_UP && event.getKeyCode()!=KeyEvent.KEYCODE_DPAD_DOWN){
+            super.dispatchKeyEvent(event);return true;
+        }
         if(!isDetailVisible("appearance") || sliding)return false;
         switch(event.getKeyCode()){
             case KeyEvent.KEYCODE_DPAD_LEFT:case KeyEvent.KEYCODE_DPAD_RIGHT:
@@ -266,7 +279,7 @@ final class ControlCenterPanel extends FrameLayout {
             if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE)deferBack(()->key(key));
             return true;
         }
-        if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE){if(detailKey!=null)backToControls();else hide();return true;}
+        if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_ESCAPE){if(systemPages!=null && systemPages.back())return true;if(detailKey!=null)backToControls();else hide();return true;}
         if(detailKey!=null){
             if(key==KeyEvent.KEYCODE_DPAD_UP || key==KeyEvent.KEYCODE_DPAD_DOWN){
                 int direction=key==KeyEvent.KEYCODE_DPAD_UP?View.FOCUS_UP:View.FOCUS_DOWN;
@@ -324,12 +337,12 @@ final class ControlCenterPanel extends FrameLayout {
         LinearLayout.LayoutParams dp=new LinearLayout.LayoutParams(-2,-2);dp.topMargin=px(6);controls.addView(device,dp);
 
         AirPlayMonitorService.Snapshot air=host.air();
-        View net=tile("network",R.drawable.ic_feather_wifi,host.networkName(),host.networkStatus(),"Connected".equals(host.networkStatus())?0xFF6ED69A:0xFFFF7A6E,host::network);
+        View net=tile("network",R.drawable.ic_feather_wifi,host.networkName(),host.networkStatus(),"Connected".equals(host.networkStatus())?0xFF6ED69A:0xFFFF7A6E,this::openNetwork);
         View bt=tile("bluetooth",R.drawable.ic_bt,"Bluetooth",host.bluetoothSummary(),0,()->{focusKey="bluetooth";host.bluetooth();});
         View ap=tile("airplay",R.drawable.ic_airplay,"AirPlay",airHeadline(air),airColor(air),this::openAirPlay);
         View remote=tile("remote",R.drawable.ic_btp_remote,"Phone remote",host.remoteSummary(),0,()->openDetail("remote","Phone remote",host.remote()));
-        View input=tile("input",R.drawable.ic_feather_input,"Inputs","HDMI & sources",0,host::inputs);
-        View look=tile("appearance",R.drawable.ic_feather_sliders,"Appearance","Layout & wallpaper",0,this::openAppearance);
+        View input=tile("input",R.drawable.ic_feather_input,"Inputs","HDMI & sources",0,this::openInputs);
+        View look=tile(host.usesPictureTile()?"picture":"appearance",R.drawable.ic_feather_sliders,host.usesPictureTile()?"Picture":"Appearance",host.usesPictureTile()?"Brightness & display":"Layout & wallpaper",0,()->{if(host.usesPictureTile())openPicture();else openAppearance();});
         addTiles(18,net,bt);addTiles(12,ap,remote);addTiles(12,input,look);
 
         View spacer=new View(getContext());controls.addView(spacer,new LinearLayout.LayoutParams(-1,0,1));

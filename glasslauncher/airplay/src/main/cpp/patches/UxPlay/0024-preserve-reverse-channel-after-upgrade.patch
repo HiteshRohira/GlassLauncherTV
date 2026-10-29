@@ -1,0 +1,19 @@
+Subject: [PATCH] Preserve Safari reverse channel after PTTH upgrade
+
+Mark the upgraded connection as reverse before reading acknowledgements. The
+staging prefix still belongs to the original POST /reverse, so sniffing that
+prefix cannot identify a subsequent HTTP 200. Reverse ACKs are deliberately
+drained without dispatch; HLS FCUP payloads arrive separately through /action.
+Reset staging on completed forward requests so keep-alive requests are sniffed
+using their own prefix. No acknowledgement body is accumulated.
+
+--- a/lib/httpd.c
++++ b/lib/httpd.c
+@@ -587 +587,3 @@
+-                    http_request_is_reverse(connection->request);
++                    /* After /reverse, all incoming bytes are acknowledgements,
++                     * not requests. Staging still contains the POST's prefix. */
++                    http_request_set_reverse(connection->request);
+@@ -703,0 +706,2 @@
++                connection->staging_len = 0;
++                connection->staging[0] = '\0';

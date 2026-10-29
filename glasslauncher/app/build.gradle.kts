@@ -10,8 +10,8 @@ android {
         applicationId = "tv.mirage.launcher"
         minSdk        = 26
         targetSdk     = 36
-        versionCode = 34
-        versionName   = "1.1.10"
+        versionCode = 37
+        versionName   = "1.1.13"
         resourceConfigurations += listOf("en")
 
         // Instrumentation test runner. Required so :app:connectedDebugAndroidTest

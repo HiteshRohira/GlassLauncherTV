@@ -14,3 +14,6 @@
 -keep class tv.glass.launcher.KeyInjector {
     public static void main(java.lang.String[]);
 }
+
+# Fixed Wi-Fi bridge is launched as a bounded shell-UID subprocess.
+-keep class tv.glass.launcher.WifiControlBridge { public static void main(java.lang.String[]); }
